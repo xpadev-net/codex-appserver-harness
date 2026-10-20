@@ -21,3 +21,18 @@ func TestHoldReleaseAndBlockRecovery(t *testing.T) {
 		t.Fatal("block recovery failed")
 	}
 }
+func TestCompletionWhileBlocked(t *testing.T) {
+	w := WorkItem{ID: "w", Phase: Implementing, ScopeRevision: 1, PolicyRevision: 1, Attempt: 1}
+	w, _, _ = Apply(w, Event{ID: "block", WorkItemID: "w", Kind: "block"})
+	w, ops, err := Apply(w, Event{ID: "complete", WorkItemID: "w", Kind: "implementation_ready", Attempt: 1, ScopeRevision: 1, PolicyRevision: 1, Candidate: "sha"})
+	if err != nil || w.Phase != Blocked || w.RecoveryPhase != Verifying || w.Candidate != "sha" || len(ops) != 1 {
+		t.Fatal("completion lost", w, ops, err)
+	}
+	if CanDispatch(w, ops[0]) {
+		t.Fatal("blocked dispatch")
+	}
+	w, _, _ = Apply(w, Event{ID: "unblock", WorkItemID: "w", Kind: "unblock"})
+	if !CanDispatch(w, ops[0]) {
+		t.Fatal("completion not resumed")
+	}
+}

@@ -102,6 +102,19 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		if w.Terminal() {
 			return w, nil, nil
 		}
+		if w.Phase == Blocked {
+			recovery := w
+			recovery.Phase = w.RecoveryPhase
+			next, ops, err := Apply(recovery, e)
+			if err != nil {
+				return w, nil, err
+			}
+			if !next.Terminal() {
+				next.RecoveryPhase = next.Phase
+				next.Phase = Blocked
+			}
+			return next, ops, nil
+		}
 		if e.Attempt != w.Attempt || e.ScopeRevision != w.ScopeRevision || e.PolicyRevision != w.PolicyRevision {
 			return w, nil, nil
 		}
