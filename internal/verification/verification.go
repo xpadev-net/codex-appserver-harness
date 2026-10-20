@@ -18,11 +18,12 @@ type Criterion struct {
 	Requirement string `json:"requirement"`
 }
 type Scope struct {
-	Revision        int         `json:"revision"`
-	OriginalRequest string      `json:"original_request"`
-	Criteria        []Criterion `json:"criteria"`
-	Included        []string    `json:"included"`
-	Remaining       []string    `json:"remaining"`
+	Revision         int         `json:"revision"`
+	OriginalRequest  string      `json:"original_request"`
+	Criteria         []Criterion `json:"criteria"`
+	Included         []string    `json:"included"`
+	PreviouslyMerged []string    `json:"previously_merged"`
+	Remaining        []string    `json:"remaining"`
 }
 
 func (s Scope) Validate() error {
@@ -37,7 +38,7 @@ func (s Scope) Validate() error {
 		known[c.ID] = true
 	}
 	seen := map[string]bool{}
-	for _, id := range append(append([]string{}, s.Included...), s.Remaining...) {
+	for _, id := range append(append(append([]string{}, s.Included...), s.Remaining...), s.PreviouslyMerged...) {
 		if !known[id] || seen[id] {
 			return errors.New("scope overlap or unknown criterion")
 		}

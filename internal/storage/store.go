@@ -380,3 +380,62 @@ func (s *Store) AcknowledgeDeliveries(ctx context.Context, ids []string) error {
 	}
 	return tx.Commit()
 }
+
+type ChildRegistration struct {
+	Item         domain.WorkItem
+	Dependencies []string
+	Scope        any
+}
+
+// RegisterChildren makes the local split durable only after every external child
+// is reconciled. Replays verify identities rather than duplicating work items.
+func (s *Store) RegisterChildren(ctx context.Context, parentID string, children []ChildRegistration) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	parent, err := read(ctx, tx, parentID)
+	if err != nil {
+		return err
+	}
+	if parent.Phase != domain.Blocked || parent.Reason != "split_pending" {
+		return errors.New("parent is not splitting")
+	}
+	for _, child := range children {
+		w := child.Item
+		if w.ID == "" || w.ID == parentID || w.RepositoryID != parent.RepositoryID || w.Issue < 1 || w.Phase != domain.Ready || w.ScopeRevision < 1 || w.PolicyRevision != parent.PolicyRevision {
+			return errors.New("invalid child registration")
+		}
+		existing, err := read(ctx, tx, w.ID)
+		if err == nil {
+			if existing.RepositoryID != w.RepositoryID || existing.Issue != w.Issue {
+				return errors.New("child identity conflict")
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		data, err := json.Marshal(w)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO issue_claims VALUES(?,?,?)", w.RepositoryID, w.Issue, w.ID); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, data); err != nil {
+			return err
+		}
+		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope} {
+			data, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
