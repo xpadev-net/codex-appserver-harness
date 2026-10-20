@@ -31,6 +31,10 @@ func Webhook(secret []byte, inbox Inbox) http.Handler {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
+		if !strings.HasPrefix(r.Header.Get("X-Hub-Signature-256"), "sha256=") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		signature := strings.TrimPrefix(r.Header.Get("X-Hub-Signature-256"), "sha256=")
 		supplied, err := hex.DecodeString(signature)
 		mac := hmac.New(sha256.New, secret)

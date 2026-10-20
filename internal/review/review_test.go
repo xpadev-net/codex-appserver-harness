@@ -56,3 +56,16 @@ func TestFindingsAggregatedAndDeduplicated(t *testing.T) {
 		t.Fatal("old finding accepted")
 	}
 }
+func TestCommentedBodyIsFeedbackNotApproval(t *testing.T) {
+	now := time.Now()
+	c := runner.Candidate{ID: "c", SHA: "head"}
+	round := Round{Candidate: c, RequestedAt: now}
+	p := Policy{TrustedReviewerIDs: []int64{7}}
+	reviews := []github.Review{{ID: 1, User: github.User{ID: 7}, State: "COMMENTED", CommitID: "head", SubmittedAt: now, Body: "body-only defect"}}
+	if got := Findings(c, round, p, reviews, nil); len(got) != 1 {
+		t.Fatal("body dropped", got)
+	}
+	if Evaluate(c, round, p, reviews).Approved {
+		t.Fatal("comment became approval")
+	}
+}

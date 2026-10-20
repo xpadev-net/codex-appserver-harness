@@ -351,7 +351,32 @@ func (s *Store) DeliveriesPending(ctx context.Context) (bool, error) {
 	err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM raw_deliveries WHERE processed=0").Scan(&n)
 	return n > 0, err
 }
-func (s *Store) AcknowledgeDeliveries(ctx context.Context) error {
-	_, err := s.DB.ExecContext(ctx, "UPDATE raw_deliveries SET processed=1 WHERE processed=0")
-	return err
+func (s *Store) PendingDeliveryIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT id FROM raw_deliveries WHERE processed=0 ORDER BY rowid LIMIT 1000")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+func (s *Store) AcknowledgeDeliveries(ctx context.Context, ids []string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err = tx.ExecContext(ctx, "UPDATE raw_deliveries SET processed=1 WHERE id=?", id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

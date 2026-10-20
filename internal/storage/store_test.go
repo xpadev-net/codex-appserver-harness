@@ -255,3 +255,20 @@ func TestRetryRequiresReconciledAbsence(t *testing.T) {
 		t.Fatal("retry unavailable", err)
 	}
 }
+func TestDeliveryAckOnlyCapturedBatch(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Receive(ctx, "first", "pull_request", []byte(`{}`))
+	batch, err := s.PendingDeliveryIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Receive(ctx, "late", "pull_request", []byte(`{}`))
+	if err = s.AcknowledgeDeliveries(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.PendingDeliveryIDs(ctx)
+	if err != nil || len(pending) != 1 || pending[0] != "late" {
+		t.Fatal("late delivery lost", pending, err)
+	}
+}
