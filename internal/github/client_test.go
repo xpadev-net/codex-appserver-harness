@@ -47,3 +47,37 @@ printf '%s' '[[{"number":1,"body":"unrelated"}],[{"number":102,"body":"<!-- harn
 		t.Fatal("later-page child missing", number, err)
 	}
 }
+func TestRequestReviewReconcilesLostCommentResponse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HARNESS_TEST_SENT_FILE", filepath.Join(dir, "sent"))
+	t.Setenv("HARNESS_TEST_POST_LOG", filepath.Join(dir, "posts"))
+	script := `#!/bin/sh
+case "$*" in
+ *"--paginate --slurp"*)
+  if test -f "$HARNESS_TEST_SENT_FILE"; then
+   printf '%s' '[[{"id":501,"user":{"id":7},"body":"@codex review\n<!-- harness-review:round -->"}]]'
+  else printf '%s' '[[]]'; fi ;;
+ *"--method POST"*)
+  printf 'post\n' >> "$HARNESS_TEST_POST_LOG"
+  : > "$HARNESS_TEST_SENT_FILE"
+  exit 1 ;;
+ *) printf '%s' '{"id":1}' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	client := Client{Repository: "owner/repo", RepositoryID: 1, BeforeWrite: func(context.Context, string, string) error { return nil }}
+	if _, err := client.RequestReview(context.Background(), 10, "round", "@codex review", 7); err == nil {
+		t.Fatal("lost response reported success")
+	}
+	id, err := client.RequestReview(context.Background(), 10, "round", "@codex review", 7)
+	if err != nil || id != 501 {
+		t.Fatal(id, err)
+	}
+	posts, err := os.ReadFile(filepath.Join(dir, "posts"))
+	if err != nil || string(posts) != "post\n" {
+		t.Fatal("duplicate review request", string(posts), err)
+	}
+}

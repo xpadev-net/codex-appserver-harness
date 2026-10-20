@@ -341,3 +341,31 @@ func TestCompleteRollsBackResultAndTransitionTogether(t *testing.T) {
 		t.Fatal("transition lost")
 	}
 }
+func TestRestoredReconciliationSurvivesDatabaseReopen(t *testing.T) {
+	s, path := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.BeginDispatch(ctx, "start:implement")
+	s.Put(ctx, "agent_run", "start:implement", "wi", map[string]string{"id": "start:implement", "thread_id": "thread", "state": "unknown"})
+	if err := s.Complete(ctx, "start:implement", "unknown", domain.Event{ID: "block", WorkItemID: "wi", Kind: "block", Reason: "response lost"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RestoreReconciliation(ctx, "wi", "start:implement", "read persisted history"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	w, err := reopened.Get(ctx, "wi")
+	if err != nil || w.Phase != domain.Implementing {
+		t.Fatal("state was not committed", w, err)
+	}
+	ops, err := reopened.Operations(ctx)
+	if err != nil || len(ops) != 1 || ops[0].State != "sending" {
+		t.Fatal("operation was not committed", ops, err)
+	}
+}

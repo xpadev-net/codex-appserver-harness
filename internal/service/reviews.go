@@ -215,6 +215,12 @@ func (c *Controller) observeReview(ctx context.Context, w domain.WorkItem) error
 			return err
 		}
 		id, err := c.GitHub.RequestReview(ctx, pr.Number, round.ID, c.Config.ReviewTrigger, c.Config.RequesterID)
+		if errors.Is(err, contract.ErrUnsent) {
+			round.RequestAttempted = false
+			if saveErr := c.Store.Put(context.WithoutCancel(ctx), "review_round", candidate.ID, w.ID, round); saveErr != nil {
+				return saveErr
+			}
+		}
 		if err != nil {
 			return err
 		}

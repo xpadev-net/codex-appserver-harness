@@ -191,9 +191,16 @@ func (c Client) RequestReview(ctx context.Context, number int, roundID, trigger 
 	if requesterID <= 0 || roundID == "" || strings.ContainsAny(roundID, "<>\r\n") || trigger == "" {
 		return 0, errors.New("invalid review request")
 	}
+	existing, err := c.FindReviewRequest(ctx, number, roundID, requesterID)
+	if err != nil {
+		return 0, fmt.Errorf("%w: review request lookup failed", contract.ErrUnsent)
+	}
+	if existing > 0 {
+		return existing, nil
+	}
 	marker := "<!-- harness-review:" + roundID + " -->"
 	var created Comment
-	err := c.API(ctx, "POST", fmt.Sprintf("issues/%d/comments", number), map[string]string{"body": trigger + "\n\n" + marker}, &created)
+	err = c.API(ctx, "POST", fmt.Sprintf("issues/%d/comments", number), map[string]string{"body": trigger + "\n\n" + marker}, &created)
 	if err == nil && created.User.ID != requesterID {
 		return 0, errors.New("review requester identity mismatch")
 	}
