@@ -21,6 +21,7 @@ type Message struct {
 
 // Client is sequential: a single owner must consume calls and notifications.
 type Client struct {
+	cancel   context.CancelFunc
 	cmd      *exec.Cmd
 	in       io.WriteCloser
 	messages chan Message
@@ -30,6 +31,13 @@ type Client struct {
 }
 
 func Start(ctx context.Context, binary string, args ...string) (*Client, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	success := false
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
 	cmd := exec.CommandContext(ctx, binary, append([]string{"app-server", "--listen", "stdio://"}, args...)...)
 	in, err := cmd.StdinPipe()
 	if err != nil {
@@ -43,7 +51,7 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := &Client{cmd: cmd, in: in, messages: make(chan Message, 64)}
+	c := &Client{cancel: cancel, cmd: cmd, in: in, messages: make(chan Message, 64)}
 	go func() {
 		defer close(c.messages)
 		scanner := bufio.NewScanner(out)
@@ -67,9 +75,10 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 		}
 		c.terminal = err
 	}()
+	success = true
 	return c, nil
 }
-func (c *Client) Close() error     { _ = c.in.Close(); _ = c.cmd.Process.Kill(); return c.cmd.Wait() }
+func (c *Client) Close() error     { c.cancel(); _ = c.in.Close(); return c.cmd.Wait() }
 func (c *Client) Send(v any) error { return json.NewEncoder(c.in).Encode(v) }
 func (c *Client) Next(ctx context.Context) (Message, error) {
 	if len(c.pending) > 0 {
