@@ -18,10 +18,11 @@ func Git(ctx context.Context, dir string, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w", args[0], err)
 	}
-	return strings.TrimSpace(string(b)), nil
+	return string(b), nil
 }
 func Resolve(ctx context.Context, repo, ref string) (string, error) {
 	sha, err := Git(ctx, repo, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	sha = strings.TrimSpace(sha)
 	if err == nil && !shaPattern.MatchString(sha) {
 		return "", fmt.Errorf("invalid commit SHA")
 	}
