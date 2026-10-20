@@ -44,3 +44,10 @@ func TestCanceledMergeConfirmation(t *testing.T) {
 		t.Fatal("external merge lost", w, err)
 	}
 }
+func TestBlockedSplitPlanningRejected(t *testing.T) {
+	w := WorkItem{ID: "w", Phase: Blocked, RecoveryPhase: Ready, Reason: "specification", ScopeRevision: 1, PolicyRevision: 1}
+	_, ops, err := Apply(w, Event{ID: "split", WorkItemID: "w", Kind: "plan_split", Ref: "proposal", ScopeRevision: 1, PolicyRevision: 1})
+	if err == nil || len(ops) != 0 {
+		t.Fatal("blocked split accepted", err)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"reflect"
 	"time"
 )
 
@@ -203,6 +204,15 @@ func (s *Store) BeginDispatch(ctx context.Context, id string) (bool, error) {
 	if !domain.CanDispatch(w, o) {
 		return false, nil
 	}
+	if o.Kind == "implement" || o.Kind == "verify" {
+		ready, err := dependenciesReady(ctx, tx, w.ID)
+		if err != nil {
+			return false, err
+		}
+		if !ready {
+			return false, nil
+		}
+	}
 	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='sending' WHERE id=?", id); err != nil {
 		return false, err
 	}
@@ -379,4 +389,135 @@ func (s *Store) AcknowledgeDeliveries(ctx context.Context, ids []string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+type ChildRegistration struct {
+	Item         domain.WorkItem
+	Dependencies []string
+	Scope        any
+}
+
+// RegisterChildren makes the local split durable only after every external child
+// is reconciled. Replays verify identities rather than duplicating work items.
+func (s *Store) RegisterChildren(ctx context.Context, parentID string, children []ChildRegistration) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	parent, err := read(ctx, tx, parentID)
+	if err != nil {
+		return err
+	}
+	if parent.Phase != domain.Blocked || parent.Reason != "split_pending" {
+		return errors.New("parent is not splitting")
+	}
+	allIDs := map[string]bool{}
+	for _, child := range children {
+		allIDs[child.Item.ID] = true
+	}
+	seenChildren := map[string]bool{}
+	seenIssues := map[int]bool{}
+	for _, child := range children {
+		w := child.Item
+		if seenChildren[w.ID] || seenIssues[w.Issue] {
+			return errors.New("duplicate child registration")
+		}
+		for _, dep := range child.Dependencies {
+			if dep == w.ID || !allIDs[dep] {
+				return errors.New("invalid child dependency reference")
+			}
+		}
+		seenChildren[w.ID] = true
+		seenIssues[w.Issue] = true
+		if w.ID == "" || w.ID == parentID || w.RepositoryID != parent.RepositoryID || w.Issue < 1 || w.Phase != domain.Ready || w.ScopeRevision < 1 || w.PolicyRevision != parent.PolicyRevision {
+			return errors.New("invalid child registration")
+		}
+		existing, err := read(ctx, tx, w.ID)
+		if err == nil {
+			if !reflect.DeepEqual(existing, w) {
+				return errors.New("child identity conflict")
+			}
+			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID} {
+				var actual []byte
+				if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, w.ID).Scan(&actual); err != nil {
+					return err
+				}
+				expected, err := json.Marshal(value)
+				if err != nil {
+					return err
+				}
+				var a, b any
+				if json.Unmarshal(actual, &a) != nil || json.Unmarshal(expected, &b) != nil || !reflect.DeepEqual(a, b) {
+					return errors.New("child registration data changed")
+				}
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		data, err := json.Marshal(w)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO issue_claims VALUES(?,?,?)", w.RepositoryID, w.Issue, w.ID); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, data); err != nil {
+			return err
+		}
+		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID} {
+			data, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func dependenciesReady(ctx context.Context, q queryer, id string) (bool, error) {
+	var data []byte
+	err := q.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='dependencies' AND id=?", id).Scan(&data)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil {
+		var ids []string
+		if err = json.Unmarshal(data, &ids); err != nil {
+			return false, err
+		}
+		for _, dep := range ids {
+			w, err := read(ctx, q, dep)
+			if err != nil {
+				return false, err
+			}
+			if w.Phase != domain.Merged {
+				return false, nil
+			}
+		}
+	}
+	err = q.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='split_parent' AND id=?", id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var parentID string
+	if err = json.Unmarshal(data, &parentID); err != nil {
+		return false, err
+	}
+	parent, err := read(ctx, q, parentID)
+	if err != nil {
+		return false, err
+	}
+	return parent.Phase == domain.Split, nil
+}
+func (s *Store) DependenciesReady(ctx context.Context, id string) (bool, error) {
+	return dependenciesReady(ctx, s.DB, id)
 }

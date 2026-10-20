@@ -29,6 +29,7 @@ type WorkItem struct {
 	PolicyRevision int    `json:"policy_revision"`
 	Phase          Phase  `json:"phase"`
 	CanceledFrom   Phase  `json:"canceled_from,omitempty"`
+	SplitPlanID    string `json:"split_plan_id,omitempty"`
 	LastCompletion *Event `json:"last_completion,omitempty"`
 	RecoveryPhase  Phase  `json:"recovery_phase,omitempty"`
 	Paused         bool   `json:"paused"`
@@ -50,6 +51,7 @@ type Event struct {
 	ScopeRevision  int    `json:"scope_revision"`
 	PolicyRevision int    `json:"policy_revision"`
 	Reason         string `json:"reason,omitempty"`
+	Ref            string `json:"ref,omitempty"`
 }
 type Operation struct {
 	ID             string `json:"id"`
@@ -90,8 +92,15 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			w.Phase = Canceled
 			w.Reason = e.Reason
 		}
+	case "split_confirmed":
+		if w.Phase == Blocked && w.Reason == "split_pending" && e.Ref == w.SplitPlanID && e.Attempt == w.Attempt && e.ScopeRevision == w.ScopeRevision && e.PolicyRevision == w.PolicyRevision {
+			w.Phase = Split
+			w.Version++
+			return w, nil, nil
+		}
+		return w, nil, nil
 	case "unblock":
-		if w.Phase == Blocked && w.RecoveryPhase != "" {
+		if w.Phase == Blocked && w.RecoveryPhase != "" && w.Reason != "split_pending" {
 			w.Phase = w.RecoveryPhase
 			w.RecoveryPhase = ""
 			w.Reason = ""
@@ -121,6 +130,12 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			}
 			return w, nil, nil
 		}
+		if e.Kind == "plan_split" && w.Phase == Blocked {
+			return w, nil, errors.New("unblock before planning a split")
+		}
+		if e.Kind == "plan_split" && w.SplitPlanID != "" {
+			return w, nil, errors.New("split already planned")
+		}
 		if w.Phase == Blocked {
 			recovery := w
 			recovery.Phase = w.RecoveryPhase
@@ -141,6 +156,17 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			return w, nil, nil
 		}
 		switch e.Kind {
+		case "plan_split":
+			if e.Ref == "" {
+				return w, nil, errors.New("split reference is required")
+			}
+			if e.Ref != "" {
+				w.SplitPlanID = e.Ref
+				w.RecoveryPhase = w.Phase
+				w.Phase = Blocked
+				w.Reason = "split_pending"
+				emit = "split"
+			}
 		case "start":
 			if w.Phase == Ready {
 				w.Phase = Implementing
@@ -201,6 +227,8 @@ func CanDispatch(w WorkItem, o Operation) bool {
 		return false
 	}
 	switch o.Kind {
+	case "split":
+		return w.Phase == Blocked && w.Reason == "split_pending" && !w.Paused
 	case "implement":
 		return !w.Paused && w.Phase == Implementing
 	case "verify":

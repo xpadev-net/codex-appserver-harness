@@ -258,3 +258,41 @@ func CheckClosingText(text string) error {
 	}
 	return nil
 }
+
+type Issue struct {
+	Number      int             `json:"number"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body"`
+	State       string          `json:"state"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	PullRequest json.RawMessage `json:"pull_request,omitempty"`
+	Labels      []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+}
+
+// Pages invokes gh --paginate --slurp: per_page is a page size, not a total cap.
+func (c Client) FindChild(ctx context.Context, marker string) (int, error) {
+	var issues []Issue
+	if err := c.Pages(ctx, "issues?state=all&per_page=100", &issues); err != nil {
+		return 0, err
+	}
+	found := 0
+	for _, issue := range issues {
+		if len(issue.PullRequest) == 0 && strings.Contains(issue.Body, "<!-- "+marker+" -->") {
+			if found != 0 {
+				return 0, errors.New("duplicate split child markers")
+			}
+			found = issue.Number
+		}
+	}
+	return found, nil
+}
+func (c Client) CreateChild(ctx context.Context, title, body, marker string) (int, error) {
+	if marker == "" || strings.ContainsAny(marker, "<>\r\n") {
+		return 0, errors.New("invalid child marker")
+	}
+	var issue Issue
+	err := c.API(ctx, "POST", "issues", map[string]string{"title": title, "body": "<!-- " + marker + " -->\n" + body}, &issue)
+	return issue.Number, err
+}
