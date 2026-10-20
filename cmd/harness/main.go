@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"os"
 	"os/exec"
 	"regexp"
@@ -21,6 +22,18 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "_runner" {
+		b, err := os.ReadFile(os.Args[2])
+		if err != nil {
+			return err
+		}
+		var spec runner.Spec
+		if err = json.Unmarshal(b, &spec); err != nil {
+			return err
+		}
+		_, err = runner.Execute(context.Background(), spec)
+		return err
+	}
 	if len(os.Args) < 2 || os.Args[1] != "doctor" {
 		return fmt.Errorf("usage: harness doctor --repo OWNER/REPO [--codex codex]")
 	}
