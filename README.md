@@ -25,3 +25,9 @@ Each PR is reviewed with `codex exec review --base <repository-default-branch>` 
 merged only after its findings are resolved. This development review is distinct
 from the harness's Cloud review integration, which requires a trusted formal
 `APPROVED` review on the current candidate SHA.
+
+SQLite persistence uses `github.com/mattn/go-sqlite3`; builds require CGo and a C
+compiler. Workflow state, deduplicated events, operation intent, records, and
+fenced resource leases are stored in one database. Expired leases require
+reconciliation before release; they are never stolen automatically. Operations
+in `sending` or `unknown` require external reconciliation before retry.
