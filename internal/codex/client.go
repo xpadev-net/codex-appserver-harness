@@ -25,6 +25,7 @@ type Client struct {
 	in       io.WriteCloser
 	messages chan Message
 	terminal error
+	pending  []Message
 	seq      int
 }
 
@@ -71,6 +72,14 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 func (c *Client) Close() error     { _ = c.in.Close(); _ = c.cmd.Process.Kill(); return c.cmd.Wait() }
 func (c *Client) Send(v any) error { return json.NewEncoder(c.in).Encode(v) }
 func (c *Client) Next(ctx context.Context) (Message, error) {
+	if len(c.pending) > 0 {
+		m := c.pending[0]
+		c.pending = c.pending[1:]
+		return m, nil
+	}
+	return c.read(ctx)
+}
+func (c *Client) read(ctx context.Context) (Message, error) {
 	select {
 	case m, ok := <-c.messages:
 		if !ok {
@@ -88,11 +97,12 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 		return err
 	}
 	for {
-		m, err := c.Next(ctx)
+		m, err := c.read(ctx)
 		if err != nil {
 			return err
 		}
 		if m.Method != "" {
+			c.pending = append(c.pending, m)
 			if len(m.ID) > 0 {
 				return errors.New("app-server requires operator input: " + m.Method)
 			}

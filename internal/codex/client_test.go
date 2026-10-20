@@ -19,3 +19,20 @@ func TestTerminalReadRepeatable(t *testing.T) {
 		}
 	}
 }
+
+func TestCallPreservesNotifications(t *testing.T) {
+	c := &Client{in: nopWriteCloser{io.Discard}, messages: make(chan Message, 2)}
+	c.messages <- Message{Method: "turn/completed"}
+	c.messages <- Message{ID: []byte("1"), Result: []byte(`{}`)}
+	if err := c.Call(context.Background(), "turn/start", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.Next(context.Background())
+	if err != nil || m.Method != "turn/completed" {
+		t.Fatalf("lost notification: %v %v", m, err)
+	}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
