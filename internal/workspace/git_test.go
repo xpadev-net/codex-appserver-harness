@@ -10,7 +10,7 @@ import (
 func TestCandidateWorktree(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "harness@example.invalid"}, {"config", "user.name", "Harness"}, {"config", "commit.gpgsign", "false"}, {"commit", "--allow-empty", "-m", "base"}} {
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "harness@example.invalid"}, {"config", "user.name", "Harness"}, {"config", "commit.gpgsign", "false"}, {"config", "status.showUntrackedFiles", "no"}, {"commit", "--allow-empty", "-m", "base"}} {
 		if _, err := Git(ctx, repo, args...); err != nil {
 			t.Fatal(err)
 		}

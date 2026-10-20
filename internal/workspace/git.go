@@ -39,7 +39,7 @@ func Create(ctx context.Context, repo, path, branch, base string) error {
 	return err
 }
 func Freeze(ctx context.Context, path, message string) (string, error) {
-	status, err := Git(ctx, path, "status", "--porcelain")
+	status, err := Git(ctx, path, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return "", err
 	}
@@ -54,7 +54,7 @@ func Freeze(ctx context.Context, path, message string) (string, error) {
 	return Resolve(ctx, path, "HEAD")
 }
 func Clean(ctx context.Context, path string) error {
-	s, err := Git(ctx, path, "status", "--porcelain")
+	s, err := Git(ctx, path, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return err
 	}
