@@ -3,7 +3,9 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -30,14 +32,15 @@ type Candidate struct {
 	PolicyRevision int    `json:"policy_revision"`
 }
 type Spec struct {
-	JobID          string         `json:"job_id"`
-	Repository     string         `json:"repository"`
-	Root           string         `json:"root"`
-	Candidate      Candidate      `json:"candidate"`
-	ProfileID      string         `json:"profile_id"`
-	Profile        policy.Profile `json:"profile"`
-	ForbiddenPaths []string       `json:"forbidden_paths"`
-	Launcher       []string       `json:"launcher"`
+	LauncherContract string         `json:"launcher_contract"`
+	JobID            string         `json:"job_id"`
+	Repository       string         `json:"repository"`
+	Root             string         `json:"root"`
+	Candidate        Candidate      `json:"candidate"`
+	ProfileID        string         `json:"profile_id"`
+	Profile          policy.Profile `json:"profile"`
+	ForbiddenPaths   []string       `json:"forbidden_paths"`
+	Launcher         []string       `json:"launcher"`
 }
 type Result struct {
 	JobID           string    `json:"job_id"`
@@ -59,7 +62,7 @@ var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 var sha = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 
 func (s Spec) Validate() error {
-	if !identifier.MatchString(s.JobID) || s.Candidate.ID == "" || !sha.MatchString(s.Candidate.SHA) || !sha.MatchString(s.Candidate.BaseSHA) || s.Candidate.ScopeRevision < 1 || s.Candidate.PolicyRevision < 1 || !filepath.IsAbs(s.Root) || !filepath.IsAbs(s.Repository) || !identifier.MatchString(s.ProfileID) || s.Profile.Revision < 1 || len(s.Profile.Argv) == 0 || s.Profile.Argv[0] == "" || s.Profile.TimeoutSeconds < 1 || len(s.Launcher) == 0 || s.Launcher[0] == "" {
+	if s.LauncherContract != "argv_passthrough_v1" || !identifier.MatchString(s.JobID) || s.Candidate.ID == "" || !sha.MatchString(s.Candidate.SHA) || !sha.MatchString(s.Candidate.BaseSHA) || s.Candidate.ScopeRevision < 1 || s.Candidate.PolicyRevision < 1 || !filepath.IsAbs(s.Root) || !filepath.IsAbs(s.Repository) || !identifier.MatchString(s.ProfileID) || s.Profile.Revision < 1 || len(s.Profile.Argv) == 0 || s.Profile.Argv[0] == "" || s.Profile.TimeoutSeconds < 1 || len(s.Launcher) == 0 || s.Launcher[0] == "" {
 		return errors.New("invalid runner specification or isolation launcher missing")
 	}
 	if s.Profile.SuccessPattern != "" {
@@ -205,6 +208,27 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		if value, ok := os.LookupEnv(name); ok {
 			cmd.Env = append(cmd.Env, name+"="+value)
 		}
+	}
+	nonce := make([]byte, 16)
+	if _, err = rand.Read(nonce); err != nil {
+		return r, err
+	}
+	expected := fmt.Sprintf("harness-launcher:%x", nonce)
+	probeArgs := append(append([]string{}, s.Launcher...), "sh", "-c", `test "$PWD" = "$HARNESS_WORKSPACE" && test "$1" = 'literal $ ; space' && printf '%s' "$2"`, "probe", "literal $ ; space", expected)
+	canary := exec.CommandContext(runCtx, probeArgs[0], probeArgs[1:]...)
+	canary.Dir = checkout
+	canary.Env = cmd.Env
+	observed, probeErr := canary.Output()
+	if probeErr != nil || !bytes.Equal(observed, []byte(expected)) {
+		return r, errors.New("launcher does not preserve command argv/cwd/environment")
+	}
+	exitArgs := append(append([]string{}, s.Launcher...), "sh", "-c", "exit 37")
+	exitProbe := exec.CommandContext(runCtx, exitArgs[0], exitArgs[1:]...)
+	exitProbe.Dir = checkout
+	exitProbe.Env = cmd.Env
+	var exitError *exec.ExitError
+	if exitErr := exitProbe.Run(); !errors.As(exitErr, &exitError) || exitError.ExitCode() != 37 {
+		return r, errors.New("launcher does not preserve command exit status")
 	}
 	if len(s.ForbiddenPaths) > 0 {
 		args := append(append([]string{}, s.Launcher...), "sh", "-c", `for p in "$@"; do test ! -e "$p" || exit 1; done`, "probe")

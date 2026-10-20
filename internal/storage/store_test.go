@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"path/filepath"
@@ -367,5 +369,29 @@ func TestRestoredReconciliationSurvivesDatabaseReopen(t *testing.T) {
 	ops, err := reopened.Operations(ctx)
 	if err != nil || len(ops) != 1 || ops[0].State != "sending" {
 		t.Fatal("operation was not committed", ops, err)
+	}
+}
+func TestSplitDepthIsAtomicWithChildRegistration(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "split-plan", WorkItemID: "wi", Kind: "plan_split", Ref: "proposal", ScopeRevision: 1, PolicyRevision: 1})
+	child := work()
+	child.ID = "child"
+	child.Issue = 2
+	registration := ChildRegistration{Depth: 1, Item: child, Dependencies: []string{}, Scope: map[string]string{"criterion": "AC"}}
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration, registration}); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	var depth int
+	if err := s.Record(ctx, "split_depth", "child", &depth); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("depth escaped rollback", depth, err)
+	}
+	s.Put(ctx, "split_depth", "child", "child", 1)
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration}); err != nil {
+		t.Fatal("same-depth retry failed", err)
+	}
+	if err := s.Record(ctx, "split_depth", "child", &depth); err != nil || depth != 1 {
+		t.Fatal(depth, err)
 	}
 }

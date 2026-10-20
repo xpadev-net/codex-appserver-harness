@@ -25,6 +25,7 @@ type Limits struct {
 	ReviewSeconds  int   `json:"review_seconds"`
 }
 type Config struct {
+	LauncherContract  string               `json:"launcher_contract"`
 	CIRefMode         string               `json:"ci_ref_mode"`
 	PriorityLabels    []string             `json:"priority_labels"`
 	LogRetentionDays  int                  `json:"log_retention_days"`
@@ -103,6 +104,9 @@ func (c Config) Validate() error {
 	}
 	if c.CapabilitiesPath != "" && (!filepath.IsAbs(c.CapabilitiesPath) || within(c.RepositoryPath, c.CapabilitiesPath) || within(c.Root, c.CapabilitiesPath) || within(c.WorkerCodexHome, c.CapabilitiesPath)) {
 		return errors.New("capability evidence must be outside repository and worker-writable paths")
+	}
+	if c.LauncherContract != "argv_passthrough_v1" {
+		return errors.New("launcher_contract must be argv_passthrough_v1")
 	}
 	if (c.CIRefMode != "head" && c.CIRefMode != "test_merge") || len(c.PriorityLabels) == 0 || c.LogRetentionDays < 1 || c.MaxArtifactBytes < 1 || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.Repository) || c.Version != 1 || c.RepositoryID < 1 || !strings.Contains(c.Repository, "/") || c.BaseBranch == "" || c.Model == "" || !filepath.IsAbs(c.RepositoryPath) || !filepath.IsAbs(c.Root) || !filepath.IsAbs(c.CodexBinary) || !filepath.IsAbs(c.WorkerCodexHome) || within(c.RepositoryPath, c.Root) || within(c.Root, c.RepositoryPath) || within(c.RepositoryPath, c.WorkerCodexHome) || len(c.Launcher) == 0 || !filepath.IsAbs(c.Launcher[0]) || c.ReconcileSeconds < 1 || c.ReadyLabel == "" || c.HoldLabel == "" {
 		return errors.New("invalid configuration or execution paths overlap trusted repository")

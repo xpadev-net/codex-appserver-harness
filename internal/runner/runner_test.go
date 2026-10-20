@@ -23,7 +23,7 @@ func spec(t *testing.T) Spec {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Spec{JobID: "job", Repository: repo, Root: t.TempDir(), Candidate: Candidate{ID: "c", SHA: sha, BaseSHA: sha, ScopeRevision: 1, PolicyRevision: 1}, ProfileID: "unit", Profile: policy.Profile{Revision: 1, Argv: []string{"sh", "-c", "printf PASS"}, TimeoutSeconds: 2, SuccessPattern: "PASS"}, Launcher: []string{"env"}}
+	return Spec{LauncherContract: "argv_passthrough_v1", JobID: "job", Repository: repo, Root: t.TempDir(), Candidate: Candidate{ID: "c", SHA: sha, BaseSHA: sha, ScopeRevision: 1, PolicyRevision: 1}, ProfileID: "unit", Profile: policy.Profile{Revision: 1, Argv: []string{"sh", "-c", "printf PASS"}, TimeoutSeconds: 2, SuccessPattern: "PASS"}, Launcher: []string{"env"}}
 }
 func TestRunnerOutcomesAndPersistence(t *testing.T) {
 	for _, v := range []struct {
@@ -122,5 +122,15 @@ func TestCancelMarkerStopsDurableJob(t *testing.T) {
 	r, _ := Execute(context.Background(), s)
 	if r.Status != "canceled" || time.Since(r.Started) > 3*time.Second {
 		t.Fatal("cancel marker ignored", r)
+	}
+}
+func TestLauncherMustPassArgumentsAndExitStatus(t *testing.T) {
+	s := spec(t)
+	path := filepath.Join(t.TempDir(), "bad-launcher")
+	os.WriteFile(path, []byte("#!/bin/sh\nprintf PASS\nexit 0\n"), 0700)
+	s.Launcher = []string{path}
+	r, err := Execute(context.Background(), s)
+	if err == nil || r.Status != "infrastructure_failure" {
+		t.Fatal("nonconforming launcher accepted", r, err)
 	}
 }

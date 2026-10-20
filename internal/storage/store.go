@@ -495,6 +495,7 @@ func (s *Store) AcknowledgeDeliveries(ctx context.Context, ids []string) error {
 }
 
 type ChildRegistration struct {
+	Depth          int
 	Item           domain.WorkItem
 	Dependencies   []string
 	Scope          any
@@ -547,7 +548,7 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 			if !reflect.DeepEqual(existing, w) {
 				return errors.New("child identity conflict")
 			}
-			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID, "source": child.Source, "policy_snapshot": child.PolicySnapshot} {
+			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID, "source": child.Source, "policy_snapshot": child.PolicySnapshot, "split_depth": child.Depth} {
 				var actual []byte
 				if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, w.ID).Scan(&actual); err != nil {
 					return err
@@ -577,13 +578,21 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 		if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, data); err != nil {
 			return err
 		}
-		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID, "source": child.Source, "policy_snapshot": child.PolicySnapshot} {
+		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID, "source": child.Source, "policy_snapshot": child.PolicySnapshot, "split_depth": child.Depth} {
 			data, err = json.Marshal(value)
 			if err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
+			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
 				return err
+			}
+			var prior []byte
+			if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, w.ID).Scan(&prior); err != nil {
+				return err
+			}
+			var before, after any
+			if json.Unmarshal(prior, &before) != nil || json.Unmarshal(data, &after) != nil || !reflect.DeepEqual(before, after) {
+				return errors.New("child metadata conflicts with prior intent")
 			}
 		}
 	}

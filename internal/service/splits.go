@@ -62,10 +62,8 @@ func (c *Controller) split(ctx context.Context, w domain.WorkItem, op domain.Ope
 		for _, key := range child.DependsOn {
 			deps = append(deps, w.ID+"-"+key)
 		}
-		registrations = append(registrations, storage.ChildRegistration{Item: domain.WorkItem{ID: id, RepositoryID: w.RepositoryID, Issue: state.Issue, ScopeRevision: 1, PolicyRevision: w.PolicyRevision, Phase: domain.Ready}, Dependencies: deps, Scope: scope, Source: Source{digest(issue)}, PolicySnapshot: c.policyDigest()})
-		if err = c.Store.Put(ctx, "split_depth", id, id, depth+1); err != nil {
-			return err
-		}
+		registrations = append(registrations, storage.ChildRegistration{Depth: depth + 1, Item: domain.WorkItem{ID: id, RepositoryID: w.RepositoryID, Issue: state.Issue, ScopeRevision: 1, PolicyRevision: w.PolicyRevision, Phase: domain.Ready}, Dependencies: deps, Scope: scope, Source: Source{digest(issue)}, PolicySnapshot: c.policyDigest()})
+
 	}
 	if err = c.Store.RegisterChildren(ctx, w.ID, registrations); err != nil {
 		return err
@@ -176,7 +174,7 @@ func (c *Controller) finalAcceptance(ctx context.Context, w domain.WorkItem, s v
 	results := []runner.Result{}
 	for _, profile := range c.Config.Verification.RequiredProfiles {
 		jobKey := candidate.ID + "-" + profile
-		spec := runner.Spec{JobID: jobKey, Repository: c.Config.RepositoryPath, Root: c.Config.Root + "/jobs", Candidate: candidate, ProfileID: profile, Profile: c.Config.Verification.Profiles[profile], Launcher: c.Config.Launcher, ForbiddenPaths: forbiddenPaths(c.Config)}
+		spec := runner.Spec{JobID: jobKey, Repository: c.Config.RepositoryPath, Root: c.Config.Root + "/jobs", Candidate: candidate, ProfileID: profile, Profile: c.Config.Verification.Profiles[profile], Launcher: c.Config.Launcher, LauncherContract: c.Config.LauncherContract, ForbiddenPaths: forbiddenPaths(c.Config)}
 		var intent JobIntent
 		err = c.Store.Record(ctx, "job_intent", jobKey, &intent)
 		if err != nil && !missing(err) {

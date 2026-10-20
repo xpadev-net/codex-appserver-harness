@@ -70,7 +70,7 @@ func (c *Controller) validation(ctx context.Context, w domain.WorkItem, op domai
 			if !c.Config.IsolationVerified {
 				return c.reject(ctx, w, op, "runner isolation is unverified")
 			}
-			intent = JobIntent{Spec: runner.Spec{JobID: key, Repository: c.Config.RepositoryPath, Root: filepath.Join(c.Config.Root, "jobs"), Candidate: candidate, ProfileID: profile, Profile: c.Config.Verification.Profiles[profile], Launcher: c.Config.Launcher, ForbiddenPaths: forbiddenPaths(c.Config)}, Started: time.Now().UTC()}
+			intent = JobIntent{Spec: runner.Spec{JobID: key, Repository: c.Config.RepositoryPath, Root: filepath.Join(c.Config.Root, "jobs"), Candidate: candidate, ProfileID: profile, Profile: c.Config.Verification.Profiles[profile], Launcher: c.Config.Launcher, LauncherContract: c.Config.LauncherContract, ForbiddenPaths: forbiddenPaths(c.Config)}, Started: time.Now().UTC()}
 			if err = c.Store.Put(ctx, "job_intent", key, w.ID, intent); err != nil {
 				return err
 			}
