@@ -56,7 +56,7 @@ func TestReplayAndRestart(t *testing.T) {
 	}
 	phases := []struct{ kind, sha string }{{"start", ""}, {"implementation_ready", "impl"}, {"candidate_ready", "final"}, {"validation_passed", "final"}, {"gates_passed", "final"}, {"merge_confirmed", "final"}}
 	for i, v := range phases {
-		e := domain.Event{ID: fmt.Sprint(i), WorkItemID: "wi", Kind: v.kind, Candidate: v.sha, ScopeRevision: 1, PolicyRevision: 1}
+		e := domain.Event{ID: fmt.Sprint(i), WorkItemID: "wi", Kind: v.kind, Attempt: i, Candidate: v.sha, ScopeRevision: 1, PolicyRevision: 1}
 		if err := s.Apply(ctx, e); err != nil {
 			t.Fatal(err)
 		}
@@ -159,12 +159,55 @@ func TestInflightOperationBlocksRepair(t *testing.T) {
 	ctx := context.Background()
 	s.Claim(ctx, work())
 	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
-	s.Apply(ctx, domain.Event{ID: "impl", WorkItemID: "wi", Kind: "implementation_ready", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1})
+	s.Apply(ctx, domain.Event{ID: "impl", WorkItemID: "wi", Kind: "implementation_ready", Attempt: 1, Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1})
 	ok, err := s.BeginDispatch(ctx, "impl:verify")
 	if !ok || err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Apply(ctx, domain.Event{ID: "repair", WorkItemID: "wi", Kind: "repair_tests", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1}); err == nil {
+	if err = s.Apply(ctx, domain.Event{ID: "repair", WorkItemID: "wi", Kind: "repair_tests", Attempt: 2, Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1}); err == nil {
 		t.Fatal("overlapping operation accepted")
+	}
+}
+func TestReacquiredLeaseHasOwner(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	g, _ := s.Acquire(ctx, "r", "a", time.Minute)
+	s.Release(ctx, "r", "a", g)
+	g, err := s.Acquire(ctx, "r", "b", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Acquire(ctx, "r", "c", time.Minute); err == nil {
+		t.Fatal("reacquired lease stolen")
+	}
+	if err = s.Release(ctx, "r", "b", g); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestPausedRepairAndStaleCompletion(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.Apply(ctx, domain.Event{ID: "impl", WorkItemID: "wi", Kind: "implementation_ready", Attempt: 1, Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1})
+	s.Apply(ctx, domain.Event{ID: "pause", WorkItemID: "wi", Kind: "pause"})
+	if err := s.Apply(ctx, domain.Event{ID: "repair", WorkItemID: "wi", Kind: "repair_tests", Attempt: 2, Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := s.Get(ctx, "wi")
+	if w.Attempt != 3 || w.RepairRounds != 1 {
+		t.Fatal("repair lost", w)
+	}
+	if err := s.Apply(ctx, domain.Event{ID: "old", WorkItemID: "wi", Kind: "candidate_ready", Attempt: 2, Candidate: "old", ScopeRevision: 1, PolicyRevision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	w, _ = s.Get(ctx, "wi")
+	if w.Candidate != "sha" {
+		t.Fatal("stale completion accepted")
+	}
+	s.Apply(ctx, domain.Event{ID: "resume", WorkItemID: "wi", Kind: "resume"})
+	ok, err := s.BeginDispatch(ctx, "repair:verify")
+	if err != nil || !ok {
+		t.Fatal("repair not resumed", err)
 	}
 }

@@ -221,7 +221,7 @@ func (s *Store) Acquire(ctx context.Context, resource, owner string, ttl time.Du
 		return 0, errors.New("invalid lease")
 	}
 	var generation int64
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO resource_leases VALUES(?,?,?,1) ON CONFLICT(resource) DO UPDATE SET expires=excluded.expires,generation=resource_leases.generation+1 WHERE resource_leases.owner='' OR (resource_leases.owner=excluded.owner AND resource_leases.expires>?) RETURNING generation`, resource, owner, time.Now().Add(ttl).UnixNano(), time.Now().UnixNano()).Scan(&generation)
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO resource_leases VALUES(?,?,?,1) ON CONFLICT(resource) DO UPDATE SET owner=excluded.owner,expires=excluded.expires,generation=resource_leases.generation+1 WHERE resource_leases.owner='' OR (resource_leases.owner=excluded.owner AND resource_leases.expires>?) RETURNING generation`, resource, owner, time.Now().Add(ttl).UnixNano(), time.Now().UnixNano()).Scan(&generation)
 	return generation, err
 }
 func (s *Store) Release(ctx context.Context, resource, owner string, generation int64) error {

@@ -42,6 +42,7 @@ type Event struct {
 	ID             string `json:"id"`
 	WorkItemID     string `json:"work_item_id"`
 	Kind           string `json:"kind"`
+	Attempt        int    `json:"attempt"`
 	Candidate      string `json:"candidate,omitempty"`
 	ScopeRevision  int    `json:"scope_revision"`
 	PolicyRevision int    `json:"policy_revision"`
@@ -91,7 +92,7 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		if w.Terminal() {
 			return w, nil, nil
 		}
-		if e.ScopeRevision != w.ScopeRevision || e.PolicyRevision != w.PolicyRevision {
+		if e.Attempt != w.Attempt || e.ScopeRevision != w.ScopeRevision || e.PolicyRevision != w.PolicyRevision {
 			return w, nil, nil
 		}
 		if e.Kind != "candidate_ready" && e.Kind != "implementation_ready" && e.Candidate != w.Candidate {
@@ -99,7 +100,7 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		}
 		switch e.Kind {
 		case "start":
-			if w.Phase == Ready && !w.Paused {
+			if w.Phase == Ready {
 				w.Phase = Implementing
 				emit = "implement"
 			}
@@ -121,13 +122,13 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 				emit = "publish"
 			}
 		case "repair_implementation":
-			if !w.Paused && (w.Phase == Reviewing || w.Phase == Verifying || w.Phase == Validating) {
+			if w.Phase == Reviewing || w.Phase == Verifying || w.Phase == Validating {
 				w.RepairRounds++
 				w.Phase = Implementing
 				emit = "implement"
 			}
 		case "repair_tests":
-			if !w.Paused && (w.Phase == Reviewing || w.Phase == Verifying || w.Phase == Validating) {
+			if w.Phase == Reviewing || w.Phase == Verifying || w.Phase == Validating {
 				w.RepairRounds++
 				w.Phase = Verifying
 				emit = "verify"
