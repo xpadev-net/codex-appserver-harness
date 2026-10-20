@@ -2,6 +2,7 @@
 package review
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
@@ -94,7 +95,7 @@ func Findings(c runner.Candidate, round Round, p Policy, reviews []github.Review
 		if trusted[r.User.ID] && r.CommitID == c.SHA && !r.SubmittedAt.Before(round.RequestedAt) && (r.State == "COMMENTED" || r.State == "CHANGES_REQUESTED" || r.State == "APPROVED") {
 			valid[r.ID] = true
 			if r.Body != "" {
-				key := fmt.Sprintf("review:%d", r.ID)
+				key := fmt.Sprintf("review:%d:%x", r.ID, sha256.Sum256([]byte(r.Body)))
 				if !seen[key] {
 					out = append(out, Finding{key, r.Body, r.ID})
 					seen[key] = true
@@ -104,7 +105,7 @@ func Findings(c runner.Candidate, round Round, p Policy, reviews []github.Review
 	}
 	for _, comment := range comments {
 		if trusted[comment.User.ID] && valid[comment.ReviewID] && comment.CommitID == c.SHA && comment.Body != "" {
-			key := fmt.Sprintf("comment:%d:%s", comment.ID, comment.UpdatedAt.UTC().Format(time.RFC3339Nano))
+			key := fmt.Sprintf("comment:%d:%s:%x", comment.ID, comment.UpdatedAt.UTC().Format(time.RFC3339Nano), sha256.Sum256([]byte(comment.Body)))
 			if !seen[key] {
 				out = append(out, Finding{key, comment.Body, comment.ReviewID})
 				seen[key] = true

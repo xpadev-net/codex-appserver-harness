@@ -191,6 +191,9 @@ func (c Client) RequestReview(ctx context.Context, number int, roundID, trigger 
 // Merge supplies an expected head and uses the ordinary merge endpoint. No admin or
 // bypass flag is available. Acknowledgement alone never marks the WorkItem merged.
 func (c Client) Merge(ctx context.Context, number int, expectedHead, method string) error {
+	if number < 1 || !regexp.MustCompile(`^[0-9a-f]{40,64}$`).MatchString(expectedHead) {
+		return errors.New("merge requires PR and exact expected SHA")
+	}
 	if method != "squash" && method != "merge" && method != "rebase" {
 		return errors.New("invalid merge method")
 	}
@@ -250,7 +253,7 @@ func (c Client) Conditions(ctx context.Context, number int) (string, error) {
 // CheckClosingText rejects GitHub closing-keyword references in partial PR text
 // and commit messages; residual work must not close its parent automatically.
 func CheckClosingText(text string) error {
-	if regexp.MustCompile(`(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+((https://github\.com/[^\s]+/issues/\d+)|([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#\d+)`).MatchString(text) {
+	if regexp.MustCompile(`(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*:?[ \t\r\n]*((https://github\.com/[^\s]+/issues/\d+)|([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#\d+)`).MatchString(text) {
 		return errors.New("closing-keyword reference requires removal from partial PR")
 	}
 	return nil

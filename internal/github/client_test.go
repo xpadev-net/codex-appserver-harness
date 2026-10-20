@@ -20,7 +20,7 @@ func TestCheckRunPaginationShape(t *testing.T) {
 	}
 }
 func TestClosingText(t *testing.T) {
-	for _, text := range []string{"fixes #123", "Closes owner/repo#9", "resolve https://github.com/a/b/issues/1"} {
+	for _, text := range []string{"fixes #123", "Fixes: #123", "Fixes:#123", "Closes owner/repo#9", "resolve https://github.com/a/b/issues/1"} {
 		if CheckClosingText(text) == nil {
 			t.Fatal(text)
 		}
