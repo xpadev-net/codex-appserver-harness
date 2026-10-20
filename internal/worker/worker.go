@@ -104,6 +104,18 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 	err := w.RPC.Call(ctx, "turn/start", map[string]any{"threadId": s.ThreadID, "input": []any{map[string]string{"type": "text", "text": prompt}}, "outputSchema": schema}, &reply)
 	if err != nil {
 		r.State = "unknown"
+		var requestError *codex.RequestError
+		if errors.As(err, &requestError) {
+			r.State = "blocked"
+			r.Request = &requestError.Request
+			var ids struct {
+				ThreadID string `json:"threadId"`
+				TurnID   string `json:"turnId"`
+			}
+			if json.Unmarshal(requestError.Request.Params, &ids) == nil && ids.ThreadID == s.ThreadID {
+				r.TurnID = ids.TurnID
+			}
+		}
 		if saveErr := w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); saveErr != nil {
 			return r, saveErr
 		}
@@ -116,7 +128,7 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 		_ = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r)
 		return r, errors.New("missing turn id")
 	}
-	if err = w.Journal.Put(ctx, "agent_run", runID, s.WorkItemID, r); err != nil {
+	if err = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); err != nil {
 		return r, err
 	}
 	for {
@@ -129,7 +141,7 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 		if len(m.ID) > 0 && m.Method != "" {
 			r.State = "blocked"
 			r.Request = &m
-			err = w.Journal.Put(ctx, "agent_run", runID, s.WorkItemID, r)
+			err = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r)
 			if err != nil {
 				return r, err
 			}
@@ -171,7 +183,7 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 					r.Final = item.Text
 				}
 			}
-			if err = w.Journal.Put(ctx, "agent_run", runID, s.WorkItemID, r); err != nil {
+			if err = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); err != nil {
 				return r, err
 			}
 			if r.State != "completed" {
