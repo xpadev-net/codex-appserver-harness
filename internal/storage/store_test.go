@@ -75,7 +75,7 @@ func TestReplayAndRestart(t *testing.T) {
 		t.Fatalf("%+v %v", w, err)
 	}
 	ops, err := s2.Operations(ctx)
-	if err != nil || len(ops) != 5 {
+	if err != nil || len(ops) != 1 {
 		t.Fatalf("ops %d %v", len(ops), err)
 	}
 }
@@ -133,5 +133,38 @@ func TestStaleEventAndCanceledDispatch(t *testing.T) {
 	ok, err := s.BeginDispatch(ctx, "start:implement")
 	if ok || err != nil {
 		t.Fatal("canceled dispatch")
+	}
+}
+
+func TestLeaseGenerationSurvivesRelease(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	g1, err := s.Acquire(ctx, "r", "a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Release(ctx, "r", "a", g1); err != nil {
+		t.Fatal(err)
+	}
+	g2, err := s.Acquire(ctx, "r", "a", time.Minute)
+	if err != nil || g2 <= g1 {
+		t.Fatal("generation reset", g1, g2, err)
+	}
+	if err = s.Release(ctx, "r", "a", g1); err == nil {
+		t.Fatal("stale release succeeded")
+	}
+}
+func TestInflightOperationBlocksRepair(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.Apply(ctx, domain.Event{ID: "impl", WorkItemID: "wi", Kind: "implementation_ready", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1})
+	ok, err := s.BeginDispatch(ctx, "impl:verify")
+	if !ok || err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Apply(ctx, domain.Event{ID: "repair", WorkItemID: "wi", Kind: "repair_tests", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1}); err == nil {
+		t.Fatal("overlapping operation accepted")
 	}
 }

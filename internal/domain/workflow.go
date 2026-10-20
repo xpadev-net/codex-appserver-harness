@@ -35,6 +35,7 @@ type WorkItem struct {
 	Branch         string `json:"branch,omitempty"`
 	Worktree       string `json:"worktree,omitempty"`
 	RepairRounds   int    `json:"repair_rounds"`
+	Attempt        int    `json:"attempt"`
 	Version        int    `json:"version"`
 }
 type Event struct {
@@ -53,6 +54,7 @@ type Operation struct {
 	Candidate      string `json:"candidate"`
 	ScopeRevision  int    `json:"scope_revision"`
 	PolicyRevision int    `json:"policy_revision"`
+	Attempt        int    `json:"attempt"`
 	State          string `json:"state"`
 }
 
@@ -147,11 +149,12 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 	if emit == "" {
 		return w, nil, nil
 	}
-	op := Operation{ID: e.ID + ":" + emit, WorkItemID: w.ID, Kind: emit, Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, State: "pending"}
+	w.Attempt++
+	op := Operation{Attempt: w.Attempt, ID: e.ID + ":" + emit, WorkItemID: w.ID, Kind: emit, Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, State: "pending"}
 	return w, []Operation{op}, nil
 }
 func CanDispatch(w WorkItem, o Operation) bool {
-	if w.Terminal() || w.ScopeRevision != o.ScopeRevision || w.PolicyRevision != o.PolicyRevision || w.Candidate != o.Candidate {
+	if o.Attempt != w.Attempt || w.Terminal() || w.ScopeRevision != o.ScopeRevision || w.PolicyRevision != o.PolicyRevision || w.Candidate != o.Candidate {
 		return false
 	}
 	switch o.Kind {

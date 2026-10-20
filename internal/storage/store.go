@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"time"
 )
 
@@ -110,6 +110,18 @@ func (s *Store) Apply(ctx context.Context, e domain.Event) error {
 	if err != nil {
 		return err
 	}
+	if len(ops) > 0 {
+		var count int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM operation_outbox WHERE work_item_id=? AND state IN ('sending','unknown')", w.ID).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return errors.New("previous operation requires reconciliation")
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='canceled' WHERE work_item_id=? AND state='pending'", w.ID); err != nil {
+			return err
+		}
+	}
 	b, err = json.Marshal(w)
 	if err != nil {
 		return err
@@ -209,11 +221,11 @@ func (s *Store) Acquire(ctx context.Context, resource, owner string, ttl time.Du
 		return 0, errors.New("invalid lease")
 	}
 	var generation int64
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO resource_leases VALUES(?,?,?,1) ON CONFLICT(resource) DO UPDATE SET expires=excluded.expires,generation=resource_leases.generation+1 WHERE resource_leases.owner=excluded.owner AND resource_leases.expires>? RETURNING generation`, resource, owner, time.Now().Add(ttl).UnixNano(), time.Now().UnixNano()).Scan(&generation)
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO resource_leases VALUES(?,?,?,1) ON CONFLICT(resource) DO UPDATE SET expires=excluded.expires,generation=resource_leases.generation+1 WHERE resource_leases.owner='' OR (resource_leases.owner=excluded.owner AND resource_leases.expires>?) RETURNING generation`, resource, owner, time.Now().Add(ttl).UnixNano(), time.Now().UnixNano()).Scan(&generation)
 	return generation, err
 }
 func (s *Store) Release(ctx context.Context, resource, owner string, generation int64) error {
-	r, err := s.DB.ExecContext(ctx, "DELETE FROM resource_leases WHERE resource=? AND owner=? AND generation=?", resource, owner, generation)
+	r, err := s.DB.ExecContext(ctx, "UPDATE resource_leases SET owner='',expires=0 WHERE resource=? AND owner=? AND generation=?", resource, owner, generation)
 	if err != nil {
 		return err
 	}
