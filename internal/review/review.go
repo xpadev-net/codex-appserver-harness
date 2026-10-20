@@ -91,7 +91,7 @@ func Findings(c runner.Candidate, round Round, p Policy, reviews []github.Review
 	valid := map[int64]bool{}
 	seen := map[string]bool{}
 	for _, r := range reviews {
-		if trusted[r.User.ID] && r.CommitID == c.SHA && !r.SubmittedAt.Before(round.RequestedAt) && (r.State == "COMMENTED" || r.State == "CHANGES_REQUESTED") {
+		if trusted[r.User.ID] && r.CommitID == c.SHA && !r.SubmittedAt.Before(round.RequestedAt) && (r.State == "COMMENTED" || r.State == "CHANGES_REQUESTED" || r.State == "APPROVED") {
 			valid[r.ID] = true
 			if r.Body != "" {
 				key := fmt.Sprintf("review:%d", r.ID)

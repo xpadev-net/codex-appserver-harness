@@ -69,3 +69,14 @@ func TestCommentedBodyIsFeedbackNotApproval(t *testing.T) {
 		t.Fatal("comment became approval")
 	}
 }
+func TestApprovedReviewFeedbackPreserved(t *testing.T) {
+	now := time.Now()
+	c := runner.Candidate{ID: "c", SHA: "head"}
+	round := Round{Candidate: c, RequestedAt: now}
+	p := Policy{TrustedReviewerIDs: []int64{7}}
+	reviews := []github.Review{{ID: 1, User: github.User{ID: 7}, State: "APPROVED", CommitID: "head", SubmittedAt: now, Body: "follow-up feedback"}}
+	comments := []github.Comment{{ID: 2, User: github.User{ID: 7}, CommitID: "head", ReviewID: 1, Body: "inline defect", UpdatedAt: now}}
+	if got := Findings(c, round, p, reviews, comments); len(got) != 2 {
+		t.Fatal("approved feedback dropped", got)
+	}
+}

@@ -24,6 +24,7 @@ type CIRevision struct {
 	Verified  bool
 }
 type Snapshot struct {
+	UnresolvedFindings    int
 	CI                    CIRevision
 	WorkItem              domain.WorkItem
 	Candidate             runner.Candidate
@@ -60,6 +61,7 @@ func Reasons(s Snapshot) []string {
 	add(s.PR.Base.Ref == s.BaseBranch && s.PR.Base.SHA == c.BaseSHA, "base changed")
 	add(s.Scope.Revision == s.CurrentScopeRevision && c.ScopeRevision == s.CurrentScopeRevision && c.PolicyRevision == s.CurrentPolicyRevision, "scope or policy superseded")
 	add(s.Plan.Validate(w.ID, c, s.Scope, s.Verification) == nil && verification.PassedPlan(c, s.Verification, s.Plan, s.Results), "required verification incomplete")
+	add(s.UnresolvedFindings == 0, "review feedback remains unresolved")
 	add(s.Review.Approved && !s.Review.Blocking, "explicit review approval missing or blocked")
 	add(s.RepositoryConditions == "CLEAN", "repository rules/checks/conversations not satisfied")
 	add(len(s.Scope.Remaining) == 0 || s.ResidualPersisted, "residual work not persisted")
