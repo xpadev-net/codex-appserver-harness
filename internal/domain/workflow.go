@@ -28,6 +28,7 @@ type WorkItem struct {
 	ScopeRevision  int    `json:"scope_revision"`
 	PolicyRevision int    `json:"policy_revision"`
 	Phase          Phase  `json:"phase"`
+	RecoveryPhase  Phase  `json:"recovery_phase,omitempty"`
 	Paused         bool   `json:"paused"`
 	MergeHold      bool   `json:"merge_hold"`
 	Reason         string `json:"reason,omitempty"`
@@ -83,8 +84,17 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			w.Phase = Canceled
 			w.Reason = e.Reason
 		}
+	case "unblock":
+		if w.Phase == Blocked && w.RecoveryPhase != "" {
+			w.Phase = w.RecoveryPhase
+			w.RecoveryPhase = ""
+			w.Reason = ""
+		}
 	case "block":
 		if !w.Terminal() {
+			if w.Phase != Blocked {
+				w.RecoveryPhase = w.Phase
+			}
 			w.Phase = Blocked
 			w.Reason = e.Reason
 		}
@@ -134,7 +144,7 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 				emit = "verify"
 			}
 		case "gates_passed":
-			if w.Phase == Reviewing && !w.MergeHold {
+			if w.Phase == Reviewing {
 				w.Phase = MergePending
 				emit = "merge"
 			}
