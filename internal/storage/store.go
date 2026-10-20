@@ -22,6 +22,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	s := &Store{db}
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
+ CREATE TABLE IF NOT EXISTS raw_deliveries(id TEXT PRIMARY KEY,event TEXT NOT NULL,payload BLOB NOT NULL,received_at TEXT NOT NULL,processed INTEGER NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
  CREATE TABLE IF NOT EXISTS work_items(id TEXT PRIMARY KEY,repository_id INTEGER NOT NULL,issue INTEGER NOT NULL,data BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS issue_claims(repository_id INTEGER NOT NULL,issue INTEGER NOT NULL,work_item_id TEXT NOT NULL,PRIMARY KEY(repository_id,issue));
@@ -336,4 +337,21 @@ func (s *Store) RetryUnexecuted(ctx context.Context, id, evidence string) error 
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) Receive(ctx context.Context, id, event string, payload []byte) error {
+	if id == "" || len(id) > 256 || event == "" || len(event) > 128 || len(payload) > 1<<20 || !json.Valid(payload) {
+		return errors.New("invalid delivery")
+	}
+	_, err := s.DB.ExecContext(ctx, "INSERT OR IGNORE INTO raw_deliveries(id,event,payload,received_at) VALUES(?,?,?,?)", id, event, payload, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+func (s *Store) DeliveriesPending(ctx context.Context) (bool, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM raw_deliveries WHERE processed=0").Scan(&n)
+	return n > 0, err
+}
+func (s *Store) AcknowledgeDeliveries(ctx context.Context) error {
+	_, err := s.DB.ExecContext(ctx, "UPDATE raw_deliveries SET processed=1 WHERE processed=0")
+	return err
 }
