@@ -4,6 +4,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 type Phase string
@@ -22,38 +23,44 @@ const (
 )
 
 type WorkItem struct {
-	ID             string `json:"id"`
-	RepositoryID   int64  `json:"repository_id"`
-	Issue          int    `json:"issue"`
-	ScopeRevision  int    `json:"scope_revision"`
-	PolicyRevision int    `json:"policy_revision"`
-	Phase          Phase  `json:"phase"`
-	CanceledFrom   Phase  `json:"canceled_from,omitempty"`
-	SplitPlanID    string `json:"split_plan_id,omitempty"`
-	LastCompletion *Event `json:"last_completion,omitempty"`
-	RecoveryPhase  Phase  `json:"recovery_phase,omitempty"`
-	Paused         bool   `json:"paused"`
-	MergeHold      bool   `json:"merge_hold"`
-	Reason         string `json:"reason,omitempty"`
-	Candidate      string `json:"candidate,omitempty"`
-	Branch         string `json:"branch,omitempty"`
-	Worktree       string `json:"worktree,omitempty"`
-	RepairRounds   int    `json:"repair_rounds"`
-	Attempt        int    `json:"attempt"`
-	Version        int    `json:"version"`
+	CreatedAt       time.Time        `json:"created_at"`
+	PhaseStartedAt  time.Time        `json:"phase_started_at"`
+	MergeObservedAt time.Time        `json:"merge_observed_at"`
+	PhaseDurations  map[string]int64 `json:"phase_duration_nanoseconds"`
+	ID              string           `json:"id"`
+	RepositoryID    int64            `json:"repository_id"`
+	Issue           int              `json:"issue"`
+	ScopeRevision   int              `json:"scope_revision"`
+	PolicyRevision  int              `json:"policy_revision"`
+	Phase           Phase            `json:"phase"`
+	CanceledFrom    Phase            `json:"canceled_from,omitempty"`
+	SplitPlanID     string           `json:"split_plan_id,omitempty"`
+	LastCompletion  *Event           `json:"last_completion,omitempty"`
+	RecoveryPhase   Phase            `json:"recovery_phase,omitempty"`
+	Paused          bool             `json:"paused"`
+	MergeHold       bool             `json:"merge_hold"`
+	Reason          string           `json:"reason,omitempty"`
+	Candidate       string           `json:"candidate,omitempty"`
+	Branch          string           `json:"branch,omitempty"`
+	Worktree        string           `json:"worktree,omitempty"`
+	RepairRounds    int              `json:"repair_rounds"`
+	Attempt         int              `json:"attempt"`
+	Version         int              `json:"version"`
 }
 type Event struct {
-	ID             string `json:"id"`
-	WorkItemID     string `json:"work_item_id"`
-	Kind           string `json:"kind"`
-	Attempt        int    `json:"attempt"`
-	Candidate      string `json:"candidate,omitempty"`
-	ScopeRevision  int    `json:"scope_revision"`
-	PolicyRevision int    `json:"policy_revision"`
-	Reason         string `json:"reason,omitempty"`
-	Ref            string `json:"ref,omitempty"`
+	ObservedAt     time.Time `json:"observed_at,omitempty"`
+	ID             string    `json:"id"`
+	WorkItemID     string    `json:"work_item_id"`
+	Kind           string    `json:"kind"`
+	Attempt        int       `json:"attempt"`
+	Candidate      string    `json:"candidate,omitempty"`
+	ScopeRevision  int       `json:"scope_revision"`
+	PolicyRevision int       `json:"policy_revision"`
+	Reason         string    `json:"reason,omitempty"`
+	Ref            string    `json:"ref,omitempty"`
 }
 type Operation struct {
+	Reason         string `json:"reason,omitempty"`
 	ID             string `json:"id"`
 	WorkItemID     string `json:"work_item_id"`
 	Kind           string `json:"kind"`
@@ -99,6 +106,36 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			return w, nil, nil
 		}
 		return w, nil, nil
+	case "review_retry":
+		if e.Reason == "" || !(w.Phase == Reviewing || (w.Phase == Blocked && w.RecoveryPhase == Reviewing)) {
+			return w, nil, errors.New("review retry requires a review state and reason")
+		}
+		w.Phase = Reviewing
+		w.Reason = ""
+		w.RecoveryPhase = ""
+	case "operator_retry":
+		if w.Phase != Blocked || e.Reason == "" || w.Reason == "split_pending" {
+			return w, nil, errors.New("retry requires a resolved ordinary blocker and reason")
+		}
+		w.Phase = w.RecoveryPhase
+		w.RecoveryPhase = ""
+		w.Reason = ""
+		if w.Phase != Validating {
+			w.RepairRounds++
+		}
+		switch w.Phase {
+		case Implementing:
+			emit = "implement"
+		case Verifying:
+			emit = "verify"
+		case Validating:
+			emit = "validate"
+		case MergePending:
+			w.Phase = Reviewing
+		case Ready, Reviewing:
+		default:
+			return w, nil, errors.New("unsupported retry phase")
+		}
 	case "unblock":
 		if w.Phase == Blocked && w.RecoveryPhase != "" && w.Reason != "split_pending" {
 			w.Phase = w.RecoveryPhase
@@ -152,10 +189,26 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		if e.Attempt != w.Attempt || e.ScopeRevision != w.ScopeRevision || e.PolicyRevision != w.PolicyRevision {
 			return w, nil, nil
 		}
-		if e.Kind != "candidate_ready" && e.Kind != "implementation_ready" && e.Candidate != w.Candidate {
+		if e.Kind != "candidate_ready" && e.Kind != "implementation_ready" && e.Kind != "candidate_refreshed" && e.Kind != "implementation_validated" && e.Kind != "interim_requested" && e.Candidate != w.Candidate {
 			return w, nil, nil
 		}
 		switch e.Kind {
+		case "request_split":
+			if w.Phase == Implementing {
+				emit = "propose_split"
+			}
+		case "interim_requested":
+			if w.Phase == Implementing && e.Candidate != "" {
+				w.Candidate = e.Candidate
+				w.Phase = Validating
+				emit = "validate_interim"
+			}
+		case "interim_complete":
+			if w.Phase == Validating {
+				w.Phase = Implementing
+				w.RepairRounds++
+				emit = "implement"
+			}
 		case "plan_split":
 			if e.Ref == "" {
 				return w, nil, errors.New("split reference is required")
@@ -166,6 +219,16 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 				w.Phase = Blocked
 				w.Reason = "split_pending"
 				emit = "split"
+			}
+		case "candidate_refreshed", "implementation_validated":
+			if (w.Phase == Reviewing || w.Phase == Implementing) && e.Candidate != "" {
+				w.Candidate = e.Candidate
+				w.Phase = Validating
+				emit = "validate"
+			}
+		case "return_to_review":
+			if w.Phase == Verifying {
+				w.Phase = Reviewing
 			}
 		case "start":
 			if w.Phase == Ready {
@@ -219,7 +282,7 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		return w, nil, nil
 	}
 	w.Attempt++
-	op := Operation{Attempt: w.Attempt, ID: e.ID + ":" + emit, WorkItemID: w.ID, Kind: emit, Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, State: "pending"}
+	op := Operation{Reason: e.Reason, Attempt: w.Attempt, ID: e.ID + ":" + emit, WorkItemID: w.ID, Kind: emit, Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, State: "pending"}
 	return w, []Operation{op}, nil
 }
 func CanDispatch(w WorkItem, o Operation) bool {
@@ -229,11 +292,11 @@ func CanDispatch(w WorkItem, o Operation) bool {
 	switch o.Kind {
 	case "split":
 		return w.Phase == Blocked && w.Reason == "split_pending" && !w.Paused
-	case "implement":
+	case "implement", "propose_split":
 		return !w.Paused && w.Phase == Implementing
 	case "verify":
 		return !w.Paused && w.Phase == Verifying
-	case "validate":
+	case "validate", "validate_interim":
 		return w.Phase == Validating
 	case "publish", "review":
 		return w.Phase == Reviewing

@@ -21,7 +21,8 @@
       "enum": [
         "candidate",
         "blocked",
-        "validation_needed"
+        "validation_needed",
+        "split"
       ]
     },
     "summary": {

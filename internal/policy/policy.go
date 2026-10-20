@@ -3,14 +3,17 @@ package policy
 
 import (
 	"errors"
+	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 type Profile struct {
-	Revision       int      `json:"revision"`
-	Argv           []string `json:"argv"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
-	SuccessPattern string   `json:"success_pattern"`
+	EntryPointSHA256 string   `json:"entrypoint_sha256,omitempty"`
+	Revision         int      `json:"revision"`
+	Argv             []string `json:"argv"`
+	TimeoutSeconds   int      `json:"timeout_seconds"`
+	SuccessPattern   string   `json:"success_pattern"`
 }
 type Verification struct {
 	Revision         int                `json:"revision"`
@@ -23,7 +26,13 @@ func (v Verification) Validate() error {
 		return errors.New("verification policy requires revision and profiles")
 	}
 	for id, p := range v.Profiles {
-		if !regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(id) || p.Revision < 1 || len(p.Argv) == 0 || p.Argv[0] == "" || p.TimeoutSeconds < 1 {
+		if p.EntryPointSHA256 != "" && !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(p.EntryPointSHA256) {
+			return errors.New("invalid trusted profile entrypoint hash")
+		}
+		if len(p.Argv) > 0 && strings.Contains(p.Argv[0], "/") && !filepath.IsAbs(p.Argv[0]) && p.EntryPointSHA256 == "" {
+			return errors.New("relative profile entrypoint requires trusted SHA256")
+		}
+		if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(id) || p.Revision < 1 || len(p.Argv) == 0 || p.Argv[0] == "" || p.TimeoutSeconds < 1 {
 			return errors.New("invalid profile")
 		}
 		if p.SuccessPattern != "" {

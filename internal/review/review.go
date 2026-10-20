@@ -12,11 +12,13 @@ import (
 )
 
 type Round struct {
+	Number           int              `json:"number"`
 	ID               string           `json:"id"`
 	Candidate        runner.Candidate `json:"candidate"`
 	PR               int              `json:"pr"`
 	RequestedAt      time.Time        `json:"requested_at"`
 	RequestCommentID int64            `json:"request_comment_id"`
+	RequestAttempted bool             `json:"request_attempted"`
 	RequesterID      int64            `json:"requester_id"`
 }
 type Policy struct {

@@ -25,7 +25,7 @@ func (f *fakeRPC) Call(_ context.Context, m string, _ any, v any) error {
 	var b string
 	switch m {
 	case "thread/start", "thread/resume":
-		b = `{"thread":{"id":"thread","cwd":"/work"}}`
+		b = `{"thread":{"id":"thread","cwd":"/work","turns":[]}}`
 	case "turn/start":
 		b = `{"turn":{"id":"turn"}}`
 	case "thread/read":
@@ -134,5 +134,21 @@ func TestSummaryCompletionKeepsFullOutput(t *testing.T) {
 	r, err := w.Execute(context.Background(), Session{WorkItemID: "w", ThreadID: "thread"}, "r", "implement", "prompt", nil)
 	if err != nil || r.Final != "full JSON handoff" {
 		t.Fatal("full output overwritten", r, err)
+	}
+}
+func TestUnknownStartAssociatesOnlyUniqueNewTurn(t *testing.T) {
+	ctx := context.Background()
+	s, _ := storage.Open(filepath.Join(t.TempDir(), "db"))
+	defer s.Close()
+	w := Worker{&fakeRPC{status: "completed"}, s}
+	session := Session{WorkItemID: "w", ThreadID: "thread", CWD: "/work"}
+	r := Run{ID: "unknown", ThreadID: "thread", State: "unknown", BaselineKnown: true, BaselineTurnIDs: []string{}}
+	got, err := w.Reconcile(ctx, session, r)
+	if err != nil || got.TurnID != "turn" || got.Final != "done" {
+		t.Fatal(got, err)
+	}
+	r.BaselineTurnIDs = []string{"turn"}
+	if _, err = w.Reconcile(ctx, session, r); err == nil {
+		t.Fatal("preexisting turn associated")
 	}
 }

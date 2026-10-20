@@ -4,6 +4,7 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,13 +30,14 @@ type Candidate struct {
 	PolicyRevision int    `json:"policy_revision"`
 }
 type Spec struct {
-	JobID      string         `json:"job_id"`
-	Repository string         `json:"repository"`
-	Root       string         `json:"root"`
-	Candidate  Candidate      `json:"candidate"`
-	ProfileID  string         `json:"profile_id"`
-	Profile    policy.Profile `json:"profile"`
-	Launcher   []string       `json:"launcher"`
+	JobID          string         `json:"job_id"`
+	Repository     string         `json:"repository"`
+	Root           string         `json:"root"`
+	Candidate      Candidate      `json:"candidate"`
+	ProfileID      string         `json:"profile_id"`
+	Profile        policy.Profile `json:"profile"`
+	ForbiddenPaths []string       `json:"forbidden_paths"`
+	Launcher       []string       `json:"launcher"`
 }
 type Result struct {
 	JobID           string    `json:"job_id"`
@@ -121,9 +123,30 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	if err = os.Mkdir(dir, 0700); err != nil {
 		return r, fmt.Errorf("job already exists or unavailable; reconcile: %w", err)
 	}
+	jobCtx, stopJob := context.WithCancel(ctx)
+	defer stopJob()
+	ctx = jobCtx
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-jobCtx.Done():
+				return
+			case <-ticker.C:
+				if _, err := os.Stat(filepath.Join(s.Root, s.JobID+".cancel")); err == nil {
+					stopJob()
+					return
+				}
+			}
+		}
+	}()
 	r = Result{JobID: s.JobID, Candidate: s.Candidate, ProfileID: s.ProfileID, ProfileRevision: s.Profile.Revision, Status: "infrastructure_failure", Started: time.Now().UTC(), Environment: runtime.GOOS + "/" + runtime.GOARCH, LogPath: filepath.Join(dir, "output.log")}
 	defer func() {
 		r.Finished = time.Now().UTC()
+		if ctx.Err() != nil && r.Status == "infrastructure_failure" {
+			r.Status = "canceled"
+		}
 		if err != nil {
 			r.Reason = err.Error()
 		}
@@ -148,12 +171,26 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	if err = workspace.Clean(ctx, checkout); err != nil {
 		return r, err
 	}
+	if strings.Contains(s.Profile.Argv[0], "/") && !filepath.IsAbs(s.Profile.Argv[0]) {
+		entry := filepath.Join(checkout, s.Profile.Argv[0])
+		if rel, relErr := filepath.Rel(checkout, entry); relErr != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return r, errors.New("profile entrypoint escapes checkout")
+		}
+		data, readErr := os.ReadFile(entry)
+		if readErr != nil {
+			return r, readErr
+		}
+		if s.Profile.EntryPointSHA256 == "" || fmt.Sprintf("%x", sha256.Sum256(data)) != s.Profile.EntryPointSHA256 {
+			return r, errors.New("trusted profile entrypoint changed; explicit policy revision required")
+		}
+	}
 	log, err := os.OpenFile(r.LogPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return r, err
 	}
 	defer log.Close()
 	output := &boundedLog{writer: log, limit: 8 << 20}
+	redacted := newRedactedLog(output, secretValues())
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(s.Profile.TimeoutSeconds)*time.Second)
 	defer cancel()
 	argv := append(append([]string{}, s.Launcher...), s.Profile.Argv...)
@@ -164,8 +201,23 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		return r, err
 	}
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "HARNESS_WORKSPACE=" + checkout, "HARNESS_JOB_ID=" + s.JobID}
-	cmd.Stdout = output
-	cmd.Stderr = output
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+		if value, ok := os.LookupEnv(name); ok {
+			cmd.Env = append(cmd.Env, name+"="+value)
+		}
+	}
+	if len(s.ForbiddenPaths) > 0 {
+		args := append(append([]string{}, s.Launcher...), "sh", "-c", `for p in "$@"; do test ! -e "$p" || exit 1; done`, "probe")
+		args = append(args, s.ForbiddenPaths...)
+		probe := exec.CommandContext(runCtx, args[0], args[1:]...)
+		probe.Dir = checkout
+		probe.Env = cmd.Env
+		if probe.Run() != nil {
+			return r, errors.New("runner credential isolation probe failed")
+		}
+	}
+	cmd.Stdout = redacted
+	cmd.Stderr = redacted
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 2 * time.Second
@@ -173,6 +225,9 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		return r, err
 	}
 	waitErr := cmd.Wait()
+	if flushErr := redacted.Flush(); flushErr != nil {
+		waitErr = errors.Join(waitErr, flushErr)
+	}
 	r.LogTruncated = output.truncated
 	if cmd.ProcessState != nil {
 		code := cmd.ProcessState.ExitCode()
@@ -252,13 +307,18 @@ func Passed(c Candidate, v policy.Verification, results []Result) bool {
 		return false
 	}
 	for _, id := range v.RequiredProfiles {
-		found := false
-		for _, r := range results {
-			if r.Candidate == c && r.TestedSHA == c.SHA && r.ProfileID == id && r.ProfileRevision == v.Profiles[id].Revision && r.Status == "passed" && r.ExitCode != nil && *r.ExitCode == 0 && !r.Started.IsZero() && !r.Finished.IsZero() && r.LogPath != "" {
-				found = true
+		var latest *Result
+		for i := range results {
+			r := &results[i]
+			if r.Candidate == c && r.ProfileID == id && (latest == nil || r.Started.After(latest.Started) || (r.Started.Equal(latest.Started) && r.JobID > latest.JobID)) {
+				latest = r
 			}
 		}
-		if !found {
+		if latest == nil {
+			return false
+		}
+		r := latest
+		if r.TestedSHA != c.SHA || r.ProfileRevision != v.Profiles[id].Revision || r.Status != "passed" || r.ExitCode == nil || *r.ExitCode != 0 || r.Started.IsZero() || r.Finished.IsZero() || r.Finished.Before(r.Started) || r.LogPath == "" {
 			return false
 		}
 	}

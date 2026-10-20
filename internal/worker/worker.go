@@ -20,22 +20,26 @@ type Journal interface {
 	Record(context.Context, string, string, any) error
 }
 type Session struct {
-	WorkItemID string `json:"work_item_id"`
-	Role       string `json:"role"`
-	ThreadID   string `json:"thread_id"`
-	CWD        string `json:"cwd"`
-	Model      string `json:"model"`
+	BaselineTurnIDs []string `json:"baseline_turn_ids"`
+	BaselineKnown   bool     `json:"baseline_known"`
+	WorkItemID      string   `json:"work_item_id"`
+	Role            string   `json:"role"`
+	ThreadID        string   `json:"thread_id"`
+	CWD             string   `json:"cwd"`
+	Model           string   `json:"model"`
 }
 type Run struct {
-	ID       string          `json:"id"`
-	ThreadID string          `json:"thread_id"`
-	TurnID   string          `json:"turn_id"`
-	State    string          `json:"state"`
-	Reason   string          `json:"reason"`
-	Started  time.Time       `json:"started"`
-	Final    string          `json:"final"`
-	Request  *codex.Message  `json:"request,omitempty"`
-	Usage    json.RawMessage `json:"usage,omitempty"`
+	BaselineTurnIDs []string        `json:"baseline_turn_ids"`
+	BaselineKnown   bool            `json:"baseline_known"`
+	ID              string          `json:"id"`
+	ThreadID        string          `json:"thread_id"`
+	TurnID          string          `json:"turn_id"`
+	State           string          `json:"state"`
+	Reason          string          `json:"reason"`
+	Started         time.Time       `json:"started"`
+	Final           string          `json:"final"`
+	Request         *codex.Message  `json:"request,omitempty"`
+	Usage           json.RawMessage `json:"usage,omitempty"`
 }
 type Thread struct {
 	ID    string `json:"id"`
@@ -79,13 +83,32 @@ func (w Worker) Prepare(ctx context.Context, s Session) (Session, error) {
 		return s, errors.New("resume returned different thread")
 	}
 	s.ThreadID = reply.Thread.ID
+	s.BaselineTurnIDs = []string{}
+	s.BaselineKnown = method == "thread/start" || reply.Thread.Turns != nil
+	if !s.BaselineKnown {
+		var history struct {
+			Thread Thread `json:"thread"`
+		}
+		if err := w.RPC.Call(ctx, "thread/read", map[string]any{"threadId": s.ThreadID, "includeTurns": true}, &history); err != nil {
+			return s, err
+		}
+		if history.Thread.ID != s.ThreadID || history.Thread.CWD != s.CWD {
+			return s, errors.New("resume history identity mismatch")
+		}
+		reply.Thread = history.Thread
+		s.BaselineKnown = true
+	}
+	for _, turn := range reply.Thread.Turns {
+
+		s.BaselineTurnIDs = append(s.BaselineTurnIDs, turn.ID)
+	}
 	return s, w.Journal.Put(ctx, "role_thread", s.WorkItemID+":"+s.Role, s.WorkItemID, s)
 }
 
 // Execute is invoked only after controller leases and isolated launch policy checks.
 // Persisting intent before turn/start makes a lost response an explicit unknown state.
 func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt string, schema any) (Run, error) {
-	r := Run{ID: runID, ThreadID: s.ThreadID, State: "starting", Reason: reason, Started: time.Now().UTC()}
+	r := Run{BaselineTurnIDs: append([]string{}, s.BaselineTurnIDs...), BaselineKnown: s.BaselineKnown, ID: runID, ThreadID: s.ThreadID, State: "starting", Reason: reason, Started: time.Now().UTC()}
 	if runID == "" || s.ThreadID == "" || reason == "" {
 		return r, errors.New("invalid run")
 	}
@@ -172,7 +195,9 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 				r.Final = p.Item.Text
 			}
 		case "thread/tokenUsage/updated":
-			r.Usage = p.TokenUsage
+			if p.TurnID == r.TurnID {
+				r.Usage = p.TokenUsage
+			}
 		case "turn/completed":
 			if p.Turn.ID != r.TurnID {
 				continue
@@ -207,6 +232,21 @@ func (w Worker) Reconcile(ctx context.Context, s Session, r Run) (Run, error) {
 	}
 	if reply.Thread.ID != s.ThreadID || reply.Thread.CWD != s.CWD {
 		return r, errors.New("thread mismatch")
+	}
+	if r.TurnID == "" && r.BaselineKnown {
+		old := map[string]bool{}
+		for _, id := range r.BaselineTurnIDs {
+			old[id] = true
+		}
+		found := []string{}
+		for _, t := range reply.Thread.Turns {
+			if !old[t.ID] {
+				found = append(found, t.ID)
+			}
+		}
+		if len(found) == 1 {
+			r.TurnID = found[0]
+		}
 	}
 	if r.TurnID == "" {
 		return r, errors.New("unknown turn start requires explicit association")

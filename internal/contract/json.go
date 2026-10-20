@@ -70,6 +70,22 @@ func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
 				return fmt.Errorf("%s.%s: unknown field", path, key)
 			}
 		}
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			return fmt.Errorf("unsupported map key")
+		}
+		var values map[string]json.RawMessage
+		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &values) != nil {
+			return fmt.Errorf("%s: expected map", path)
+		}
+		if len(values) > 256 {
+			return fmt.Errorf("%s: too many map entries", path)
+		}
+		for key, value := range values {
+			if err := validateJSON(bytes.TrimSpace(value), t.Elem(), path+"."+key); err != nil {
+				return err
+			}
+		}
 	case reflect.Slice:
 		var values []json.RawMessage
 		if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &values) != nil {

@@ -320,3 +320,24 @@ func TestDependenciesBlockDispatch(t *testing.T) {
 		t.Fatal("merged dependency did not release dispatch", err)
 	}
 }
+func TestCompleteRollsBackResultAndTransitionTogether(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.BeginDispatch(ctx, "start:implement")
+	if err := s.Complete(ctx, "start:implement", "result", domain.Event{ID: "bad", WorkItemID: "wi", Kind: "unknown", ScopeRevision: 1, PolicyRevision: 1, Attempt: 1}); err == nil {
+		t.Fatal("invalid transition accepted")
+	}
+	ops, err := s.Operations(ctx)
+	if err != nil || len(ops) != 1 || ops[0].State != "sending" {
+		t.Fatal("partial commit", ops, err)
+	}
+	if err = s.Complete(ctx, "start:implement", "result", domain.Event{ID: "good", WorkItemID: "wi", Kind: "implementation_ready", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1, Attempt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := s.Get(ctx, "wi")
+	if w.Phase != domain.Verifying {
+		t.Fatal("transition lost")
+	}
+}

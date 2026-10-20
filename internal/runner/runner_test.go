@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func spec(t *testing.T) Spec {
@@ -108,5 +109,18 @@ func TestTimeoutRetainsTruncationAndExitStatus(t *testing.T) {
 	r, _ := Execute(context.Background(), s)
 	if r.Status != "timeout" || !r.LogTruncated || r.ExitCode == nil {
 		t.Fatal("execution metadata lost", r)
+	}
+}
+func TestCancelMarkerStopsDurableJob(t *testing.T) {
+	s := spec(t)
+	s.Profile.TimeoutSeconds = 10
+	s.Profile.Argv = []string{"sh", "-c", "sleep 8"}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		os.WriteFile(filepath.Join(s.Root, s.JobID+".cancel"), []byte("operator cancel"), 0600)
+	}()
+	r, _ := Execute(context.Background(), s)
+	if r.Status != "canceled" || time.Since(r.Started) > 3*time.Second {
+		t.Fatal("cancel marker ignored", r)
 	}
 }

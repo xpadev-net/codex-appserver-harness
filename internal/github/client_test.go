@@ -14,7 +14,7 @@ func TestCheckRunPaginationShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	checks, err := (Client{"owner/repo", 1}).Checks(context.Background(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	checks, err := (Client{Repository: "owner/repo", RepositoryID: 1}).Checks(context.Background(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil || len(checks) != 1 || checks[0].App.ID != 9 {
 		t.Fatal(checks, err)
 	}
@@ -42,7 +42,7 @@ printf '%s' '[[{"number":1,"body":"unrelated"}],[{"number":102,"body":"<!-- harn
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	number, err := (Client{"owner/repo", 1}).FindChild(context.Background(), "harness-child:parent:child")
+	number, err := (Client{Repository: "owner/repo", RepositoryID: 1}).FindChild(context.Background(), "harness-child:parent:child")
 	if err != nil || number != 102 {
 		t.Fatal("later-page child missing", number, err)
 	}

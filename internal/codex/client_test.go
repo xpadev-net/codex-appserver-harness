@@ -1,9 +1,12 @@
 package codex
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,3 +39,25 @@ func TestCallPreservesNotifications(t *testing.T) {
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
+func TestSendSerializesConcurrentWriters(t *testing.T) {
+	var buffer bytes.Buffer
+	c := &Client{in: nopWriteCloser{&buffer}}
+	var wg sync.WaitGroup
+	for i := range 30 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.Send(map[string]int{"id": i}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	decoder := json.NewDecoder(&buffer)
+	for range 30 {
+		var message map[string]int
+		if err := decoder.Decode(&message); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
