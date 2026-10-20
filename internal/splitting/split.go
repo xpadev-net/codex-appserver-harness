@@ -79,8 +79,15 @@ func (p Proposal) Validate(id string, parent verification.Scope, depth, maxDepth
 			return errors.New("child criteria missing parent mapping")
 		}
 	}
-	if len(covered) != len(parents) {
-		return errors.New("split drops parent criteria")
+	for id := range parents {
+		if !covered[id] {
+			return errors.New("split drops parent criterion: " + id)
+		}
+	}
+	for id := range covered {
+		if !parents[id] {
+			return errors.New("split references unknown parent criterion: " + id)
+		}
 	}
 	edges := map[string][]string{}
 	for _, c := range p.Children {

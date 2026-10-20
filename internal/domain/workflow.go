@@ -154,6 +154,9 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		}
 		switch e.Kind {
 		case "plan_split":
+			if e.Ref == "" {
+				return w, nil, errors.New("split reference is required")
+			}
 			if e.Ref != "" {
 				w.SplitPlanID = e.Ref
 				w.RecoveryPhase = w.Phase
