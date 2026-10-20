@@ -29,3 +29,21 @@ func TestClosingText(t *testing.T) {
 		t.Fatal("nonclosing text rejected")
 	}
 }
+func TestFindChildSearchesAllPages(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case " $* " in
+ *" --paginate --slurp "*) ;;
+ *) exit 9 ;;
+esac
+printf '%s' '[[{"number":1,"body":"unrelated"}],[{"number":102,"body":"<!-- harness-child:parent:child -->"}]]'
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	number, err := (Client{"owner/repo", 1}).FindChild(context.Background(), "harness-child:parent:child")
+	if err != nil || number != 102 {
+		t.Fatal("later-page child missing", number, err)
+	}
+}

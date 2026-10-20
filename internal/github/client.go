@@ -271,6 +271,7 @@ type Issue struct {
 	} `json:"labels"`
 }
 
+// Pages invokes gh --paginate --slurp: per_page is a page size, not a total cap.
 func (c Client) FindChild(ctx context.Context, marker string) (int, error) {
 	var issues []Issue
 	if err := c.Pages(ctx, "issues?state=all&per_page=100", &issues); err != nil {

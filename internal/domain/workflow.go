@@ -97,7 +97,7 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			w.Phase = Split
 		}
 	case "unblock":
-		if w.Phase == Blocked && w.RecoveryPhase != "" {
+		if w.Phase == Blocked && w.RecoveryPhase != "" && w.Reason != "split_pending" {
 			w.Phase = w.RecoveryPhase
 			w.RecoveryPhase = ""
 			w.Reason = ""
@@ -126,6 +126,12 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 				}
 			}
 			return w, nil, nil
+		}
+		if e.Kind == "plan_split" && w.Phase == Blocked {
+			return w, nil, errors.New("unblock before planning a split")
+		}
+		if e.Kind == "plan_split" && w.SplitPlanID != "" {
+			return w, nil, errors.New("split already planned")
 		}
 		if w.Phase == Blocked {
 			recovery := w
