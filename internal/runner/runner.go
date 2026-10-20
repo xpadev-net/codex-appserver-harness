@@ -173,6 +173,11 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		return r, err
 	}
 	waitErr := cmd.Wait()
+	r.LogTruncated = output.truncated
+	if cmd.ProcessState != nil {
+		code := cmd.ProcessState.ExitCode()
+		r.ExitCode = &code
+	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	if ctx.Err() != nil {
 		r.Status = "canceled"
@@ -182,9 +187,6 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		r.Status = "timeout"
 		return r, runCtx.Err()
 	}
-	r.LogTruncated = output.truncated
-	code := cmd.ProcessState.ExitCode()
-	r.ExitCode = &code
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
@@ -207,10 +209,6 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 			return r, readErr
 		}
 		if !regexp.MustCompile(s.Profile.SuccessPattern).Match(b) {
-			if output.truncated {
-				r.Status = "unknown"
-				return r, errors.New("output truncated; success evidence inconclusive")
-			}
 			r.Status = "failed"
 			return r, errors.New("required success evidence missing")
 		}

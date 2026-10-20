@@ -101,3 +101,12 @@ func TestTruncatedRegexPrefixCannotPass(t *testing.T) {
 		t.Fatal("truncated prefix accepted", r, err)
 	}
 }
+func TestTimeoutRetainsTruncationAndExitStatus(t *testing.T) {
+	s := spec(t)
+	s.Profile.TimeoutSeconds = 1
+	s.Profile.Argv = []string{"sh", "-c", "head -c 8500000 /dev/zero; sleep 10"}
+	r, _ := Execute(context.Background(), s)
+	if r.Status != "timeout" || !r.LogTruncated || r.ExitCode == nil {
+		t.Fatal("execution metadata lost", r)
+	}
+}
