@@ -204,6 +204,15 @@ func (s *Store) BeginDispatch(ctx context.Context, id string) (bool, error) {
 	if !domain.CanDispatch(w, o) {
 		return false, nil
 	}
+	if o.Kind == "implement" || o.Kind == "verify" {
+		ready, err := dependenciesReady(ctx, tx, w.ID)
+		if err != nil {
+			return false, err
+		}
+		if !ready {
+			return false, nil
+		}
+	}
 	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='sending' WHERE id=?", id); err != nil {
 		return false, err
 	}
@@ -403,12 +412,21 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 	if parent.Phase != domain.Blocked || parent.Reason != "split_pending" {
 		return errors.New("parent is not splitting")
 	}
+	allIDs := map[string]bool{}
+	for _, child := range children {
+		allIDs[child.Item.ID] = true
+	}
 	seenChildren := map[string]bool{}
 	seenIssues := map[int]bool{}
 	for _, child := range children {
 		w := child.Item
 		if seenChildren[w.ID] || seenIssues[w.Issue] {
 			return errors.New("duplicate child registration")
+		}
+		for _, dep := range child.Dependencies {
+			if dep == w.ID || !allIDs[dep] {
+				return errors.New("invalid child dependency reference")
+			}
 		}
 		seenChildren[w.ID] = true
 		seenIssues[w.Issue] = true
@@ -420,7 +438,7 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 			if !reflect.DeepEqual(existing, w) {
 				return errors.New("child identity conflict")
 			}
-			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope} {
+			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID} {
 				var actual []byte
 				if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, w.ID).Scan(&actual); err != nil {
 					return err
@@ -449,7 +467,7 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 		if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, data); err != nil {
 			return err
 		}
-		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope} {
+		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID} {
 			data, err = json.Marshal(value)
 			if err != nil {
 				return err
@@ -460,4 +478,46 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 		}
 	}
 	return tx.Commit()
+}
+
+func dependenciesReady(ctx context.Context, q queryer, id string) (bool, error) {
+	var data []byte
+	err := q.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='dependencies' AND id=?", id).Scan(&data)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil {
+		var ids []string
+		if err = json.Unmarshal(data, &ids); err != nil {
+			return false, err
+		}
+		for _, dep := range ids {
+			w, err := read(ctx, q, dep)
+			if err != nil {
+				return false, err
+			}
+			if w.Phase != domain.Merged {
+				return false, nil
+			}
+		}
+	}
+	err = q.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='split_parent' AND id=?", id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var parentID string
+	if err = json.Unmarshal(data, &parentID); err != nil {
+		return false, err
+	}
+	parent, err := read(ctx, q, parentID)
+	if err != nil {
+		return false, err
+	}
+	return parent.Phase == domain.Split, nil
+}
+func (s *Store) DependenciesReady(ctx context.Context, id string) (bool, error) {
+	return dependenciesReady(ctx, s.DB, id)
 }

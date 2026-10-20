@@ -297,3 +297,26 @@ func TestChildRegistrationsRejectDuplicatesAndMutation(t *testing.T) {
 		t.Fatal("mutated replay accepted")
 	}
 }
+func TestDependenciesBlockDispatch(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	w := work()
+	s.Claim(ctx, w)
+	dep := work()
+	dep.ID = "dep"
+	dep.Issue = 2
+	s.Claim(ctx, dep)
+	s.Put(ctx, "dependencies", "wi", "wi", []string{"dep"})
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	ok, err := s.BeginDispatch(ctx, "start:implement")
+	if err != nil || ok {
+		t.Fatal("dependent work started", err)
+	}
+	dep.Phase = domain.Merged
+	b, _ := json.Marshal(dep)
+	s.DB.Exec("UPDATE work_items SET data=? WHERE id=?", b, dep.ID)
+	ok, err = s.BeginDispatch(ctx, "start:implement")
+	if err != nil || !ok {
+		t.Fatal("merged dependency did not release dispatch", err)
+	}
+}

@@ -95,7 +95,10 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 	case "split_confirmed":
 		if w.Phase == Blocked && w.Reason == "split_pending" && e.Ref == w.SplitPlanID && e.Attempt == w.Attempt && e.ScopeRevision == w.ScopeRevision && e.PolicyRevision == w.PolicyRevision {
 			w.Phase = Split
+			w.Version++
+			return w, nil, nil
 		}
+		return w, nil, nil
 	case "unblock":
 		if w.Phase == Blocked && w.RecoveryPhase != "" && w.Reason != "split_pending" {
 			w.Phase = w.RecoveryPhase
