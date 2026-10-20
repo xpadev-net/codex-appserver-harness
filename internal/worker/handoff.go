@@ -34,6 +34,9 @@ func Decode(data []byte, id string, revision int, candidate string, criteria, pr
 	if d.Decode(new(any)) != io.EOF {
 		return h, errors.New("trailing handoff data")
 	}
+	if h.CoveredCriteria == nil || h.RemainingWork == nil || h.RequestedProfiles == nil || h.Blockers == nil {
+		return h, errors.New("required handoff arrays absent or null")
+	}
 	if h.SchemaVersion != 1 || h.WorkItemID != id || h.ScopeRevision != revision || h.InputCandidateID != candidate || len(h.Summary) == 0 || len(h.Summary) > 16384 {
 		return h, errors.New("handoff identity or summary invalid")
 	}
@@ -53,7 +56,7 @@ func Decode(data []byte, id string, revision int, candidate string, criteria, pr
 	default:
 		return h, errors.New("unsupported handoff outcome")
 	}
-	if !subset(h.CoveredCriteria, criteria) || !subset(h.RequestedProfiles, profiles) || len(h.RemainingWork) > 128 || len(h.Blockers) > 32 {
+	if !subset(h.CoveredCriteria, criteria) || !subset(h.RequestedProfiles, profiles) || len(h.RemainingWork) > 128 || len(h.Blockers) > 32 || len(h.CoveredCriteria) > 128 || len(h.RequestedProfiles) > 128 {
 		return h, errors.New("invalid criteria/profile references or bounds")
 	}
 	return h, nil

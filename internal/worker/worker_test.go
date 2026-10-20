@@ -98,7 +98,7 @@ func TestFailedAndInputTurns(t *testing.T) {
 	}
 }
 func TestStrictHandoff(t *testing.T) {
-	b := []byte(`{"schema_version":1,"work_item_id":"w","scope_revision":2,"input_candidate_id":"c","outcome":"candidate","summary":"done","covered_criteria":["AC1"]}`)
+	b := []byte(`{"schema_version":1,"work_item_id":"w","scope_revision":2,"input_candidate_id":"c","outcome":"candidate","summary":"done","covered_criteria":["AC1"],"remaining_work":[],"requested_profiles":[],"blockers":[]}`)
 	if _, err := Decode(b, "w", 2, "c", []string{"AC1"}, nil); err != nil {
 		t.Fatal(err)
 	}

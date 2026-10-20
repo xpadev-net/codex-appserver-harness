@@ -25,7 +25,9 @@
       ]
     },
     "summary": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384
     },
     "covered_criteria": {
       "type": "array",
@@ -53,7 +55,7 @@
       "items": {
         "type": "string"
       },
-      "maxItems": 128
+      "maxItems": 32
     }
   },
   "required": [
