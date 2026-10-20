@@ -80,3 +80,25 @@ func TestApprovedReviewFeedbackPreserved(t *testing.T) {
 		t.Fatal("approved feedback dropped", got)
 	}
 }
+func TestCleanFormalApprovalHasNoFindings(t *testing.T) {
+	now := time.Now()
+	c := runner.Candidate{ID: "c", SHA: "head"}
+	round := Round{Candidate: c, RequestedAt: now, RequesterID: 1, RequestCommentID: 1}
+	p := Policy{true, true, true, []int64{7}, 1}
+	for _, body := range []string{"LGTM", "No issues found.", "Approved!"} {
+		r := github.Review{ID: 1, User: github.User{ID: 7}, State: "APPROVED", CommitID: "head", SubmittedAt: now, Body: body}
+		if got := Findings(c, round, p, []github.Review{r}, nil); len(got) != 0 {
+			t.Fatal("approval prose became finding", got)
+		}
+		if !Evaluate(c, round, p, []github.Review{r}).Approved {
+			t.Fatal("formal approval rejected")
+		}
+		r.State = "COMMENTED"
+		if Evaluate(c, round, p, []github.Review{r}).Approved {
+			t.Fatal("prose became approval")
+		}
+	}
+	if approvalOnly("LGTM, but this introduces a race") {
+		t.Fatal("real feedback filtered")
+	}
+}

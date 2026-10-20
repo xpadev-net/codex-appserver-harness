@@ -7,6 +7,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -94,7 +95,7 @@ func Findings(c runner.Candidate, round Round, p Policy, reviews []github.Review
 	for _, r := range reviews {
 		if trusted[r.User.ID] && r.CommitID == c.SHA && !r.SubmittedAt.Before(round.RequestedAt) && (r.State == "COMMENTED" || r.State == "CHANGES_REQUESTED" || r.State == "APPROVED") {
 			valid[r.ID] = true
-			if r.Body != "" {
+			if !approvalOnly(r.Body) {
 				key := fmt.Sprintf("review:%d:%x", r.ID, sha256.Sum256([]byte(r.Body)))
 				if !seen[key] {
 					out = append(out, Finding{key, r.Body, r.ID})
@@ -113,4 +114,14 @@ func Findings(c runner.Candidate, round Round, p Policy, reviews []github.Review
 		}
 	}
 	return out
+}
+
+// This narrow filter classifies only exact non-defect boilerplate. It never
+// grants approval; COMMENTED still fails Evaluate even when its body is clean.
+func approvalOnly(body string) bool {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(body), ".!")) {
+	case "", "lgtm", "looks good to me", "no issues found", "no findings", "approved":
+		return true
+	}
+	return false
 }
