@@ -38,12 +38,7 @@ func (l LiveAgents) Run(ctx context.Context, w domain.WorkItem, op domain.Operat
 	if err != nil {
 		return worker.Run{}, err
 	}
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CODEX_HOME=" + l.Config.WorkerCodexHome, "HARNESS_WORKSPACE=" + w.Worktree, "HARNESS_CODEX_BINARY=" + l.Config.CodexBinary, "HARNESS_GIT_DIR=" + strings.TrimSpace(gitdir)}
-	for _, name := range []string{"OPENAI_API_KEY", "OPENAI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
-		if value, ok := os.LookupEnv(name); ok {
-			env = append(env, name+"="+value)
-		}
-	}
+	env := l.environment(w, home, strings.TrimSpace(gitdir))
 	// The actual worker mount configuration must hide controller credentials and DB.
 	controllerHome, _ := os.UserHomeDir()
 	for _, hidden := range []string{filepath.Join(controllerHome, ".config", "gh"), filepath.Join(controllerHome, ".git-credentials"), filepath.Join(l.Config.Root, "state.db")} {
@@ -458,3 +453,13 @@ func implementationSchema() map[string]any {
 }
 
 var ErrDispatchHeld = errors.New("new turn dispatch held")
+
+func (l LiveAgents) environment(w domain.WorkItem, home, gitdir string) []string {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "HARNESS_SANDBOX_HOME=" + home, "HARNESS_LAUNCH_MODE=worker", "CODEX_HOME=" + l.Config.WorkerCodexHome, "HARNESS_WORKSPACE=" + w.Worktree, "HARNESS_CODEX_BINARY=" + l.Config.CodexBinary, "HARNESS_GIT_DIR=" + gitdir}
+	for _, name := range []string{"OPENAI_API_KEY", "OPENAI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
+}

@@ -616,3 +616,17 @@ func TestCancelOnRunnerCompletionDoesNotRetryInfrastructure(t *testing.T) {
 		t.Fatal("canceled work advanced", w, jobs.calls, gh.pr.Number, agents.calls)
 	}
 }
+func TestWorkerLauncherEnvironmentIsExplicit(t *testing.T) {
+	c, _, _, _ := setup(t)
+	t.Setenv("HOME", "/controller/home")
+	t.Setenv("GH_TOKEN", "must-not-forward")
+	live := LiveAgents{Config: c.Config, Store: c.Store}
+	values := map[string]string{}
+	for _, entry := range live.environment(domain.WorkItem{Worktree: "/candidate"}, "/dedicated/home", "/readonly/git") {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	if values["HOME"] != "/dedicated/home" || values["HARNESS_SANDBOX_HOME"] != "/dedicated/home" || values["HARNESS_LAUNCH_MODE"] != "worker" || values["CODEX_HOME"] != c.Config.WorkerCodexHome || values["HARNESS_GIT_DIR"] != "/readonly/git" || values["HARNESS_CODEX_BINARY"] != c.Config.CodexBinary || values["GH_TOKEN"] != "" {
+		t.Fatal("worker environment contract mismatch")
+	}
+}

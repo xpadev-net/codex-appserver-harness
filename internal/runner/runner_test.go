@@ -134,3 +134,16 @@ func TestLauncherMustPassArgumentsAndExitStatus(t *testing.T) {
 		t.Fatal("nonconforming launcher accepted", r, err)
 	}
 }
+func TestRunnerUsesDedicatedHomeAndOmitsWorkerMountVariables(t *testing.T) {
+	s := spec(t)
+	controllerHome := t.TempDir()
+	t.Setenv("HOME", controllerHome)
+	t.Setenv("CODEX_HOME", "/controller/auth")
+	t.Setenv("HARNESS_CODEX_BINARY", "/controller/codex")
+	t.Setenv("HARNESS_GIT_DIR", "/controller/git")
+	s.Profile.Argv = []string{"sh", "-c", `test "$HOME" = "$HARNESS_SANDBOX_HOME" && test "$HOME" != "$1" && test "$HARNESS_LAUNCH_MODE" = runner && test -z "$CODEX_HOME" && test -z "$HARNESS_CODEX_BINARY" && test -z "$HARNESS_GIT_DIR" && printf PASS`, "probe", controllerHome}
+	r, err := Execute(context.Background(), s)
+	if err != nil || r.Status != "passed" {
+		t.Fatal(r, err)
+	}
+}

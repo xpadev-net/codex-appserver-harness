@@ -203,7 +203,7 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	if err = os.Mkdir(home, 0700); err != nil {
 		return r, err
 	}
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "HARNESS_WORKSPACE=" + checkout, "HARNESS_JOB_ID=" + s.JobID}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "HARNESS_SANDBOX_HOME=" + home, "HARNESS_LAUNCH_MODE=runner", "HARNESS_WORKSPACE=" + checkout, "HARNESS_JOB_ID=" + s.JobID}
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
 		if value, ok := os.LookupEnv(name); ok {
 			cmd.Env = append(cmd.Env, name+"="+value)

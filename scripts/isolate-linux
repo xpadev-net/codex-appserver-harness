@@ -1,17 +1,23 @@
 #!/bin/bash
 # Controller-owned launcher. Namespace mounts exclude the controller home and DB.
 set -euo pipefail
-: "${HOME:?}" "${HARNESS_WORKSPACE:?}"
+: "${HOME:?}" "${HARNESS_WORKSPACE:?}" "${HARNESS_SANDBOX_HOME:?}" "${HARNESS_LAUNCH_MODE:?}"
+[[ "$HOME" == "$HARNESS_SANDBOX_HOME" && "$HARNESS_SANDBOX_HOME" == /* && "$HARNESS_SANDBOX_HOME" != / ]] || exit 64
 args=(bwrap --unshare-all --share-net --die-with-parent --new-session
   --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib
   --ro-bind-try /lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp
   --ro-bind-try /etc/ssl /etc/ssl --ro-bind-try /etc/resolv.conf /etc/resolv.conf
   --ro-bind-try /etc/hosts /etc/hosts
-  --bind "$HOME" "$HOME" --bind "$HARNESS_WORKSPACE" "$HARNESS_WORKSPACE"
+  --bind "$HARNESS_SANDBOX_HOME" "$HARNESS_SANDBOX_HOME" --bind "$HARNESS_WORKSPACE" "$HARNESS_WORKSPACE"
   --chdir "$HARNESS_WORKSPACE")
-if [[ -n ${HARNESS_CODEX_BINARY:-} ]]; then
+case "$HARNESS_LAUNCH_MODE" in
+worker)
+  : "${HARNESS_CODEX_BINARY:?}" "${CODEX_HOME:?}" "${HARNESS_GIT_DIR:?}"
   args+=(--bind "$CODEX_HOME" "$CODEX_HOME"
     --ro-bind "$HARNESS_CODEX_BINARY" "$HARNESS_CODEX_BINARY"
     --ro-bind "$HARNESS_GIT_DIR" "$HARNESS_GIT_DIR")
-fi
+  ;;
+runner) ;;
+*) exit 64 ;;
+esac
 exec "${args[@]}" "$@"
