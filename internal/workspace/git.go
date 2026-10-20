@@ -64,3 +64,22 @@ func Clean(ctx context.Context, path string) error {
 	}
 	return nil
 }
+
+// Push uses an ordinary fast-forward push and verifies the advertised remote head.
+func Push(ctx context.Context, repo, branch, sha string) error {
+	if !regexp.MustCompile(`^harness/[A-Za-z0-9_-]+$`).MatchString(branch) || !shaPattern.MatchString(sha) {
+		return fmt.Errorf("invalid publication ref")
+	}
+	if _, err := Git(ctx, repo, "push", "origin", sha+":refs/heads/"+branch); err != nil {
+		return err
+	}
+	out, err := Git(ctx, repo, "ls-remote", "--heads", "origin", "refs/heads/"+branch)
+	if err != nil {
+		return err
+	}
+	fields := strings.Fields(out)
+	if len(fields) != 2 || fields[0] != sha {
+		return fmt.Errorf("remote head mismatch")
+	}
+	return nil
+}
