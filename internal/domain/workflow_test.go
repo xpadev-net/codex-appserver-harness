@@ -36,3 +36,11 @@ func TestCompletionWhileBlocked(t *testing.T) {
 		t.Fatal("completion not resumed")
 	}
 }
+func TestCanceledMergeConfirmation(t *testing.T) {
+	w := WorkItem{ID: "w", Phase: MergePending, Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1, Attempt: 4}
+	w, _, _ = Apply(w, Event{ID: "cancel", WorkItemID: "w", Kind: "cancel"})
+	w, ops, err := Apply(w, Event{ID: "merged", WorkItemID: "w", Kind: "merge_confirmed", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1, Attempt: 4})
+	if err != nil || w.Phase != Merged || len(ops) != 0 {
+		t.Fatal("external merge lost", w, err)
+	}
+}

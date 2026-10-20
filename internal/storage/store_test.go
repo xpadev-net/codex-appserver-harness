@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"path/filepath"
@@ -209,5 +210,48 @@ func TestPausedRepairAndStaleCompletion(t *testing.T) {
 	ok, err := s.BeginDispatch(ctx, "repair:verify")
 	if err != nil || !ok {
 		t.Fatal("repair not resumed", err)
+	}
+}
+func TestPartialWorkItemClaimTransfer(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	w := work()
+	s.Claim(ctx, w)
+	next := work()
+	next.ID = "next"
+	if err := s.ClaimNext(ctx, w.ID, next); err == nil {
+		t.Fatal("unmerged predecessor accepted")
+	}
+	w.Phase = domain.Merged
+	b, _ := json.Marshal(w)
+	if _, err := s.DB.Exec("UPDATE work_items SET data=? WHERE id=?", b, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClaimNext(ctx, w.ID, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClaimNext(ctx, w.ID, next); err == nil {
+		t.Fatal("claim transferred twice")
+	}
+	items, _ := s.List(ctx)
+	if len(items) != 2 {
+		t.Fatal("history lost")
+	}
+}
+func TestRetryRequiresReconciledAbsence(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.BeginDispatch(ctx, "start:implement")
+	if err := s.RetryUnexecuted(ctx, "start:implement", ""); err == nil {
+		t.Fatal("missing evidence accepted")
+	}
+	if err := s.RetryUnexecuted(ctx, "start:implement", "thread/read proves no matching turn"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.BeginDispatch(ctx, "start:implement")
+	if !ok || err != nil {
+		t.Fatal("retry unavailable", err)
 	}
 }

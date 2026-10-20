@@ -28,6 +28,8 @@ type WorkItem struct {
 	ScopeRevision  int    `json:"scope_revision"`
 	PolicyRevision int    `json:"policy_revision"`
 	Phase          Phase  `json:"phase"`
+	CanceledFrom   Phase  `json:"canceled_from,omitempty"`
+	LastCompletion *Event `json:"last_completion,omitempty"`
 	RecoveryPhase  Phase  `json:"recovery_phase,omitempty"`
 	Paused         bool   `json:"paused"`
 	MergeHold      bool   `json:"merge_hold"`
@@ -80,7 +82,11 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 	case "release":
 		w.MergeHold = false
 	case "cancel":
-		if w.Phase != Merged {
+		if !w.Terminal() {
+			w.CanceledFrom = w.Phase
+			if w.Phase == Blocked {
+				w.CanceledFrom = w.RecoveryPhase
+			}
 			w.Phase = Canceled
 			w.Reason = e.Reason
 		}
@@ -100,6 +106,19 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 		}
 	default:
 		if w.Terminal() {
+			if w.Phase == Canceled && e.Attempt == w.Attempt && e.ScopeRevision == w.ScopeRevision && e.PolicyRevision == w.PolicyRevision {
+				switch e.Kind {
+				case "merge_confirmed":
+					if w.CanceledFrom == MergePending && e.Candidate == w.Candidate {
+						w.Phase = Merged
+						w.LastCompletion = &e
+						w.Version++
+					}
+				case "implementation_ready", "candidate_ready", "validation_passed":
+					w.LastCompletion = &e
+					w.Version++
+				}
+			}
 			return w, nil, nil
 		}
 		if w.Phase == Blocked {

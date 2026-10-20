@@ -23,7 +23,8 @@ func Open(path string) (*Store, error) {
 	s := &Store{db}
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
  CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
- CREATE TABLE IF NOT EXISTS work_items(id TEXT PRIMARY KEY,repository_id INTEGER NOT NULL,issue INTEGER NOT NULL,data BLOB NOT NULL,UNIQUE(repository_id,issue));
+ CREATE TABLE IF NOT EXISTS work_items(id TEXT PRIMARY KEY,repository_id INTEGER NOT NULL,issue INTEGER NOT NULL,data BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS issue_claims(repository_id INTEGER NOT NULL,issue INTEGER NOT NULL,work_item_id TEXT NOT NULL,PRIMARY KEY(repository_id,issue));
  CREATE TABLE IF NOT EXISTS event_inbox(id TEXT PRIMARY KEY,work_item_id TEXT NOT NULL,payload BLOB NOT NULL,processed_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS operation_outbox(id TEXT PRIMARY KEY,work_item_id TEXT NOT NULL REFERENCES work_items(id),payload BLOB NOT NULL,state TEXT NOT NULL,result BLOB);
  CREATE TABLE IF NOT EXISTS resource_leases(resource TEXT PRIMARY KEY,owner TEXT NOT NULL,expires INTEGER NOT NULL,generation INTEGER NOT NULL);
@@ -44,8 +45,18 @@ func (s *Store) Claim(ctx context.Context, w domain.WorkItem) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, b)
-	return err
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "INSERT INTO issue_claims VALUES(?,?,?)", w.RepositoryID, w.Issue, w.ID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, b); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type queryer interface {
@@ -249,4 +260,80 @@ func (s *Store) Record(ctx context.Context, kind, id string, value any) error {
 		return err
 	}
 	return json.Unmarshal(b, value)
+}
+
+// ClaimNext transfers an issue claim only after its preceding partial work merged.
+// This explicit path prevents the pool from reclaiming canceled or split parents.
+func (s *Store) ClaimNext(ctx context.Context, previous string, w domain.WorkItem) error {
+	if w.ID == "" || w.ID == previous || w.Phase != domain.Ready || w.ScopeRevision < 1 || w.PolicyRevision < 1 {
+		return errors.New("invalid next work item")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	prev, err := read(ctx, tx, previous)
+	if err != nil {
+		return err
+	}
+	if prev.Phase != domain.Merged || w.RepositoryID != prev.RepositoryID || w.Issue != prev.Issue {
+		return errors.New("predecessor must be merged on same issue")
+	}
+	b, err := json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	r, err := tx.ExecContext(ctx, "UPDATE issue_claims SET work_item_id=? WHERE repository_id=? AND issue=? AND work_item_id=?", w.ID, w.RepositoryID, w.Issue, previous)
+	if err != nil {
+		return err
+	}
+	n, _ := r.RowsAffected()
+	if n != 1 {
+		return errors.New("issue claim already transferred")
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, b); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RetryUnexecuted is only for trusted adapter reconciliation proving no side effect.
+// A timeout alone is not such evidence. The original intent and attempt are retained.
+func (s *Store) RetryUnexecuted(ctx context.Context, id, evidence string) error {
+	if evidence == "" {
+		return errors.New("reconciliation evidence required")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var b []byte
+	var state string
+	if err = tx.QueryRowContext(ctx, "SELECT payload,state FROM operation_outbox WHERE id=?", id).Scan(&b, &state); err != nil {
+		return err
+	}
+	if state != "unknown" && state != "sending" {
+		return errors.New("operation does not require reconciliation")
+	}
+	var op domain.Operation
+	if err = json.Unmarshal(b, &op); err != nil {
+		return err
+	}
+	w, err := read(ctx, tx, op.WorkItemID)
+	if err != nil {
+		return err
+	}
+	if !domain.CanDispatch(w, op) {
+		return errors.New("operation is no longer permitted")
+	}
+	proof, err := json.Marshal(map[string]any{"unexecuted_evidence": evidence, "observed_at": time.Now().UTC()})
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='pending',result=? WHERE id=?", proof, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
