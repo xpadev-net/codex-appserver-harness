@@ -294,6 +294,9 @@ func (b *boundedLog) Write(p []byte) (int, error) {
 		}
 		n, err := b.writer.Write(p)
 		b.written += n
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
 		if err != nil {
 			return n, err
 		}

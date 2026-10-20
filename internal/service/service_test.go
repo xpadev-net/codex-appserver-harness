@@ -193,10 +193,12 @@ func (f *fakeAgents) Run(_ context.Context, w domain.WorkItem, op domain.Operati
 }
 
 type fakeJobs struct {
-	results   map[string]runner.Result
-	waiting   bool
-	failFirst bool
-	calls     int
+	infrastructureFirst bool
+	onRead              func()
+	results             map[string]runner.Result
+	waiting             bool
+	failFirst           bool
+	calls               int
 }
 
 func (f *fakeJobs) Start(_ context.Context, s runner.Spec) error {
@@ -207,11 +209,19 @@ func (f *fakeJobs) Start(_ context.Context, s runner.Spec) error {
 		code = 1
 		status = "failed"
 	}
+	if f.infrastructureFirst && f.calls == 1 {
+		status = "infrastructure_failure"
+	}
 	r := runner.Result{JobID: s.JobID, Candidate: s.Candidate, TestedSHA: s.Candidate.SHA, ProfileID: s.ProfileID, ProfileRevision: s.Profile.Revision, Status: status, ExitCode: &code, Started: time.Now(), Finished: time.Now(), LogPath: filepath.Join(s.Root, s.JobID+".log")}
 	f.results[s.JobID] = r
 	return nil
 }
 func (f *fakeJobs) Read(s runner.Spec) (runner.Result, error) {
+	if f.onRead != nil {
+		callback := f.onRead
+		f.onRead = nil
+		callback()
+	}
 	r, ok := f.results[s.JobID]
 	if !ok || f.waiting {
 		return r, os.ErrNotExist
@@ -586,5 +596,23 @@ func TestUnknownTurnsReconcileWithoutRepeatingModelWork(t *testing.T) {
 	w, _ := c.Store.Get(context.Background(), "w")
 	if w.Phase != domain.Merged || gh.merges != 1 || base.calls != 2 {
 		t.Fatal("model work repeated during reconciliation", w, base.calls, gh.merges)
+	}
+}
+func TestCancelOnRunnerCompletionDoesNotRetryInfrastructure(t *testing.T) {
+	c, gh, agents, jobs := setup(t)
+	ctx := context.Background()
+	jobs.infrastructureFirst = true
+	jobs.waiting = true
+	drive(t, c, 7)
+	jobs.waiting = false
+	jobs.onRead = func() {
+		if err := c.Store.Apply(ctx, domain.Event{ID: "cancel-completing-job", WorkItemID: "w", Kind: "cancel"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drive(t, c, 5)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Canceled || jobs.calls != 1 || gh.pr.Number != 0 || agents.calls != 2 {
+		t.Fatal("canceled work advanced", w, jobs.calls, gh.pr.Number, agents.calls)
 	}
 }

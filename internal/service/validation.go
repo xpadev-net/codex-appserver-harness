@@ -98,6 +98,13 @@ func (c *Controller) validation(ctx context.Context, w domain.WorkItem, op domai
 		if err = c.Store.Put(ctx, "validation", result.JobID, w.ID, result); err != nil {
 			return err
 		}
+		latest, err := c.Store.Get(ctx, w.ID)
+		if err != nil {
+			return err
+		}
+		if latest.Terminal() {
+			return c.done(ctx, op, result)
+		}
 		if result.Status == "infrastructure_failure" && intent.Attempt < c.Config.Limits.RunnerRetries {
 			if err = c.jobBudget(ctx, w.ID); err != nil {
 				return c.reject(ctx, w, op, err.Error())

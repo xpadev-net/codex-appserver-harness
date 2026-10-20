@@ -23,7 +23,7 @@ func newRedactedLog(writer io.Writer, secrets []string) *redactedLog {
 	r := &redactedLog{writer: writer}
 	seen := map[string]bool{}
 	for _, secret := range secrets {
-		if len(secret) < 8 || seen[secret] {
+		if len(secret) == 0 || seen[secret] {
 			continue
 		}
 		seen[secret] = true
@@ -60,16 +60,16 @@ func (r *redactedLog) flush(final bool) error {
 			}
 		}
 		if index >= 0 {
-			if _, err := r.writer.Write(r.pending[:index]); err != nil {
+			if err := writeComplete(r.writer, r.pending[:index]); err != nil {
 				return err
 			}
-			if _, err := r.writer.Write([]byte("[REDACTED]")); err != nil {
+			if err := writeComplete(r.writer, []byte("[REDACTED]")); err != nil {
 				return err
 			}
 			r.pending = r.pending[index+length:]
 			continue
 		}
-		if _, err := r.writer.Write(r.pending[:limit]); err != nil {
+		if err := writeComplete(r.writer, r.pending[:limit]); err != nil {
 			return err
 		}
 		r.pending = r.pending[limit:]
@@ -96,4 +96,15 @@ func secretValues() []string {
 		}
 	}
 	return values
+}
+
+func writeComplete(writer io.Writer, p []byte) error {
+	n, err := writer.Write(p)
+	if err != nil {
+		return err
+	}
+	if n != len(p) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
