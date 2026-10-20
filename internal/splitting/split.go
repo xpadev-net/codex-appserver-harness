@@ -171,13 +171,14 @@ func CreateChildren(ctx context.Context, j Journal, api IssueCreator, p Proposal
 		if state.Key != child.Key {
 			return progress, errors.New("split progress identity mismatch")
 		}
-		if state.State == "created" {
-			continue
-		}
+
 		marker := "harness-child:" + p.WorkItemID + ":" + child.Key
 		existing, err := api.FindChild(ctx, marker)
 		if err != nil {
 			return progress, err
+		}
+		if state.State == "created" && (existing != state.Issue || existing <= 0) {
+			return progress, errors.New("created child marker or issue identity changed")
 		}
 		if existing > 0 {
 			state.Issue = existing

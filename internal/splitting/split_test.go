@@ -97,3 +97,20 @@ func TestPartialAndParentCompletion(t *testing.T) {
 		t.Fatal("unmerged child accepted")
 	}
 }
+func TestCreatedChildMustStillMatchMarker(t *testing.T) {
+	ctx := context.Background()
+	s, _ := storage.Open(filepath.Join(t.TempDir(), "db"))
+	defer s.Close()
+	_, p := fixture()
+	api := &creator{issues: map[string]int{}}
+	if _, err := CreateChildren(ctx, s, api, p); err != nil {
+		t.Fatal(err)
+	}
+	delete(api.issues, "harness-child:w:a")
+	if _, err := CreateChildren(ctx, s, api, p); err == nil {
+		t.Fatal("missing child accepted")
+	}
+	if api.calls != 2 {
+		t.Fatal("missing child recreated")
+	}
+}

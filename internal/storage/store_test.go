@@ -272,3 +272,28 @@ func TestDeliveryAckOnlyCapturedBatch(t *testing.T) {
 		t.Fatal("late delivery lost", pending, err)
 	}
 }
+func TestChildRegistrationsRejectDuplicatesAndMutation(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	if err := s.Apply(ctx, domain.Event{ID: "plan", WorkItemID: "wi", Kind: "plan_split", Ref: "proposal", ScopeRevision: 1, PolicyRevision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	child := work()
+	child.ID = "child"
+	child.Issue = 2
+	registration := ChildRegistration{Item: child, Dependencies: []string{}, Scope: map[string]string{"criterion": "AC"}}
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration, registration}); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration}); err != nil {
+		t.Fatal("replay rejected", err)
+	}
+	registration.Dependencies = []string{"other"}
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration}); err == nil {
+		t.Fatal("mutated replay accepted")
+	}
+}
