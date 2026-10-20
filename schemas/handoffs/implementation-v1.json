@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "work_item_id": {
+      "type": "string"
+    },
+    "scope_revision": {
+      "type": "integer"
+    },
+    "input_candidate_id": {
+      "type": "string"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "blocked",
+        "validation_needed"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384
+    },
+    "covered_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      },
+      "maxItems": 128
+    },
+    "remaining_work": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      },
+      "maxItems": 128
+    },
+    "requested_profiles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      },
+      "maxItems": 128
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
+      },
+      "maxItems": 32
+    }
+  },
+  "required": [
+    "schema_version",
+    "work_item_id",
+    "scope_revision",
+    "input_candidate_id",
+    "outcome",
+    "summary",
+    "covered_criteria",
+    "remaining_work",
+    "requested_profiles",
+    "blockers"
+  ]
+}

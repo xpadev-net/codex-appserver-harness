@@ -19,6 +19,12 @@ type Message struct {
 	Error  json.RawMessage `json:"error,omitempty"`
 }
 
+type RequestError struct{ Request Message }
+
+func (e *RequestError) Error() string {
+	return "app-server requires operator input: " + e.Request.Method
+}
+
 // Client is sequential: a single owner must consume calls and notifications.
 type Client struct {
 	cancel   context.CancelFunc
@@ -113,7 +119,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 		if m.Method != "" {
 			c.pending = append(c.pending, m)
 			if len(m.ID) > 0 {
-				return errors.New("app-server requires operator input: " + m.Method)
+				return &RequestError{Request: m}
 			}
 			continue
 		}
