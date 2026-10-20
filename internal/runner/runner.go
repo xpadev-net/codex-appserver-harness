@@ -198,6 +198,10 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		return r, err
 	}
 	if s.Profile.SuccessPattern != "" {
+		if output.truncated {
+			r.Status = "unknown"
+			return r, errors.New("output truncated; success evidence inconclusive")
+		}
 		b, readErr := os.ReadFile(r.LogPath)
 		if readErr != nil {
 			return r, readErr

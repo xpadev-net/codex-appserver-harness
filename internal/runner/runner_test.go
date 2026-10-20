@@ -92,3 +92,12 @@ func TestTruncatedSuccessEvidenceIsInconclusive(t *testing.T) {
 		t.Fatal("truncated evidence misclassified", r, err)
 	}
 }
+func TestTruncatedRegexPrefixCannotPass(t *testing.T) {
+	s := spec(t)
+	s.Profile.Argv = []string{"sh", "-c", "head -c 8388604 /dev/zero; printf PASSFAIL"}
+	s.Profile.SuccessPattern = "PASS$"
+	r, err := Execute(context.Background(), s)
+	if err == nil || r.Status != "unknown" {
+		t.Fatal("truncated prefix accepted", r, err)
+	}
+}
