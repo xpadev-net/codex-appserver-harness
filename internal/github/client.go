@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -14,6 +15,7 @@ import (
 )
 
 type Client struct {
+	BeforeWrite  func(context.Context, string, string) error
 	Repository   string
 	RepositoryID int64
 }
@@ -27,6 +29,24 @@ func (c Client) valid() error {
 func (c Client) API(ctx context.Context, method, endpoint string, body any, out any) error {
 	if err := c.valid(); err != nil {
 		return err
+	}
+	if method != "GET" {
+		metadata, err := exec.CommandContext(ctx, "gh", "api", "repos/"+c.Repository).Output()
+		if err != nil {
+			return fmt.Errorf("%w: repository identity unavailable", contract.ErrUnsent)
+		}
+		var repo struct {
+			ID int64 `json:"id"`
+		}
+		if json.Unmarshal(metadata, &repo) != nil || repo.ID != c.RepositoryID {
+			return fmt.Errorf("%w: repository identity changed", contract.ErrUnsent)
+		}
+		if c.BeforeWrite == nil {
+			return fmt.Errorf("%w: operation guard required", contract.ErrUnsent)
+		}
+		if err = c.BeforeWrite(ctx, method, endpoint); err != nil {
+			return fmt.Errorf("%w: %v", contract.ErrUnsent, err)
+		}
 	}
 	args := []string{"api", "--method", method, "repos/" + c.Repository + "/" + endpoint}
 	var stdin bytes.Buffer
@@ -78,6 +98,7 @@ type Ref struct {
 	} `json:"repo"`
 }
 type PR struct {
+	MergeCommitSHA string `json:"merge_commit_sha"`
 	Number         int    `json:"number"`
 	State          string `json:"state"`
 	Draft          bool   `json:"draft"`
@@ -170,18 +191,16 @@ func (c Client) RequestReview(ctx context.Context, number int, roundID, trigger 
 	if requesterID <= 0 || roundID == "" || strings.ContainsAny(roundID, "<>\r\n") || trigger == "" {
 		return 0, errors.New("invalid review request")
 	}
+	existing, err := c.FindReviewRequest(ctx, number, roundID, requesterID)
+	if err != nil {
+		return 0, fmt.Errorf("%w: review request lookup failed", contract.ErrUnsent)
+	}
+	if existing > 0 {
+		return existing, nil
+	}
 	marker := "<!-- harness-review:" + roundID + " -->"
-	var comments []Comment
-	if err := c.Pages(ctx, fmt.Sprintf("issues/%d/comments?per_page=100", number), &comments); err != nil {
-		return 0, err
-	}
-	for _, comment := range comments {
-		if comment.User.ID == requesterID && strings.Contains(comment.Body, marker) {
-			return comment.ID, nil
-		}
-	}
 	var created Comment
-	err := c.API(ctx, "POST", fmt.Sprintf("issues/%d/comments", number), map[string]string{"body": trigger + "\n\n" + marker}, &created)
+	err = c.API(ctx, "POST", fmt.Sprintf("issues/%d/comments", number), map[string]string{"body": trigger + "\n\n" + marker}, &created)
 	if err == nil && created.User.ID != requesterID {
 		return 0, errors.New("review requester identity mismatch")
 	}
@@ -295,4 +314,53 @@ func (c Client) CreateChild(ctx context.Context, title, body, marker string) (in
 	var issue Issue
 	err := c.API(ctx, "POST", "issues", map[string]string{"title": title, "body": "<!-- " + marker + " -->\n" + body}, &issue)
 	return issue.Number, err
+}
+
+func (c Client) GetIssue(ctx context.Context, number int) (Issue, error) {
+	var issue Issue
+	err := c.API(ctx, "GET", fmt.Sprintf("issues/%d", number), nil, &issue)
+	return issue, err
+}
+func (c Client) Pool(ctx context.Context) ([]Issue, error) {
+	var issues []Issue
+	err := c.Pages(ctx, "issues?state=open&per_page=100", &issues)
+	return issues, err
+}
+func (c Client) CloseIssue(ctx context.Context, number int) error {
+	return c.API(ctx, "PATCH", fmt.Sprintf("issues/%d", number), map[string]string{"state": "closed", "state_reason": "completed"}, nil)
+}
+func (c Client) FindReviewRequest(ctx context.Context, number int, roundID string, requesterID int64) (int64, error) {
+	var comments []Comment
+	if err := c.Pages(ctx, fmt.Sprintf("issues/%d/comments?per_page=100", number), &comments); err != nil {
+		return 0, err
+	}
+	marker := "<!-- harness-review:" + roundID + " -->"
+	var found int64
+	for _, comment := range comments {
+		if comment.User.ID == requesterID && strings.Contains(comment.Body, marker) {
+			if found != 0 {
+				return 0, errors.New("duplicate review request markers")
+			}
+			found = comment.ID
+		}
+	}
+	return found, nil
+}
+func (c Client) CommitParents(ctx context.Context, sha string) ([]string, error) {
+	if !regexp.MustCompile(`^[0-9a-f]{40,64}$`).MatchString(sha) {
+		return nil, errors.New("invalid commit SHA")
+	}
+	var result struct {
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
+	}
+	if err := c.API(ctx, "GET", "git/commits/"+sha, nil, &result); err != nil {
+		return nil, err
+	}
+	parents := []string{}
+	for _, parent := range result.Parents {
+		parents = append(parents, parent.SHA)
+	}
+	return parents, nil
 }

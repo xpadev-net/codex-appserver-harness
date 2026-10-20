@@ -9,7 +9,9 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/policy"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -158,6 +160,8 @@ func (a Assessment) Route(id string, c runner.Candidate, evidenceIDs []string) (
 		seen[e] = true
 	}
 	switch a.Classification {
+	case "no_action":
+		return "none", nil
 	case "implementation_defect":
 		return "implementation", nil
 	case "test_defect":
@@ -228,4 +232,32 @@ func Rebind(p Plan, id string, c runner.Candidate, s Scope, v policy.Verificatio
 		return Plan{}, err
 	}
 	return p, nil
+}
+
+// ValidateFiles confirms that the claimed executable test references actually
+// exist inside the candidate. Semantic adequacy remains independent review work.
+func (p Plan) ValidateFiles(root string) error {
+	for _, mapping := range p.CriteriaTests {
+		name := strings.Split(mapping.TestRef, "::")[0]
+		if path.IsAbs(name) || path.Clean(name) != name || strings.HasPrefix(name, "../") {
+			return errors.New("test reference escapes candidate")
+		}
+		file := filepath.Join(root, filepath.FromSlash(name))
+		resolved, err := filepath.EvalSymlinks(file)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, resolved)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return errors.New("test reference escapes candidate")
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("test reference is not a file")
+		}
+	}
+	return nil
 }

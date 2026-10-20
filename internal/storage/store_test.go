@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"path/filepath"
@@ -318,5 +320,78 @@ func TestDependenciesBlockDispatch(t *testing.T) {
 	ok, err = s.BeginDispatch(ctx, "start:implement")
 	if err != nil || !ok {
 		t.Fatal("merged dependency did not release dispatch", err)
+	}
+}
+func TestCompleteRollsBackResultAndTransitionTogether(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.BeginDispatch(ctx, "start:implement")
+	if err := s.Complete(ctx, "start:implement", "result", domain.Event{ID: "bad", WorkItemID: "wi", Kind: "unknown", ScopeRevision: 1, PolicyRevision: 1, Attempt: 1}); err == nil {
+		t.Fatal("invalid transition accepted")
+	}
+	ops, err := s.Operations(ctx)
+	if err != nil || len(ops) != 1 || ops[0].State != "sending" {
+		t.Fatal("partial commit", ops, err)
+	}
+	if err = s.Complete(ctx, "start:implement", "result", domain.Event{ID: "good", WorkItemID: "wi", Kind: "implementation_ready", Candidate: "sha", ScopeRevision: 1, PolicyRevision: 1, Attempt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := s.Get(ctx, "wi")
+	if w.Phase != domain.Verifying {
+		t.Fatal("transition lost")
+	}
+}
+func TestRestoredReconciliationSurvivesDatabaseReopen(t *testing.T) {
+	s, path := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "start", WorkItemID: "wi", Kind: "start", ScopeRevision: 1, PolicyRevision: 1})
+	s.BeginDispatch(ctx, "start:implement")
+	s.Put(ctx, "agent_run", "start:implement", "wi", map[string]string{"id": "start:implement", "thread_id": "thread", "state": "unknown"})
+	if err := s.Complete(ctx, "start:implement", "unknown", domain.Event{ID: "block", WorkItemID: "wi", Kind: "block", Reason: "response lost"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RestoreReconciliation(ctx, "wi", "start:implement", "read persisted history"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	w, err := reopened.Get(ctx, "wi")
+	if err != nil || w.Phase != domain.Implementing {
+		t.Fatal("state was not committed", w, err)
+	}
+	ops, err := reopened.Operations(ctx)
+	if err != nil || len(ops) != 1 || ops[0].State != "sending" {
+		t.Fatal("operation was not committed", ops, err)
+	}
+}
+func TestSplitDepthIsAtomicWithChildRegistration(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	s.Claim(ctx, work())
+	s.Apply(ctx, domain.Event{ID: "split-plan", WorkItemID: "wi", Kind: "plan_split", Ref: "proposal", ScopeRevision: 1, PolicyRevision: 1})
+	child := work()
+	child.ID = "child"
+	child.Issue = 2
+	registration := ChildRegistration{Depth: 1, Item: child, Dependencies: []string{}, Scope: map[string]string{"criterion": "AC"}}
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration, registration}); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	var depth int
+	if err := s.Record(ctx, "split_depth", "child", &depth); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("depth escaped rollback", depth, err)
+	}
+	s.Put(ctx, "split_depth", "child", "child", 1)
+	if err := s.RegisterChildren(ctx, "wi", []ChildRegistration{registration}); err != nil {
+		t.Fatal("same-depth retry failed", err)
+	}
+	if err := s.Record(ctx, "split_depth", "child", &depth); err != nil || depth != 1 {
+		t.Fatal(depth, err)
 	}
 }

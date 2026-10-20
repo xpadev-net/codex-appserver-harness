@@ -8,12 +8,30 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 
 func Git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	safe := []string{"-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"}
+	keys, _ := exec.CommandContext(ctx, "git", "-C", dir, "config", "--null", "--name-only", "--get-regexp", `^(filter\..*\.(clean|smudge|process|required)|merge\..*\.driver)$`).Output()
+	for _, key := range strings.Split(string(keys), "\x00") {
+		if key == "" {
+			continue
+		}
+		value := ""
+		if strings.HasSuffix(key, ".required") {
+			value = "false"
+		}
+		if strings.HasPrefix(key, "merge.") {
+			value = "false"
+		}
+		safe = append(safe, "-c", key+"="+value)
+	}
+	cmd := exec.CommandContext(ctx, "git", append(safe, args...)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	b, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w", args[0], err)
@@ -80,6 +98,37 @@ func Push(ctx context.Context, repo, branch, sha string) error {
 	fields := strings.Fields(out)
 	if len(fields) != 2 || fields[0] != sha {
 		return fmt.Errorf("remote head mismatch")
+	}
+	return nil
+}
+
+// Verify rejects a replaced .git file or redirected branch before controller writes.
+func Verify(ctx context.Context, repo, tree, branch string) error {
+	expected, err := Git(ctx, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	actual, err := Git(ctx, tree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	e, err := filepath.EvalSymlinks(strings.TrimSpace(expected))
+	if err != nil {
+		return err
+	}
+	a, err := filepath.EvalSymlinks(strings.TrimSpace(actual))
+	if err != nil {
+		return err
+	}
+	if e != a {
+		return fmt.Errorf("worktree Git metadata redirected")
+	}
+	b, err := Git(ctx, tree, "branch", "--show-current")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(b) != branch {
+		return fmt.Errorf("worktree branch redirected")
 	}
 	return nil
 }

@@ -54,7 +54,7 @@ Codex は実装、テスト設計・作成、判断を要する失敗の切り�
 - WorkItem ごとに、実装用 thread と検証用 thread を保持する。
 - コード変更では独立検証を基本とし、文書だけの変更等は明示された policy で省略できる。
 - 承認の初期方式は GitHub の正式な APPROVED review を対象とする。
-- TypeScript / Node.js、SQLite、ローカル runner を実装候補とする。詳細は実装計画書で扱う。
+- ユーザー指定により Go、SQLite、ローカル runner を採用する。詳細は実装計画書で扱う。
 
 Cloud review が正式な APPROVED を返せることや、GitHub App の bot によるレビュー依頼が受理されることは未検証である。成立を確認するまで自動 merge を有効化しない。承認条件を暗黙に弱めて実装上の都合を合わせない。
 

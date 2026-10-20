@@ -81,6 +81,10 @@ func Decode(data []byte, id string, revision int, candidate string, criteria, pr
 		if len(h.Blockers) == 0 {
 			return h, errors.New("blocked handoff requires reason")
 		}
+	case "split":
+		if len(h.RemainingWork) == 0 {
+			return h, errors.New("split request requires remaining scope description")
+		}
 	case "validation_needed":
 		if len(h.RequestedProfiles) == 0 {
 			return h, errors.New("validation request requires profiles")

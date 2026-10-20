@@ -26,7 +26,7 @@ type Report struct {
 	Capabilities  map[string]Capability `json:"capabilities"`
 }
 
-var MergeRequirements = []string{"github_read", "github_write", "app_server", "thread_resume", "cloud_request", "cloud_native_approval", "review_sha", "ci_mapping"}
+var MergeRequirements = []string{"github_read", "github_write", "app_server", "thread_resume", "cloud_request", "cloud_native_approval", "review_sha", "ci_mapping", "rules_enforced"}
 
 func (r Report) AutoMergeReady() bool {
 	if r.RepositoryID == 0 || r.DefaultBranch == "" {

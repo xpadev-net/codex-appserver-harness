@@ -9,6 +9,7 @@ import (
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"os"
 	"reflect"
 	"time"
 )
@@ -16,6 +17,19 @@ import (
 type Store struct{ DB *sql.DB }
 
 func Open(path string) (*Store, error) {
+	if path != ":memory:" {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return nil, err
+		}
+		if err = file.Chmod(0600); err != nil {
+			file.Close()
+			return nil, err
+		}
+		if err = file.Close(); err != nil {
+			return nil, err
+		}
+	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err
@@ -40,9 +54,13 @@ func Open(path string) (*Store, error) {
 }
 func (s *Store) Close() error { return s.DB.Close() }
 func (s *Store) Claim(ctx context.Context, w domain.WorkItem) error {
+	return s.ClaimRecords(ctx, w, nil)
+}
+func (s *Store) ClaimRecords(ctx context.Context, w domain.WorkItem, records map[string]any) error {
 	if w.ID == "" || w.RepositoryID <= 0 || w.Issue <= 0 || w.ScopeRevision < 1 || w.PolicyRevision < 1 || w.Phase != domain.Ready {
 		return errors.New("invalid work item")
 	}
+	initializeClock(&w)
 	b, err := json.Marshal(w)
 	if err != nil {
 		return err
@@ -57,6 +75,15 @@ func (s *Store) Claim(ctx context.Context, w domain.WorkItem) error {
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, b); err != nil {
 		return err
+	}
+	for kind, value := range records {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -103,6 +130,15 @@ func (s *Store) Apply(ctx context.Context, e domain.Event) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = s.applyTx(ctx, tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (s *Store) applyTx(ctx context.Context, tx *sql.Tx, e domain.Event) error {
+	if e.ObservedAt.IsZero() {
+		e.ObservedAt = time.Now().UTC()
+	}
 	b, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -113,16 +149,18 @@ func (s *Store) Apply(ctx context.Context, e domain.Event) error {
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return tx.Commit()
+		return nil
 	}
 	w, err := read(ctx, tx, e.WorkItemID)
 	if err != nil {
 		return err
 	}
+	previousPhase := w.Phase
 	w, ops, err := domain.Apply(w, e)
 	if err != nil {
 		return err
 	}
+	advanceClock(&w, previousPhase, e.ObservedAt)
 	if len(ops) > 0 {
 		var count int
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM operation_outbox WHERE work_item_id=? AND state IN ('sending','unknown')", w.ID).Scan(&count); err != nil {
@@ -131,6 +169,11 @@ func (s *Store) Apply(ctx context.Context, e domain.Event) error {
 		if count > 0 {
 			return errors.New("previous operation requires reconciliation")
 		}
+		if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='canceled' WHERE work_item_id=? AND state='pending'", w.ID); err != nil {
+			return err
+		}
+	}
+	if w.Phase == domain.Canceled {
 		if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='canceled' WHERE work_item_id=? AND state='pending'", w.ID); err != nil {
 			return err
 		}
@@ -151,7 +194,7 @@ func (s *Store) Apply(ctx context.Context, e domain.Event) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // Operations includes unknown and sending states: a dispatcher must reconcile those, never resend them blindly.
@@ -276,6 +319,9 @@ func (s *Store) Record(ctx context.Context, kind, id string, value any) error {
 // ClaimNext transfers an issue claim only after its preceding partial work merged.
 // This explicit path prevents the pool from reclaiming canceled or split parents.
 func (s *Store) ClaimNext(ctx context.Context, previous string, w domain.WorkItem) error {
+	return s.ClaimNextRecords(ctx, previous, w, nil)
+}
+func (s *Store) ClaimNextRecords(ctx context.Context, previous string, w domain.WorkItem, records map[string]any) error {
 	if w.ID == "" || w.ID == previous || w.Phase != domain.Ready || w.ScopeRevision < 1 || w.PolicyRevision < 1 {
 		return errors.New("invalid next work item")
 	}
@@ -291,6 +337,7 @@ func (s *Store) ClaimNext(ctx context.Context, previous string, w domain.WorkIte
 	if prev.Phase != domain.Merged || w.RepositoryID != prev.RepositoryID || w.Issue != prev.Issue {
 		return errors.New("predecessor must be merged on same issue")
 	}
+	initializeClock(&w)
 	b, err := json.Marshal(w)
 	if err != nil {
 		return err
@@ -306,12 +353,24 @@ func (s *Store) ClaimNext(ctx context.Context, previous string, w domain.WorkIte
 	if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, b); err != nil {
 		return err
 	}
+	for kind, value := range records {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
 // RetryUnexecuted is only for trusted adapter reconciliation proving no side effect.
 // A timeout alone is not such evidence. The original intent and attempt are retained.
 func (s *Store) RetryUnexecuted(ctx context.Context, id, evidence string) error {
+	return s.RetryUnexecutedBounded(ctx, id, evidence, 3)
+}
+func (s *Store) RetryUnexecutedBounded(ctx context.Context, id, evidence string, maximum int) error {
 	if evidence == "" {
 		return errors.New("reconciliation evidence required")
 	}
@@ -336,14 +395,58 @@ func (s *Store) RetryUnexecuted(ctx context.Context, id, evidence string) error 
 	if err != nil {
 		return err
 	}
+	if w.Phase == domain.Blocked && w.RecoveryPhase != "" {
+		previous := w.Phase
+		w.Phase = w.RecoveryPhase
+		w.RecoveryPhase = ""
+		w.Reason = ""
+		advanceClock(&w, previous, time.Now().UTC())
+	}
 	if !domain.CanDispatch(w, op) {
 		return errors.New("operation is no longer permitted")
+	}
+	if maximum < 1 {
+		return errors.New("network retry budget is disabled")
+	}
+	var count int
+	var previous []byte
+	retryErr := tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='network_retry_count' AND id=?", w.ID).Scan(&previous)
+	if retryErr == nil {
+		if err = json.Unmarshal(previous, &count); err != nil {
+			return err
+		}
+	} else if !errors.Is(retryErr, sql.ErrNoRows) {
+		return retryErr
+	}
+	if count >= maximum {
+		return errors.New("network retry budget exhausted")
+	}
+	count++
+	counter, err := json.Marshal(count)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES('network_retry_count',?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload", w.ID, w.ID, counter); err != nil {
+		return err
 	}
 	proof, err := json.Marshal(map[string]any{"unexecuted_evidence": evidence, "observed_at": time.Now().UTC()})
 	if err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='pending',result=? WHERE id=?", proof, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE id=? AND kind IN ('publication_intent','merge_intent')", id); err != nil {
+		return err
+	}
+	data, err := json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE work_items SET data=? WHERE id=?", data, w.ID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", "operator_audit", fmt.Sprintf("%s:retry:%d", id, time.Now().UnixNano()), w.ID, proof); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -392,9 +495,12 @@ func (s *Store) AcknowledgeDeliveries(ctx context.Context, ids []string) error {
 }
 
 type ChildRegistration struct {
-	Item         domain.WorkItem
-	Dependencies []string
-	Scope        any
+	Depth          int
+	Item           domain.WorkItem
+	Dependencies   []string
+	Scope          any
+	Source         any
+	PolicySnapshot any
 }
 
 // RegisterChildren makes the local split durable only after every external child
@@ -435,10 +541,14 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 		}
 		existing, err := read(ctx, tx, w.ID)
 		if err == nil {
+			w.CreatedAt = existing.CreatedAt
+			w.PhaseStartedAt = existing.PhaseStartedAt
+			w.MergeObservedAt = existing.MergeObservedAt
+			w.PhaseDurations = existing.PhaseDurations
 			if !reflect.DeepEqual(existing, w) {
 				return errors.New("child identity conflict")
 			}
-			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID} {
+			for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID, "source": child.Source, "policy_snapshot": child.PolicySnapshot, "split_depth": child.Depth} {
 				var actual []byte
 				if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, w.ID).Scan(&actual); err != nil {
 					return err
@@ -457,6 +567,7 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		initializeClock(&w)
 		data, err := json.Marshal(w)
 		if err != nil {
 			return err
@@ -467,13 +578,21 @@ func (s *Store) RegisterChildren(ctx context.Context, parentID string, children 
 		if _, err = tx.ExecContext(ctx, "INSERT INTO work_items VALUES(?,?,?,?)", w.ID, w.RepositoryID, w.Issue, data); err != nil {
 			return err
 		}
-		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID} {
+		for kind, value := range map[string]any{"dependencies": child.Dependencies, "scope": child.Scope, "split_parent": parentID, "source": child.Source, "policy_snapshot": child.PolicySnapshot, "split_depth": child.Depth} {
 			data, err = json.Marshal(value)
 			if err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
+			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO records VALUES(?,?,?,?)", kind, w.ID, w.ID, data); err != nil {
 				return err
+			}
+			var prior []byte
+			if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, w.ID).Scan(&prior); err != nil {
+				return err
+			}
+			var before, after any
+			if json.Unmarshal(prior, &before) != nil || json.Unmarshal(data, &after) != nil || !reflect.DeepEqual(before, after) {
+				return errors.New("child metadata conflicts with prior intent")
 			}
 		}
 	}
@@ -520,4 +639,325 @@ func dependenciesReady(ctx context.Context, q queryer, id string) (bool, error) 
 }
 func (s *Store) DependenciesReady(ctx context.Context, id string) (bool, error) {
 	return dependenciesReady(ctx, s.DB, id)
+}
+
+func (s *Store) SetWorkspace(ctx context.Context, id, branch, path string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	w, err := read(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if w.Worktree != "" && (w.Worktree != path || w.Branch != branch) {
+		return errors.New("workspace already assigned")
+	}
+	w.Worktree = path
+	w.Branch = branch
+	data, err := json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE work_items SET data=? WHERE id=?", data, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (s *Store) Records(ctx context.Context, kind, workItem string) ([]json.RawMessage, error) {
+	query := "SELECT payload FROM records WHERE kind=? ORDER BY rowid"
+	args := []any{kind}
+	if workItem != "" {
+		query = "SELECT payload FROM records WHERE kind=? AND work_item_id=? ORDER BY rowid"
+		args = append(args, workItem)
+	}
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []json.RawMessage{}
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		out = append(out, json.RawMessage(raw))
+	}
+	return out, rows.Err()
+}
+func (s *Store) GetInto(ctx context.Context, id string, out *domain.WorkItem) error {
+	w, err := s.Get(ctx, id)
+	if err == nil {
+		*out = w
+	}
+	return err
+}
+
+// Complete commits the observed operation result, state transition, and next intent
+// together. A crash cannot leave a done operation with its next event missing.
+func (s *Store) Complete(ctx context.Context, id string, result any, e domain.Event) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var owner, state string
+	if err = tx.QueryRowContext(ctx, "SELECT work_item_id,state FROM operation_outbox WHERE id=?", id).Scan(&owner, &state); err != nil {
+		return err
+	}
+	if owner != e.WorkItemID || (state != "sending" && state != "unknown" && state != "done") {
+		return errors.New("operation completion identity/state invalid")
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='done',result=? WHERE id=?", data, id); err != nil {
+		return err
+	}
+	if err = s.applyTx(ctx, tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Adopt is an explicit operator revision change. Running/unknown effects must be
+// reconciled first, and historical scope, counters, and evidence remain intact.
+func (s *Store) Adopt(ctx context.Context, id string, scopeRevision, policyRevision int, records map[string]any) error {
+	if records == nil {
+		return errors.New("adoption requires scope records")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	w, err := read(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if w.Terminal() || scopeRevision != w.ScopeRevision+1 || policyRevision < w.PolicyRevision {
+		return errors.New("invalid adoption revision/state")
+	}
+	var count int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM operation_outbox WHERE work_item_id=? AND state IN ('sending','unknown')", id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("reconcile sent operations before adoption")
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO records(kind,id,work_item_id,payload) SELECT 'scope_history',?,work_item_id,payload FROM records WHERE kind='scope' AND id=?", fmt.Sprintf("%s:%d", id, w.ScopeRevision), id); err != nil {
+		return err
+	}
+	w.ScopeRevision = scopeRevision
+	w.PolicyRevision = policyRevision
+	previousPhase := w.Phase
+	w.Phase = domain.Ready
+	advanceClock(&w, previousPhase, time.Now().UTC())
+	w.Candidate = ""
+	w.Reason = ""
+	w.RecoveryPhase = ""
+	w.Version++
+	data, err := json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE work_items SET data=? WHERE id=?", data, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='canceled' WHERE work_item_id=? AND state='pending'", id); err != nil {
+		return err
+	}
+	records["requires_revision_commit"] = true
+	for kind, value := range records {
+		data, err = json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload", kind, id, id, data); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// EventRecords commits operator intent and its associated state transition together.
+func (s *Store) EventRecords(ctx context.Context, e domain.Event, records map[string]map[string]any) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for kind, entries := range records {
+		for id, value := range entries {
+			data, err := json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload", kind, id, e.WorkItemID, data); err != nil {
+				return err
+			}
+		}
+	}
+	if err = s.applyTx(ctx, tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RestoreReconciliation reopens only an existing agent operation with a persisted
+// run. The adapter must read that run's history; Execute refuses its duplicate ID.
+func (s *Store) RestoreReconciliation(ctx context.Context, id, operation, reason string) error {
+	if reason == "" {
+		return errors.New("reconciliation reason required")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	w, err := read(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if w.Phase != domain.Blocked || (w.RecoveryPhase != domain.Implementing && w.RecoveryPhase != domain.Verifying) {
+		return errors.New("work item is not awaiting agent reconciliation")
+	}
+	var data []byte
+	var state string
+	if err = tx.QueryRowContext(ctx, "SELECT payload,state FROM operation_outbox WHERE id=?", operation).Scan(&data, &state); err != nil {
+		return err
+	}
+	var op domain.Operation
+	if err = json.Unmarshal(data, &op); err != nil {
+		return err
+	}
+	if op.WorkItemID != id || op.Attempt != w.Attempt || op.ScopeRevision != w.ScopeRevision || op.PolicyRevision != w.PolicyRevision || op.Candidate != w.Candidate || (op.Kind != "implement" && op.Kind != "verify" && op.Kind != "propose_split") {
+		return errors.New("operation no longer matches work item")
+	}
+	if state != "done" && state != "unknown" {
+		return errors.New("operation is not awaiting reconciliation")
+	}
+	if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='agent_run' AND id=?", operation).Scan(&data); err != nil {
+		return err
+	}
+	var run struct {
+		ID       string `json:"id"`
+		ThreadID string `json:"thread_id"`
+	}
+	if err = json.Unmarshal(data, &run); err != nil {
+		return err
+	}
+	if run.ID != operation || run.ThreadID == "" {
+		return errors.New("saved run identity missing")
+	}
+	previousPhase := w.Phase
+	w.Phase = w.RecoveryPhase
+	advanceClock(&w, previousPhase, time.Now().UTC())
+	w.RecoveryPhase = ""
+	w.Reason = reason
+	w.Version++
+	data, err = json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE work_items SET data=? WHERE id=?", data, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state='sending' WHERE id=?", operation); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func initializeClock(w *domain.WorkItem) {
+	if w.CreatedAt.IsZero() {
+		w.CreatedAt = time.Now().UTC()
+	}
+	if w.PhaseStartedAt.IsZero() {
+		w.PhaseStartedAt = w.CreatedAt
+	}
+}
+func advanceClock(w *domain.WorkItem, previous domain.Phase, now time.Time) {
+	if w.Phase == previous {
+		return
+	}
+	if !w.PhaseStartedAt.IsZero() && !now.Before(w.PhaseStartedAt) {
+		if w.PhaseDurations == nil {
+			w.PhaseDurations = map[string]int64{}
+		}
+		w.PhaseDurations[string(previous)] += now.Sub(w.PhaseStartedAt).Nanoseconds()
+	}
+	w.PhaseStartedAt = now
+	if w.Phase == domain.Merged && w.MergeObservedAt.IsZero() {
+		w.MergeObservedAt = now
+	}
+}
+
+// EnsureRecord pins an immutable policy/evidence snapshot without permitting a
+// second writer to reuse its identifier for different content.
+func (s *Store) EnsureRecord(ctx context.Context, kind, id string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO records VALUES(?,?,'',?)", kind, id, data); err != nil {
+		return err
+	}
+	var previous []byte
+	if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind=? AND id=?", kind, id).Scan(&previous); err != nil {
+		return err
+	}
+	var a, b any
+	if json.Unmarshal(previous, &a) != nil || json.Unmarshal(data, &b) != nil || !reflect.DeepEqual(a, b) {
+		return errors.New("immutable record identifier reused for different content")
+	}
+	return tx.Commit()
+}
+
+// ReturnUnsent preserves an intent held before any external request. It is not an
+// API-timeout recovery path; only trusted pre-send guard failures may call it.
+func (s *Store) ReturnUnsent(ctx context.Context, id, reason string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var data []byte
+	var state string
+	if err = tx.QueryRowContext(ctx, "SELECT payload,state FROM operation_outbox WHERE id=?", id).Scan(&data, &state); err != nil {
+		return err
+	}
+	if state != "sending" && state != "unknown" {
+		return errors.New("operation not dispatched")
+	}
+	var op domain.Operation
+	if err = json.Unmarshal(data, &op); err != nil {
+		return err
+	}
+	w, err := read(ctx, tx, op.WorkItemID)
+	if err != nil {
+		return err
+	}
+	next := "pending"
+	if w.Terminal() || w.Candidate != op.Candidate || w.ScopeRevision != op.ScopeRevision || w.PolicyRevision != op.PolicyRevision {
+		next = "canceled"
+	}
+	result, err := json.Marshal(map[string]string{"unsent_reason": reason})
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE operation_outbox SET state=?,result=? WHERE id=?", next, result, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE id=? AND kind IN ('publication_intent','merge_intent')", id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

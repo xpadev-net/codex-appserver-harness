@@ -12,7 +12,7 @@ import (
 
 func fixture() (verification.Scope, Proposal) {
 	s := verification.Scope{Revision: 1, OriginalRequest: "requirements", Criteria: []verification.Criterion{{ID: "A", Requirement: "first"}, {ID: "B", Requirement: "second"}}, Included: []string{"A", "B"}}
-	p := Proposal{SchemaVersion: 1, WorkItemID: "w", ScopeRevision: 1, Outcome: "split", Children: []Child{{Key: "a", Title: "first", Requirement: "first requirement", Criteria: []verification.Criterion{{ID: "a1", Requirement: "first"}}, Coverage: []Coverage{{"A", "a1"}}, DependsOn: []string{}}, {Key: "b", Title: "second", Requirement: "second requirement", Criteria: []verification.Criterion{{ID: "b1", Requirement: "second"}}, Coverage: []Coverage{{"B", "b1"}}, DependsOn: []string{"a"}}}}
+	p := Proposal{SchemaVersion: 1, WorkItemID: "w", ScopeRevision: 1, Outcome: "split", Children: []Child{{Key: "a", Title: "first", Requirement: "first requirement", Criteria: []verification.Criterion{{ID: "a1", Requirement: "first"}}, Coverage: []Coverage{{ParentCriterion: "A", ChildCriterion: "a1"}}, DependsOn: []string{}}, {Key: "b", Title: "second", Requirement: "second requirement", Criteria: []verification.Criterion{{ID: "b1", Requirement: "second"}}, Coverage: []Coverage{{ParentCriterion: "B", ChildCriterion: "b1"}}, DependsOn: []string{"a"}}}}
 	return s, p
 }
 func TestSplitCoverageAndDAG(t *testing.T) {
@@ -112,5 +112,19 @@ func TestCreatedChildMustStillMatchMarker(t *testing.T) {
 	}
 	if api.calls != 2 {
 		t.Fatal("missing child recreated")
+	}
+}
+func TestSingleBroadCriterionPartitionRequiresAllDeclaredParts(t *testing.T) {
+	scope, proposal := fixture()
+	scope.Criteria = scope.Criteria[:1]
+	scope.Included = []string{"A"}
+	proposal.Children[0].Coverage = []Coverage{{ParentCriterion: "A", ChildCriterion: "a1", PartID: "first", PartCount: 2, Basis: "first part of original requirement"}}
+	proposal.Children[1].Coverage = []Coverage{{ParentCriterion: "A", ChildCriterion: "b1", PartID: "second", PartCount: 2, Basis: "remaining part of original requirement"}}
+	if err := proposal.Validate("w", scope, 0, 2, 8); err != nil {
+		t.Fatal(err)
+	}
+	proposal.Children[1].Coverage[0].PartCount = 3
+	if err := proposal.Validate("w", scope, 0, 2, 8); err == nil {
+		t.Fatal("partition count mismatch accepted")
 	}
 }

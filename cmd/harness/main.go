@@ -8,10 +8,13 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
+	"github.com/xpadev-net/codex-appserver-harness/internal/service"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -33,6 +36,11 @@ func run() error {
 		}
 		_, err = runner.Execute(context.Background(), spec)
 		return err
+	}
+	if len(os.Args) > 1 && os.Args[1] != "doctor" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		return service.CLI(ctx, os.Args[1:])
 	}
 	if len(os.Args) < 2 || os.Args[1] != "doctor" {
 		return fmt.Errorf("usage: harness doctor --repo OWNER/REPO [--codex codex]")

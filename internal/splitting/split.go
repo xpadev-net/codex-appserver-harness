@@ -16,6 +16,9 @@ import (
 )
 
 type Coverage struct {
+	PartID          string `json:"part_id"`
+	PartCount       int    `json:"part_count"`
+	Basis           string `json:"basis"`
 	ParentCriterion string `json:"parent_criterion"`
 	ChildCriterion  string `json:"child_criterion"`
 }
@@ -55,6 +58,9 @@ func (p Proposal) Validate(id string, parent verification.Scope, depth, maxDepth
 		parents[id] = true
 	}
 	covered := map[string]bool{}
+	full := map[string]bool{}
+	parts := map[string]map[string]bool{}
+	counts := map[string]int{}
 	for _, c := range p.Children {
 		if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(c.Key) || keys[c.Key] || strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.Requirement) == "" || len(c.Criteria) == 0 {
 			return errors.New("invalid split child")
@@ -69,14 +75,37 @@ func (p Proposal) Validate(id string, parent verification.Scope, depth, maxDepth
 		}
 		mapped := map[string]bool{}
 		for _, mapping := range c.Coverage {
-			if !parents[mapping.ParentCriterion] || covered[mapping.ParentCriterion] || !criteria[mapping.ChildCriterion] || mapped[mapping.ChildCriterion] {
+			if !parents[mapping.ParentCriterion] || (covered[mapping.ParentCriterion] && mapping.PartID == "") || !criteria[mapping.ChildCriterion] || mapped[mapping.ChildCriterion] {
 				return errors.New("coverage overlaps or references unknown criterion")
+			}
+			if mapping.PartID == "" {
+				if mapping.PartCount != 0 {
+					return errors.New("full coverage cannot declare parts")
+				}
+				full[mapping.ParentCriterion] = true
+			} else {
+				if full[mapping.ParentCriterion] || mapping.PartCount < 2 || strings.TrimSpace(mapping.Basis) == "" || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(mapping.PartID) {
+					return errors.New("invalid partition coverage")
+				}
+				if parts[mapping.ParentCriterion] == nil {
+					parts[mapping.ParentCriterion] = map[string]bool{}
+					counts[mapping.ParentCriterion] = mapping.PartCount
+				}
+				if counts[mapping.ParentCriterion] != mapping.PartCount || parts[mapping.ParentCriterion][mapping.PartID] {
+					return errors.New("partition overlap or count changed")
+				}
+				parts[mapping.ParentCriterion][mapping.PartID] = true
 			}
 			covered[mapping.ParentCriterion] = true
 			mapped[mapping.ChildCriterion] = true
 		}
 		if len(mapped) != len(criteria) {
 			return errors.New("child criteria missing parent mapping")
+		}
+	}
+	for parent, declared := range counts {
+		if len(parts[parent]) != declared {
+			return errors.New("partition drops declared requirement parts")
 		}
 	}
 	for id := range parents {
@@ -207,6 +236,13 @@ func CreateChildren(ctx context.Context, j Journal, api IssueCreator, p Proposal
 			return progress, err
 		}
 		number, createErr := api.CreateChild(ctx, child.Title, string(body), marker)
+		if errors.Is(createErr, contract.ErrUnsent) {
+			state.State = "pending"
+			if err = j.Put(context.WithoutCancel(ctx), "split_progress", p.WorkItemID, p.WorkItemID, progress); err != nil {
+				return progress, err
+			}
+			return progress, createErr
+		}
 		if createErr != nil || number <= 0 {
 			return progress, errors.New("child creation outcome unknown; reconcile before retry")
 		}

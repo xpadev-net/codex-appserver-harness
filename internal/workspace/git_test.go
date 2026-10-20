@@ -30,3 +30,20 @@ func TestCandidateWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestControllerDoesNotExecuteCandidateFilters(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.invalid"}, {"config", "user.name", "test"}, {"config", "commit.gpgsign", "false"}, {"config", "filter.trap.clean", "touch HOST_FILTER_EXECUTED"}, {"commit", "--allow-empty", "-m", "base"}} {
+		if _, err := Git(ctx, repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("*.txt filter=trap\n"), 0600)
+	os.WriteFile(filepath.Join(repo, "file.txt"), []byte("content"), 0600)
+	if _, err := Freeze(ctx, repo, "candidate"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "HOST_FILTER_EXECUTED")); !os.IsNotExist(err) {
+		t.Fatal("untrusted filter executed")
+	}
+}

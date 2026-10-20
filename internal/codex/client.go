@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"sync"
+	"syscall"
 )
 
 type Message struct {
@@ -27,6 +30,7 @@ func (e *RequestError) Error() string {
 
 // Client is sequential: a single owner must consume calls and notifications.
 type Client struct {
+	writeMu  sync.Mutex
 	cancel   context.CancelFunc
 	cmd      *exec.Cmd
 	in       io.WriteCloser
@@ -37,6 +41,11 @@ type Client struct {
 }
 
 func Start(ctx context.Context, binary string, args ...string) (*Client, error) {
+	return StartCommand(ctx, binary, append([]string{"app-server", "--listen", "stdio://"}, args...), os.Environ())
+}
+
+// StartCommand is used by the controller with an isolated launcher and allowlisted environment.
+func StartCommand(ctx context.Context, binary string, args, environment []string) (*Client, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	success := false
 	defer func() {
@@ -44,7 +53,10 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 			cancel()
 		}
 	}()
-	cmd := exec.CommandContext(ctx, binary, append([]string{"app-server", "--listen", "stdio://"}, args...)...)
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = environment
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -84,8 +96,12 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 	success = true
 	return c, nil
 }
-func (c *Client) Close() error     { c.cancel(); _ = c.in.Close(); return c.cmd.Wait() }
-func (c *Client) Send(v any) error { return json.NewEncoder(c.in).Encode(v) }
+func (c *Client) Close() error { c.cancel(); _ = c.in.Close(); return c.cmd.Wait() }
+func (c *Client) Send(v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return json.NewEncoder(c.in).Encode(v)
+}
 func (c *Client) Next(ctx context.Context) (Message, error) {
 	if len(c.pending) > 0 {
 		m := c.pending[0]

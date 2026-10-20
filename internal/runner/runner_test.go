@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func spec(t *testing.T) Spec {
@@ -22,7 +23,7 @@ func spec(t *testing.T) Spec {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Spec{JobID: "job", Repository: repo, Root: t.TempDir(), Candidate: Candidate{ID: "c", SHA: sha, BaseSHA: sha, ScopeRevision: 1, PolicyRevision: 1}, ProfileID: "unit", Profile: policy.Profile{Revision: 1, Argv: []string{"sh", "-c", "printf PASS"}, TimeoutSeconds: 2, SuccessPattern: "PASS"}, Launcher: []string{"env"}}
+	return Spec{LauncherContract: "argv_passthrough_v1", JobID: "job", Repository: repo, Root: t.TempDir(), Candidate: Candidate{ID: "c", SHA: sha, BaseSHA: sha, ScopeRevision: 1, PolicyRevision: 1}, ProfileID: "unit", Profile: policy.Profile{Revision: 1, Argv: []string{"sh", "-c", "printf PASS"}, TimeoutSeconds: 2, SuccessPattern: "PASS"}, Launcher: []string{"env"}}
 }
 func TestRunnerOutcomesAndPersistence(t *testing.T) {
 	for _, v := range []struct {
@@ -108,5 +109,41 @@ func TestTimeoutRetainsTruncationAndExitStatus(t *testing.T) {
 	r, _ := Execute(context.Background(), s)
 	if r.Status != "timeout" || !r.LogTruncated || r.ExitCode == nil {
 		t.Fatal("execution metadata lost", r)
+	}
+}
+func TestCancelMarkerStopsDurableJob(t *testing.T) {
+	s := spec(t)
+	s.Profile.TimeoutSeconds = 10
+	s.Profile.Argv = []string{"sh", "-c", "sleep 8"}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		os.WriteFile(filepath.Join(s.Root, s.JobID+".cancel"), []byte("operator cancel"), 0600)
+	}()
+	r, _ := Execute(context.Background(), s)
+	if r.Status != "canceled" || time.Since(r.Started) > 3*time.Second {
+		t.Fatal("cancel marker ignored", r)
+	}
+}
+func TestLauncherMustPassArgumentsAndExitStatus(t *testing.T) {
+	s := spec(t)
+	path := filepath.Join(t.TempDir(), "bad-launcher")
+	os.WriteFile(path, []byte("#!/bin/sh\nprintf PASS\nexit 0\n"), 0700)
+	s.Launcher = []string{path}
+	r, err := Execute(context.Background(), s)
+	if err == nil || r.Status != "infrastructure_failure" {
+		t.Fatal("nonconforming launcher accepted", r, err)
+	}
+}
+func TestRunnerUsesDedicatedHomeAndOmitsWorkerMountVariables(t *testing.T) {
+	s := spec(t)
+	controllerHome := t.TempDir()
+	t.Setenv("HOME", controllerHome)
+	t.Setenv("CODEX_HOME", "/controller/auth")
+	t.Setenv("HARNESS_CODEX_BINARY", "/controller/codex")
+	t.Setenv("HARNESS_GIT_DIR", "/controller/git")
+	s.Profile.Argv = []string{"sh", "-c", `test "$HOME" = "$HARNESS_SANDBOX_HOME" && test "$HOME" != "$1" && test "$HARNESS_LAUNCH_MODE" = runner && test -z "$CODEX_HOME" && test -z "$HARNESS_CODEX_BINARY" && test -z "$HARNESS_GIT_DIR" && printf PASS`, "probe", controllerHome}
+	r, err := Execute(context.Background(), s)
+	if err != nil || r.Status != "passed" {
+		t.Fatal(r, err)
 	}
 }
