@@ -204,7 +204,13 @@ func (w Worker) Reconcile(ctx context.Context, s Session, r Run) (Run, error) {
 					r.Final = i.Text
 				}
 			}
-			return r, w.Journal.Put(ctx, "agent_run", r.ID, s.WorkItemID, r)
+			if err := w.Journal.Put(ctx, "agent_run", r.ID, s.WorkItemID, r); err != nil {
+				return r, err
+			}
+			if r.State != "completed" {
+				return r, fmt.Errorf("recovered turn is not completed: %s", r.State)
+			}
+			return r, nil
 		}
 	}
 	return r, errors.New("saved turn absent; do not resend")
