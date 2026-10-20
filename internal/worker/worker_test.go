@@ -126,3 +126,13 @@ func TestCaseVariantHandoffKeyRejected(t *testing.T) {
 		t.Fatal("case variant accepted")
 	}
 }
+func TestSummaryCompletionKeepsFullOutput(t *testing.T) {
+	s, _ := storage.Open(filepath.Join(t.TempDir(), "db"))
+	defer s.Close()
+	rpc := &fakeRPC{events: []codex.Message{{Method: "item/completed", Params: []byte(`{"threadId":"thread","turnId":"turn","item":{"type":"agentMessage","text":"full JSON handoff"}}`)}, {Method: "turn/completed", Params: []byte(`{"threadId":"thread","turn":{"id":"turn","status":"completed","itemsView":"summary","items":[{"type":"agentMessage","text":"summary"}]}}`)}}}
+	w := Worker{rpc, s}
+	r, err := w.Execute(context.Background(), Session{WorkItemID: "w", ThreadID: "thread"}, "r", "implement", "prompt", nil)
+	if err != nil || r.Final != "full JSON handoff" {
+		t.Fatal("full output overwritten", r, err)
+	}
+}

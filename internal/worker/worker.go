@@ -178,9 +178,11 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 				continue
 			}
 			r.State = p.Turn.Status
-			for _, item := range p.Turn.Items {
-				if item.Type == "agentMessage" {
-					r.Final = item.Text
+			if p.Turn.ItemsView == "" || p.Turn.ItemsView == "full" {
+				for _, item := range p.Turn.Items {
+					if item.Type == "agentMessage" {
+						r.Final = item.Text
+					}
 				}
 			}
 			if err = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); err != nil {
