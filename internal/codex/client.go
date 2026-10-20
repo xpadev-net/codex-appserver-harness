@@ -24,7 +24,7 @@ type Client struct {
 	cmd      *exec.Cmd
 	in       io.WriteCloser
 	messages chan Message
-	done     chan error
+	terminal error
 	seq      int
 }
 
@@ -42,7 +42,7 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := &Client{cmd: cmd, in: in, messages: make(chan Message, 64), done: make(chan error, 1)}
+	c := &Client{cmd: cmd, in: in, messages: make(chan Message, 64)}
 	go func() {
 		defer close(c.messages)
 		scanner := bufio.NewScanner(out)
@@ -50,13 +50,13 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 		for scanner.Scan() {
 			var m Message
 			if err := json.Unmarshal(scanner.Bytes(), &m); err != nil {
-				c.done <- err
+				c.terminal = err
 				return
 			}
 			select {
 			case c.messages <- m:
 			case <-ctx.Done():
-				c.done <- ctx.Err()
+				c.terminal = ctx.Err()
 				return
 			}
 		}
@@ -64,7 +64,7 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 		if err == nil {
 			err = io.EOF
 		}
-		c.done <- err
+		c.terminal = err
 	}()
 	return c, nil
 }
@@ -74,7 +74,7 @@ func (c *Client) Next(ctx context.Context) (Message, error) {
 	select {
 	case m, ok := <-c.messages:
 		if !ok {
-			return Message{}, <-c.done
+			return Message{}, c.terminal
 		}
 		return m, nil
 	case <-ctx.Done():
