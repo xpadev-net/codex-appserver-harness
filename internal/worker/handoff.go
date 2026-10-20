@@ -31,6 +31,9 @@ func Decode(data []byte, id string, revision int, candidate string, criteria, pr
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return h, err
 	}
+	if len(fields) != 10 {
+		return h, errors.New("unknown handoff fields")
+	}
 	for _, key := range []string{"schema_version", "work_item_id", "scope_revision", "input_candidate_id", "outcome", "summary", "covered_criteria", "remaining_work", "requested_profiles", "blockers"} {
 		v, ok := fields[key]
 		if !ok || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {

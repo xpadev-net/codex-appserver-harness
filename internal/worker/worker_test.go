@@ -120,3 +120,9 @@ func TestNullHandoffElementsRejected(t *testing.T) {
 		}
 	}
 }
+func TestCaseVariantHandoffKeyRejected(t *testing.T) {
+	b := []byte(`{"schema_version":1,"work_item_id":"w","scope_revision":1,"input_candidate_id":"","outcome":"blocked","summary":"blocked","covered_criteria":[],"remaining_work":[],"Remaining_Work":[null],"requested_profiles":[],"blockers":["reason"]}`)
+	if _, err := Decode(b, "w", 1, "", nil, nil); err == nil {
+		t.Fatal("case variant accepted")
+	}
+}

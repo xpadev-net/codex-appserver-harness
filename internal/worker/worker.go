@@ -43,9 +43,10 @@ type Thread struct {
 	Turns []Turn `json:"turns"`
 }
 type Turn struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Items  []struct {
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	ItemsView string `json:"itemsView"`
+	Items     []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"items"`
@@ -198,6 +199,10 @@ func (w Worker) Reconcile(ctx context.Context, s Session, r Run) (Run, error) {
 	}
 	for _, t := range reply.Thread.Turns {
 		if t.ID == r.TurnID {
+			if t.ItemsView != "" && t.ItemsView != "full" {
+				return r, errors.New("turn history is not fully loaded")
+			}
+			r.Final = ""
 			r.State = t.Status
 			for _, i := range t.Items {
 				if i.Type == "agentMessage" {
