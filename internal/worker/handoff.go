@@ -37,6 +37,24 @@ func Decode(data []byte, id string, revision int, candidate string, criteria, pr
 			return h, errors.New("required handoff field missing or null: " + key)
 		}
 	}
+	for _, key := range []string{"covered_criteria", "remaining_work", "requested_profiles", "blockers"} {
+		var elements []json.RawMessage
+		if err := json.Unmarshal(fields[key], &elements); err != nil {
+			return h, err
+		}
+		for _, raw := range elements {
+			if len(raw) == 0 || raw[0] != '"' {
+				return h, errors.New("array element must be string")
+			}
+			var item string
+			if err := json.Unmarshal(raw, &item); err != nil {
+				return h, err
+			}
+			if len(item) == 0 || utf8.RuneCountInString(item) > 8192 {
+				return h, errors.New("array string bounds invalid")
+			}
+		}
+	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&h); err != nil {

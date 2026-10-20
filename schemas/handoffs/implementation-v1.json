@@ -32,28 +32,36 @@
     "covered_criteria": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
       },
       "maxItems": 128
     },
     "remaining_work": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
       },
       "maxItems": 128
     },
     "requested_profiles": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
       },
       "maxItems": 128
     },
     "blockers": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8192
       },
       "maxItems": 32
     }
