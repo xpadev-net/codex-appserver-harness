@@ -49,6 +49,7 @@ type Result struct {
 	Finished        time.Time `json:"finished"`
 	LogPath         string    `json:"log_path"`
 	Environment     string    `json:"environment"`
+	LogTruncated    bool      `json:"log_truncated"`
 	Reason          string    `json:"reason,omitempty"`
 }
 
@@ -181,6 +182,7 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		r.Status = "timeout"
 		return r, runCtx.Err()
 	}
+	r.LogTruncated = output.truncated
 	code := cmd.ProcessState.ExitCode()
 	r.ExitCode = &code
 	if waitErr != nil {
@@ -201,6 +203,10 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 			return r, readErr
 		}
 		if !regexp.MustCompile(s.Profile.SuccessPattern).Match(b) {
+			if output.truncated {
+				r.Status = "unknown"
+				return r, errors.New("output truncated; success evidence inconclusive")
+			}
 			r.Status = "failed"
 			return r, errors.New("required success evidence missing")
 		}
@@ -210,10 +216,11 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 }
 
 type boundedLog struct {
-	mu      sync.Mutex
-	writer  io.Writer
-	limit   int
-	written int
+	mu        sync.Mutex
+	writer    io.Writer
+	limit     int
+	written   int
+	truncated bool
 }
 
 func (b *boundedLog) Write(p []byte) (int, error) {
@@ -221,6 +228,9 @@ func (b *boundedLog) Write(p []byte) (int, error) {
 	defer b.mu.Unlock()
 	original := len(p)
 	left := b.limit - b.written
+	if original > left {
+		b.truncated = true
+	}
 	if left > 0 {
 		if len(p) > left {
 			p = p[:left]

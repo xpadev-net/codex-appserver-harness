@@ -84,3 +84,11 @@ func TestOrphanIsNotRerun(t *testing.T) {
 		t.Fatal("orphan rerun")
 	}
 }
+func TestTruncatedSuccessEvidenceIsInconclusive(t *testing.T) {
+	s := spec(t)
+	s.Profile.Argv = []string{"sh", "-c", "head -c 8500000 /dev/zero; printf PASS"}
+	r, err := Execute(context.Background(), s)
+	if err == nil || r.Status != "unknown" || !r.LogTruncated {
+		t.Fatal("truncated evidence misclassified", r, err)
+	}
+}
