@@ -105,6 +105,14 @@ func dependencyComplete(ctx context.Context, q queryer, w domain.WorkItem, seen 
 // configured profile set. Retain support for existing proofs and check their
 // current identity; their result list alone never creates a completion proof.
 func acceptedIssue(ctx context.Context, q queryer, w domain.WorkItem) (bool, error) {
+	subject, err := finalAcceptanceSubject(ctx, q, w)
+	if err != nil {
+		return false, err
+	}
+	w = subject
+	if w.Phase != domain.Merged && w.Phase != domain.Split {
+		return false, nil
+	}
 	var proof struct {
 		ScopeRevision int              `json:"scope_revision"`
 		Candidate     runner.Candidate `json:"candidate"`

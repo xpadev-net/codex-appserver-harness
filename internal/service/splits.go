@@ -185,7 +185,11 @@ func (c *Controller) splitComplete(ctx context.Context, w domain.WorkItem, seen 
 		} else if err != nil {
 			return false, err
 		}
-		if proof.ScopeRevision != nested.ScopeRevision || proof.Candidate.ScopeRevision != nested.ScopeRevision || !runner.Passed(proof.Candidate, c.Config.Verification, proof.Results) {
+		subject, err := c.Store.FinalAcceptanceSubject(ctx, nested)
+		if err != nil {
+			return false, err
+		}
+		if (subject.Phase != domain.Merged && subject.Phase != domain.Split) || proof.ScopeRevision != subject.ScopeRevision || proof.Candidate.ScopeRevision != subject.ScopeRevision || proof.Candidate.PolicyRevision != subject.PolicyRevision || !runner.Passed(proof.Candidate, c.Config.Verification, proof.Results) {
 			return false, nil
 		}
 	}

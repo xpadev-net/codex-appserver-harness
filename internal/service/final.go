@@ -452,6 +452,11 @@ func (c *Controller) recoverFinalAssertion(ctx context.Context, w domain.WorkIte
 	updated.RequiredAction = "inspect recovery work item " + next.ID
 	updated.UpdatedAt = time.Now().UTC()
 	records := map[string]any{"scope": full, "source": source, "policy_snapshot": c.policyDigest(), "workspace_base": state.Failure.Candidate.SHA, "final_failure": *state.Failure, "budget_baseline": BudgetBaseline{ValidationJobs: jobs, ObservedTokens: metrics["observed_tokens"].(int64)}, "final_recovery_audit": map[string]string{"previous": w.ID, "evidence": evidence, "reason": reason}}
+	var depth int
+	if err = c.Store.Record(ctx, "split_depth", w.ID, &depth); err != nil && !missing(err) {
+		return err
+	}
+	records["split_depth"] = depth
 	return c.Store.ClaimFinalRepair(ctx, w.ID, next, records, issueKey(w), state, updated)
 }
 
@@ -514,6 +519,12 @@ func (c *Controller) claimContinuation(ctx context.Context, previous, next domai
 	} else if !missing(err) {
 		return err
 	}
+	records["continued_from"] = previous.ID
+	var depth int
+	if err := c.Store.Record(ctx, "split_depth", previous.ID, &depth); err != nil && !missing(err) {
+		return err
+	}
+	records["split_depth"] = depth
 	return c.Store.ClaimNextRecords(ctx, previous.ID, next, records)
 }
 
@@ -531,6 +542,21 @@ func (c *Controller) finalBlockedTree(ctx context.Context, w domain.WorkItem, se
 	blocked, err := c.finalLocallyBlocked(ctx, w)
 	if err != nil || blocked {
 		return blocked, err
+	}
+	var state FinalAcceptanceState
+	if err = c.Store.Record(ctx, "parent_final_state", issueKey(w), &state); err == nil {
+		if state.WorkItemID != w.ID && state.RecoveryID != "" && state.ScopeRevision >= w.ScopeRevision {
+			owner, err := c.Store.Get(ctx, state.WorkItemID)
+			if err != nil {
+				return false, err
+			}
+			if owner.RepositoryID != w.RepositoryID || owner.Issue != w.Issue {
+				return false, errors.New("final recovery owner identity mismatch")
+			}
+			return c.finalBlockedTree(ctx, owner, seen)
+		}
+	} else if !missing(err) {
+		return false, err
 	}
 	if w.Phase == domain.Split {
 		var progress splitting.Progress

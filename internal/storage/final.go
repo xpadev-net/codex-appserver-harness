@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
+	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
+	"reflect"
+	"strings"
 	"time"
 )
 
@@ -68,4 +71,100 @@ func transferFinal(ctx context.Context, tx *sql.Tx, previous, next domain.WorkIt
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE records SET work_item_id=?,payload=? WHERE kind='parent_final_state' AND id=?", next.ID, data, key)
 	return err
+}
+
+// finalAcceptanceSubject accepts a newer revision only through the durable
+// recovery/continuation lineage and the current issue claim. Sharing an Issue
+// number or having a newer proof alone never makes revisions equivalent.
+func finalAcceptanceSubject(ctx context.Context, q queryer, original domain.WorkItem) (domain.WorkItem, error) {
+	var state FinalAcceptanceState
+	key := fmt.Sprintf("r%d-i%d", original.RepositoryID, original.Issue)
+	if err := completionRecord(ctx, q, "parent_final_state", key, &state); errors.Is(err, sql.ErrNoRows) {
+		return original, nil
+	} else if err != nil {
+		return original, err
+	}
+	if state.RecoveryID == "" || state.WorkItemID == original.ID || state.ScopeRevision < original.ScopeRevision {
+		return original, nil
+	}
+	var claim string
+	if err := q.QueryRowContext(ctx, "SELECT work_item_id FROM issue_claims WHERE repository_id=? AND issue=?", original.RepositoryID, original.Issue).Scan(&claim); err != nil {
+		return original, err
+	}
+	if claim != state.WorkItemID {
+		return original, nil
+	}
+	subject, err := read(ctx, q, claim)
+	if err != nil {
+		return original, err
+	}
+	if subject.RepositoryID != original.RepositoryID || subject.Issue != original.Issue || subject.ScopeRevision != state.ScopeRevision || subject.PolicyRevision != original.PolicyRevision {
+		return original, nil
+	}
+	current := subject
+	seen := map[string]bool{}
+	for current.ID != original.ID {
+		if seen[current.ID] {
+			return original, errors.New("persisted final recovery lineage cycle")
+		}
+		seen[current.ID] = true
+		var audit struct {
+			Previous string `json:"previous"`
+		}
+		err := completionRecord(ctx, q, "final_recovery_audit", current.ID, &audit)
+		var previous string
+		if err == nil {
+			previous = audit.Previous
+		} else if errors.Is(err, sql.ErrNoRows) {
+			err = completionRecord(ctx, q, "continued_from", current.ID, &previous)
+			if errors.Is(err, sql.ErrNoRows) {
+				// Older deterministic partial continuations predate continued_from.
+				// Require the exact residual scope before recognizing that legacy link.
+				previous = strings.TrimSuffix(current.ID, "-remaining")
+				if previous == current.ID {
+					return original, nil
+				}
+				parent, err := read(ctx, q, previous)
+				if errors.Is(err, sql.ErrNoRows) {
+					return original, nil
+				}
+				if err != nil {
+					return original, err
+				}
+				var before, after verification.Scope
+				if err = completionRecord(ctx, q, "scope", parent.ID, &before); err != nil {
+					return original, err
+				}
+				if err = completionRecord(ctx, q, "scope", current.ID, &after); err != nil {
+					return original, err
+				}
+				expected := before
+				expected.Included = append([]string{}, before.Remaining...)
+				expected.Remaining = []string{}
+				expected.PreviouslyMerged = append(append([]string{}, before.PreviouslyMerged...), before.Included...)
+				if before.Validate() != nil || len(before.Remaining) == 0 || !reflect.DeepEqual(expected, after) {
+					return original, nil
+				}
+			} else if err != nil {
+				return original, err
+			}
+		} else {
+			return original, err
+		}
+		if previous == "" {
+			return original, nil
+		}
+		parent, err := read(ctx, q, previous)
+		if err != nil {
+			return original, err
+		}
+		if parent.RepositoryID != original.RepositoryID || parent.Issue != original.Issue || parent.ScopeRevision > current.ScopeRevision || parent.PolicyRevision != original.PolicyRevision {
+			return original, nil
+		}
+		current = parent
+	}
+	return subject, nil
+}
+func (s *Store) FinalAcceptanceSubject(ctx context.Context, w domain.WorkItem) (domain.WorkItem, error) {
+	return finalAcceptanceSubject(ctx, s.DB, w)
 }

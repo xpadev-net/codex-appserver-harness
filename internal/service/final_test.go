@@ -498,3 +498,134 @@ func (a rootRepairSplitAgent) Run(ctx context.Context, w domain.WorkItem, op dom
 	}
 	return a.fakeAgents.Run(ctx, w, op, input, schema)
 }
+
+func TestAdoptChildRepairCompletesAncestor(t *testing.T) {
+	c, gh, a, fake := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	a.autoSplit = true
+	a.classification = "spec_ambiguity"
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1, when: func() bool { return gh.closed == 1 }}
+	drive(t, c, 45)
+	var state FinalAcceptanceState
+	if err := c.Store.Record(ctx, "parent_final_state", "r1-i101", &state); err != nil {
+		t.Fatal(err)
+	}
+	repair, err := c.Store.Get(ctx, state.RecoveryID)
+	if err != nil || repair.Phase != domain.Blocked {
+		t.Fatal(state, repair, err)
+	}
+	c.Store.Record(ctx, "scope", repair.ID, &scope)
+	scope.Revision++
+	issue := gh.children[101]
+	issue.Body += "\nclarified requirements"
+	gh.children[101] = issue
+	if err = c.Store.Adopt(ctx, repair.ID, scope.Revision, repair.PolicyRevision, map[string]any{"scope": scope, "source": Source{digest(issue)}, "policy_snapshot": c.policyDigest()}); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 60)
+	c.Store.Record(ctx, "parent_final_state", "r1-i101", &state)
+	if state.State != "completed" {
+		t.Fatal("repair failed", state)
+	}
+	if root := finalState(t, c); root.State != "completed" {
+		t.Fatalf("ancestor stuck after successful child repair adoption: %+v", root)
+	}
+	dependent := domain.WorkItem{ID: "dependent", RepositoryID: 1, Issue: 999, ScopeRevision: 1, PolicyRevision: 1, Phase: domain.Ready}
+	if err = c.Store.ClaimRecords(ctx, dependent, map[string]any{"dependencies": []string{"w"}}); err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := c.Store.DependenciesReady(ctx, dependent.ID); err != nil || !ready {
+		t.Fatal("adopted descendant did not release dependency", ready, err)
+	}
+	var audit map[string]string
+	c.Store.Record(ctx, "final_recovery_audit", repair.ID, &audit)
+	previous := audit["previous"]
+	audit["previous"] = "w-part0"
+	c.Store.Put(ctx, "final_recovery_audit", repair.ID, repair.ID, audit)
+	root, _ := c.Store.Get(ctx, "w")
+	if complete, err := c.splitComplete(ctx, root, map[string]bool{}); err != nil || complete {
+		t.Fatal("unrelated revision accepted as a descendant repair", complete, err)
+	}
+	if ready, err := c.Store.DependenciesReady(ctx, dependent.ID); err != nil || ready {
+		t.Fatal("unrelated revision released dependency", ready, err)
+	}
+	audit["previous"] = previous
+	c.Store.Put(ctx, "final_recovery_audit", repair.ID, repair.ID, audit)
+}
+
+type scriptedFinalJobs struct {
+	*fakeJobs
+	statuses []string
+}
+
+func (j *scriptedFinalJobs) Start(ctx context.Context, s runner.Spec) error {
+	if err := j.fakeJobs.Start(ctx, s); err != nil {
+		return err
+	}
+	if strings.HasPrefix(s.Candidate.ID, "final-") && len(j.statuses) > 0 {
+		r := j.results[s.JobID]
+		r.Status = j.statuses[0]
+		j.statuses = j.statuses[1:]
+		code := 1
+		r.ExitCode = &code
+		r.Reason = "diagnostic"
+		j.results[s.JobID] = r
+	}
+	return nil
+}
+func TestBlockedRecoverySplitAllowsPool(t *testing.T) {
+	c, gh, a, fake := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	c.Agents = rootRepairSplitAgent{a}
+	c.Jobs = &scriptedFinalJobs{fakeJobs: fake, statuses: []string{"failed", "infrastructure_failure"}}
+	drive(t, c, 100)
+	if gh.poolCalls == 0 {
+		items, _ := c.Store.List(ctx)
+		states, _ := c.Store.Records(ctx, "parent_final_state", "")
+		t.Fatalf("pool blocked: items=%+v states=%s", items, states)
+	}
+}
+
+func TestFinalRepairRetainsSplitDepth(t *testing.T) {
+	c, _, a, fake := setup(t)
+	ctx := context.Background()
+	c.Store.Put(ctx, "split_depth", "w", "w", c.Config.Limits.SplitDepth)
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	a.classification = "spec_ambiguity"
+	drive(t, c, 25)
+	state := finalState(t, c)
+	var depth int
+	err := c.Store.Record(ctx, "split_depth", state.RecoveryID, &depth)
+	if err != nil || depth != c.Config.Limits.SplitDepth {
+		t.Fatalf("depth reset: %d %v", depth, err)
+	}
+}
+
+func TestFinalRepairCannotSplitPastInheritedLimit(t *testing.T) {
+	c, gh, agents, fake := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	c.Store.Put(ctx, "split_depth", "w", "w", c.Config.Limits.SplitDepth)
+	c.Agents = rootRepairSplitAgent{agents}
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	drive(t, c, 45)
+	state := finalState(t, c)
+	repair, _ := c.Store.Get(ctx, state.RecoveryID)
+	if repair.Phase != domain.Blocked || !strings.Contains(repair.Reason, "limits") || len(gh.children) != 0 || gh.merges != 1 || gh.closed != 0 {
+		t.Fatal(repair, gh.children, gh.merges, gh.closed)
+	}
+}
