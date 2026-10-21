@@ -100,3 +100,22 @@ func TestOrphanProfileMustStopBeforeResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInvalidLaunchSpecificationCanStillBeResolved(t *testing.T) {
+	s := spec(t)
+	s.Profile.SuccessPattern = ""
+	path := filepath.Join(s.Root, s.JobID+".json")
+	if err := WriteJSON(path, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Launch(context.Background(), "/missing-runner-executable", path); err == nil {
+		t.Fatal("invalid launch accepted")
+	}
+	if _, err := Resolve(context.Background(), s, "not_started", "audit:no-process", "invalid execution spec never launched"); err != nil {
+		t.Fatal("invalid execution profile prevented safe resolution", err)
+	}
+	s.Profile.SuccessPattern = "PASS"
+	if _, err := Execute(context.Background(), s); err == nil {
+		t.Fatal("repairing the profile bypassed the old job's resolution fence")
+	}
+}

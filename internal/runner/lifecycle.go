@@ -62,7 +62,7 @@ func processAlive(p ProcessIdentity) bool {
 	if err == nil {
 		return state != "Z" && state != "X" && (p.StartTicks == 0 || ticks == p.StartTicks)
 	}
-	return !os.IsNotExist(err) // Unreadable identity is uncertainty, never absence.
+	return !os.IsNotExist(err) && !errors.Is(err, syscall.ESRCH) // Unreadable identity is uncertainty, never absence.
 }
 func groupAlive(p ProcessIdentity) (bool, error) {
 	if p.PID <= 0 || (p.BootID != "" && p.BootID != bootID()) {
@@ -81,7 +81,7 @@ func groupAlive(p ProcessIdentity) (bool, error) {
 			continue
 		}
 		state, group, _, err := processStat(pid)
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 			continue
 		}
 		if err != nil {
@@ -134,7 +134,8 @@ func readLifecycle(s Spec) (Lifecycle, error) {
 	if err != nil {
 		return life, err
 	}
-	return life, json.Unmarshal(b, &life)
+	err = json.Unmarshal(b, &life)
+	return life, err
 }
 func saveLifecycle(s Spec, life Lifecycle) error {
 	return WriteJSON(filepath.Join(s.Root, s.JobID+".lifecycle.json"), life)
@@ -154,12 +155,14 @@ func inspectLocked(s Spec) (Lifecycle, error) {
 		life.State = "running"
 		return life, nil
 	}
+	if life.Profile.PID > 0 || life.State == "quiesced" {
+		life.State = "stopped"
+		return life, nil
+	}
 	if _, err := os.Stat(filepath.Join(s.Root, s.JobID)); os.IsNotExist(err) {
 		life.State = "not_started"
 	} else if err != nil {
 		return life, err
-	} else if life.Profile.PID > 0 || life.State == "quiesced" {
-		life.State = "stopped"
 	} else {
 		life.State = "unknown"
 	}
@@ -192,9 +195,6 @@ func Inspect(ctx context.Context, s Spec) (Lifecycle, error) {
 // operator's explicit external quiescence proof; known live processes refuse it.
 // The synthetic infrastructure result is never execution or success evidence.
 func Resolve(ctx context.Context, s Spec, confirmedState, evidence, reason string) (Result, error) {
-	if err := s.Validate(); err != nil {
-		return Result{}, err
-	}
 	if (confirmedState != "not_started" && confirmedState != "stopped") || strings.TrimSpace(evidence) == "" || strings.TrimSpace(reason) == "" {
 		return Result{}, errors.New("confirmed not_started/stopped state, evidence and reason are required")
 	}

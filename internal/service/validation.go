@@ -121,6 +121,9 @@ func (c *Controller) validation(ctx context.Context, w domain.WorkItem, op domai
 		if latest.Terminal() {
 			return c.done(ctx, op, result)
 		}
+		if result.ResolutionEvidence != "" {
+			return c.reject(ctx, w, op, "runner "+result.ResolutionState+" resolved; explicit retry is required")
+		}
 		if result.Status == "infrastructure_failure" && intent.Attempt < c.Config.Limits.RunnerRetries {
 			if err = c.jobBudget(ctx, w.ID); err != nil {
 				return c.reject(ctx, w, op, err.Error())

@@ -1261,3 +1261,42 @@ func TestUnlaunchedIntentCanBeReconciledAndRetried(t *testing.T) {
 		t.Fatal(w, gh.merges, agents.calls, fake.calls)
 	}
 }
+
+func TestEarlyJobResolutionWaitsForExplicitRetry(t *testing.T) {
+	c, _, _, fake := setup(t)
+	ctx := context.Background()
+	jobs := &recoverableJobs{FileJobs: FileJobs{Executable: "/missing-runner-executable"}, fake: fake}
+	c.Jobs = jobs
+	for range 10 {
+		if err := c.Tick(ctx); err != nil {
+			break
+		}
+	}
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Validating {
+		t.Fatal(w)
+	}
+	raw, _ := c.Store.Records(ctx, "job_intent", w.ID)
+	if len(raw) != 1 {
+		t.Fatal(raw)
+	}
+	var intent JobIntent
+	json.Unmarshal(raw[0], &intent)
+	if err := c.ResolveJob(ctx, w.ID, intent.Spec.JobID, "not_started", "audit:before-poll", "confirmed no process"); err != nil {
+		t.Fatal(err)
+	}
+	jobs.allow = true
+	drive(t, c, 3)
+	w, _ = c.Store.Get(ctx, w.ID)
+	if w.Phase != domain.Blocked || fake.calls != 0 || !strings.Contains(w.Reason, "explicit retry") {
+		t.Fatal(w, fake.calls)
+	}
+	if err := c.emit(ctx, w, "operator_retry", "launch repaired"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 25)
+	w, _ = c.Store.Get(ctx, w.ID)
+	if w.Phase != domain.Merged {
+		t.Fatal(w)
+	}
+}

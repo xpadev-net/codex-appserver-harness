@@ -25,7 +25,7 @@ import (
 
 func CLI(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("commands: init, serve, status, inspect, metrics, pause, resume, hold, release, cancel, retry, interrupt, associate, split, adopt, webhook")
+		return errors.New("commands: init, serve, status, inspect, metrics, pause, resume, hold, release, cancel, retry, interrupt, associate, split, adopt, webhook, reconcile-job")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
