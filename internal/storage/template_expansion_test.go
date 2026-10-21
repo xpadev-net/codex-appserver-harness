@@ -1274,3 +1274,60 @@ func TestTemplateExplicitSupersededReviewInputNeedsParentRemapping(t *testing.T)
 		t.Fatal(after, err)
 	}
 }
+
+func TestTemplateExplicitPeerReportNeedsParentRemapping(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := storagePlanFixture()
+	initial, err := store.AdoptPlan(ctx, wave.Target(), "initial", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := store.Task(ctx, initial.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := completeTemplateTask(t, store, work, "candidate", "", nil)
+	a, err := store.Task(ctx, initial.CreatedTaskIDs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportA := completeTemplateTask(t, store, a, "old A report", candidate.Digest, nil)
+	owner := kernelTemplate()
+	owner.InputTaskID = "review-B"
+	plan.Templates = []contract.FixReviewTemplate{owner}
+	b := contract.TaskSpec{ID: "review-B", Kind: "review", Instruction: "review candidate using A report", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: "work"}}, InputArtifactIDs: []string{reportA.ID}}
+	plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "B", Tasks: []contract.TaskSpec{b}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{b.ID}}, FailurePolicy: "drain_and_block"})
+	admitted, err := store.AdoptPlan(ctx, wave.Target(), "add-B", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskB, err := store.Task(ctx, admitted.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeTemplateTask(t, store, taskB, "B findings", candidate.Digest, []string{"artifact_defect"})
+	before, err := store.Wave(ctx, wave.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasksBefore, err := store.Tasks(ctx, wave.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: admitted.Target, ReviewTaskID: taskB.ID}); !errors.Is(err, ErrTemplateNeedsMain) {
+		t.Fatal("fresh B retained an explicit superseded A report", err)
+	}
+	after, err := store.Wave(ctx, wave.ID)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("expansion budget/version survived rejection", after, err)
+	}
+	tasksAfter, err := store.Tasks(ctx, wave.ID)
+	if err != nil || !reflect.DeepEqual(tasksBefore, tasksAfter) {
+		t.Fatal("partial generated Tasks survived rejection", err)
+	}
+}

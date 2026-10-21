@@ -606,6 +606,9 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 				return plan, reviewRoots, err
 			}
 			for _, id := range source.Spec.InputArtifactIDs {
+				if replacedReports[id] {
+					return plan, reviewRoots, fmt.Errorf("%w: explicit superseded peer report needs parent remapping", ErrTemplateNeedsMain)
+				}
 				explicitInputs[id] = true
 			}
 			for _, dep := range source.Spec.DependsOn {
