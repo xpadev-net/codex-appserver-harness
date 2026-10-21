@@ -35,6 +35,7 @@ func CLI(ctx context.Context, args []string) error {
 	file := fs.String("file", "", "proposal or scope JSON")
 	operation := fs.String("operation", "", "operation/run ID")
 	evidence := fs.String("evidence", "", "reconciled absence evidence reference")
+	jobState := fs.String("job-state", "", "externally confirmed not_started or stopped state")
 	turn := fs.String("turn", "", "saved external turn ID")
 	listen := fs.String("listen", "127.0.0.1:8080", "webhook bind address")
 	repo := fs.String("repo", "", "GitHub OWNER/REPOSITORY")
@@ -77,12 +78,32 @@ func CLI(ctx context.Context, args []string) error {
 			return err
 		}
 		out := map[string]any{"work_item": w}
-		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence"} {
+		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution"} {
 			records, err := s.Records(ctx, kind, w.ID)
 			if err != nil {
 				return err
 			}
 			out[kind] = records
+		}
+		if api, ok := controller.Jobs.(JobReconciler); ok {
+			raw, err := s.Records(ctx, "job_intent", w.ID)
+			if err != nil {
+				return err
+			}
+			observed := map[string]any{}
+			for _, data := range raw {
+				var intent JobIntent
+				if err = json.Unmarshal(data, &intent); err != nil {
+					return err
+				}
+				life, err := api.Inspect(ctx, intent.Spec)
+				if err != nil {
+					observed[intent.Spec.JobID] = map[string]string{"state": "unknown", "error": err.Error()}
+				} else {
+					observed[intent.Spec.JobID] = life
+				}
+			}
+			out["observed_runner_lifecycle"] = observed
 		}
 		return encode(out)
 	case "gc":
@@ -175,6 +196,11 @@ func CLI(ctx context.Context, args []string) error {
 		}
 		event.Kind = "operator_retry"
 		return s.Apply(ctx, event)
+	case "reconcile-job":
+		if *operation == "" {
+			return errors.New("--operation job ID is required")
+		}
+		return controller.ResolveJob(ctx, w.ID, *operation, *jobState, *evidence, *reason)
 	case "cancel-job":
 		if *operation == "" || *reason == "" {
 			return errors.New("--operation and --reason are required")

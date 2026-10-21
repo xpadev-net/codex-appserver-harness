@@ -1202,3 +1202,62 @@ func TestBaseRefreshCannotValidateMissingTestReferences(t *testing.T) {
 		t.Fatal(w, jobs.calls, gh.merges)
 	}
 }
+
+type recoverableJobs struct {
+	FileJobs
+	fake  *fakeJobs
+	allow bool
+}
+
+func (j *recoverableJobs) Start(ctx context.Context, s runner.Spec) error {
+	if j.allow {
+		return j.fake.Start(ctx, s)
+	}
+	return j.FileJobs.Start(ctx, s)
+}
+func (j *recoverableJobs) Read(s runner.Spec) (runner.Result, error) {
+	if r, ok := j.fake.results[s.JobID]; ok {
+		return r, nil
+	}
+	return j.FileJobs.Read(s)
+}
+func TestUnlaunchedIntentCanBeReconciledAndRetried(t *testing.T) {
+	c, gh, agents, fake := setup(t)
+	ctx := context.Background()
+	jobs := &recoverableJobs{FileJobs: FileJobs{Executable: "/missing-runner-executable"}, fake: fake}
+	c.Jobs = jobs
+	for range 10 {
+		if err := c.Tick(ctx); err != nil {
+			break
+		}
+	}
+	drive(t, c, 1)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Blocked || !strings.Contains(w.Reason, "not_started") {
+		t.Fatal(w)
+	}
+	raw, _ := c.Store.Records(ctx, "job_intent", w.ID)
+	if len(raw) != 1 {
+		t.Fatal(raw)
+	}
+	var intent JobIntent
+	json.Unmarshal(raw[0], &intent)
+	if intent.Launched {
+		t.Fatal("fixture launched unexpectedly")
+	}
+	if err := c.ResolveJob(ctx, w.ID, intent.Spec.JobID, "not_started", "audit:confirmed-no-process", "launch failure fixed"); err != nil {
+		t.Fatal(err)
+	}
+	if busy, err := c.runnerBusy(ctx, ""); err != nil || busy {
+		t.Fatal("resolved intent kept runner slot", busy, err)
+	}
+	jobs.allow = true
+	if err := c.emit(ctx, w, "operator_retry", "runner launch repaired"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 25)
+	w, _ = c.Store.Get(ctx, "w")
+	if w.Phase != domain.Merged || gh.merges != 1 || agents.calls != 2 || fake.calls != 2 {
+		t.Fatal(w, gh.merges, agents.calls, fake.calls)
+	}
+}

@@ -87,6 +87,19 @@ func (c *Controller) validation(ctx context.Context, w domain.WorkItem, op domai
 		}
 		result, readErr := c.Jobs.Read(intent.Spec)
 		if os.IsNotExist(readErr) {
+			if api, ok := c.Jobs.(JobReconciler); ok {
+				life, err := api.Inspect(ctx, intent.Spec)
+				if err != nil {
+					return err
+				}
+				if err = c.Store.Put(ctx, "runner_lifecycle", intent.Spec.JobID, w.ID, life); err != nil {
+					return err
+				}
+				if life.State == "not_started" || life.State == "stopped" || life.State == "unknown" {
+					return c.reject(ctx, w, op, "runner "+life.State+"; inspect process state and use reconcile-job with confirmed state and evidence before retry")
+				}
+			}
+
 			if time.Since(intent.Started) > time.Duration(intent.Spec.Profile.TimeoutSeconds+300)*time.Second {
 				return c.reject(ctx, w, op, "runner result unknown; reconcile orphan job before retry")
 			}
