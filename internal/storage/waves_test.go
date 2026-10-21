@@ -196,6 +196,14 @@ func TestPlanCarriesOnlyMatchingCompletedResultBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	artifacts := map[string]domain.Artifact{}
+	for _, id := range first.CreatedTaskIDs {
+		task, err := store.Task(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifacts[id] = mustImport(t, store, ArtifactImport{SessionID: task.SessionID, Target: task.Target(), Key: "output", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: task.ID}}, "output "+task.ID)
+	}
 	tx, err := store.DB.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -203,6 +211,11 @@ func TestPlanCarriesOnlyMatchingCompletedResultBindings(t *testing.T) {
 	for _, id := range first.CreatedTaskIDs {
 		task, err := loadTask(ctx, tx, id)
 		if err != nil {
+			t.Fatal(err)
+		}
+		artifact := artifacts[task.ID]
+		result := contract.TaskResult{SchemaVersion: 1, Target: task.Target(), PhaseID: task.PhaseID, TaskID: task.ID, Outcome: "result", Artifacts: []string{artifact.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "observed", EvidenceIDs: []string{artifact.ID}}}}
+		if err = kernelRecordTx(ctx, tx, "task_result", "result-"+task.ID, task.ID, result); err != nil {
 			t.Fatal(err)
 		}
 		task.State = contract.TaskCompleted
