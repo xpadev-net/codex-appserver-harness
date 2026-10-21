@@ -71,6 +71,7 @@ type Wave struct {
 	Reason                string          `json:"reason"`
 	CreatedAt             time.Time       `json:"created_at"`
 	Deadline              time.Time       `json:"deadline"`
+	CompletedAt           time.Time       `json:"completed_at"`
 	PhasesCreated         int             `json:"phases_created"`
 	TasksCreated          int             `json:"tasks_created"`
 	Replans               int             `json:"replans"`
