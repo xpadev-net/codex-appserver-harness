@@ -270,9 +270,11 @@ func (k *KernelStore) waveEventTx(ctx context.Context, tx *sql.Tx, w domain.Wave
 	if err != nil {
 		return err
 	}
-	// A durable fanout intent is written with every state transition. Task_3
-	// consumes it atomically with the corresponding subscriber notifications.
-	return kernelRecordTx(ctx, tx, "notification_intent", eventID, w.ID, map[string]any{"event_id": eventID, "sequence": sequence, "target": w.Target(), "task_id": taskID, "kind": kind})
+	intent := notificationIntent{EventID: eventID, Sequence: sequence, Target: w.Target(), TaskID: taskID, Kind: kind}
+	if err = kernelRecordTx(ctx, tx, "notification_intent", eventID, w.ID, intent); err != nil {
+		return err
+	}
+	return k.fanoutNotificationTx(ctx, tx, intent)
 }
 
 type PlanAdmission struct {
@@ -500,6 +502,11 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 			old.Reason = fmt.Sprintf("superseded by adopted plan %d", revision)
 			old.CompletedAt = k.clock()
 			if err = saveTask(ctx, tx, old); err != nil {
+				return receipt, err
+			}
+			// Existing subscribers belong to the outgoing plan. Save their
+			// cancellation observation before switching the Wave's revision.
+			if err = k.waveEventTx(ctx, tx, wave, "task_canceled", old.ID, old.ID+":canceled", ResultApplication{TaskID: old.ID, Target: old.Target(), State: old.State, Reason: old.Reason}); err != nil {
 				return receipt, err
 			}
 		}

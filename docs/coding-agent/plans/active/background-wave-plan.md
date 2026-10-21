@@ -1,6 +1,6 @@
 # Plan: Background Waveの実装
 
-- status: draft
+- status: in_progress
 - document_version: 0.4
 - generated: 2026-10-22
 - last_updated: 2026-10-22
@@ -10,7 +10,7 @@
 
 大きな依頼をWave→Phase→Taskへ分解し、各Taskに使い捨てsessionを割り当てる。Taskは親と共通runtimeを使ってWave呼び出しだけを禁止し、実行中は親子メッセージと通知で再開する。完了後のfix・再レビューは新Task/sessionへ引き渡す。
 本計画を含むPRの範囲は要件・差分・設計・計画の改訂までとする。
-Task_0/1は完了（PR #54/#55）。Task_2は新DB基盤（PR #56）、plan/session永続化（PR #57）、不変Artifact（PR #58）、成果適用（PR #59）に続きKの有界展開transactionを実装中。runtimeの自動分岐・品質gate接続はTask_7で行う。Task_3〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
+Task_0/1/2は完了（PR #54〜60）。Task_3は永続購読・終端通知のtransactionから実装中。runtimeの自動分岐・品質gate接続はTask_7で行う。Task_4〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
 
 ## Definition of Done
 
@@ -79,7 +79,7 @@ Task_0/1は完了（PR #54/#55）。Task_2は新DB基盤（PR #56）、plan/sess
 
 ## Tasks
 
-Task_0/1はcompleted、Task_2はin_progress、Task_3〜13はpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。未実装Taskの検証コマンドを実行済みとは扱わない。
+Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。未実装Taskの検証コマンドを実行済みとは扱わない。
 下記の`rtk`はこのrepositoryでのコマンド実行prefixである。
 
 ### Task_0: 先行成立確認（S）
@@ -139,8 +139,8 @@ Task_0/1はcompleted、Task_2はin_progress、Task_3〜13はpending。指定owns
 
 ### Task_2: Wave/Phase/Task・成果と新DBのschema基盤
 
-- status: in_progress
-- split: PR #56でversion/schema・domain・migration registryを追加。PR #57でplan/sessionのtransactionを追加。PR #58で不変Artifactを追加。PR #59で成果適用を追加。最後にKの有界展開transactionを実装する。自動分岐・品質gateとPの検証adapterはTask_7/8で接続する。Task_12の既存作業移行はまだ行わない。
+- status: completed
+- split: PR #56でversion/schema・domain・migration registryを追加。PR #57でplan/sessionのtransactionを追加。PR #58で不変Artifactを追加。PR #59で成果適用を追加。PR #60でKの有界展開transactionを実装し、最終Codex review指摘なし・全体/race/vet/build/CI後にmerge。自動分岐・品質gateとPの検証adapterはTask_7/8で接続する。Task_12の既存作業移行はまだ行わない。
 - type: impl
 - owns:
   - internal/domain/wave.go
@@ -183,6 +183,8 @@ Task_0/1はcompleted、Task_2はin_progress、Task_3〜13はpending。指定owns
 
 ### Task_3: 永続購読・親子受信箱・再開intent
 
+- status: in_progress
+- split: 最初のPRはKのTask/Wave終端購読・原子的通知fanout・登録時snapshot・再照合・配送ackの保存まで。wake/run binding・判断適用・親子受信箱・kernel tool認可は後続PRで接続し、Task_3全体完了とはしない。
 - type: impl
 - owns:
   - internal/storage/notifications.go
