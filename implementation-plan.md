@@ -178,7 +178,7 @@ cacheの維持を目的とするkeepaliveやプロセス常駐は要求しない
 
 ### 3.2 tool operationの境界
 
-親とTaskは共通session runtime・tool gatewayを使う。初期toolはWave呼び出し、Taskへの指示、待機条件登録、状態取得、親子メッセージ、PR作成・更新、レビュー依頼とする。
+親とTaskは共通session runtime・tool gatewayを使う。Kの初期toolはWave呼び出し、Taskへの指示、待機条件登録、状態取得、成果参照、親子メッセージとする。PR作成・更新およびCloud review依頼のtoolはPで追加する。
 Waveの作成・実行・再分割等、入れ子Waveを生む呼び出しは親だけに公開し、Taskには公開しない。controllerも実際のsession/親子bindingから認可し、非公開tool名・別名・中継要求を拒否する。
 Taskは必要な再分割・独立レビューを親へメッセージで依頼できる。Wave/Phase/Taskの構造変更は親の管理操作とし、メッセージ本文だけでは適用しない。
 名称・入力・応答はTask_0の成立確認を経てTask_1で版付きschemaとして固定する。KではWave・待機・状態・成果参照・親子messageのgatewayを提供し、PでPR操作handlerを追加する。
