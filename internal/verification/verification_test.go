@@ -58,6 +58,28 @@ func TestAssessmentRoutesAndBudget(t *testing.T) {
 		t.Fatal("repair budget")
 	}
 }
+func TestNoActionRequiresCompleteEvidence(t *testing.T) {
+	_, c, _, _ := fixtures()
+	for _, tc := range []struct {
+		name  string
+		ids   []string
+		valid bool
+	}{
+		{"partial", []string{"finding-a"}, false},
+		{"complete", []string{"finding-b", "finding-a"}, true},
+		{"duplicate", []string{"finding-a", "finding-a"}, false},
+		{"unknown", []string{"finding-a", "unknown"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := Assessment{SchemaVersion: 1, WorkItemID: "w", CandidateID: c.ID, ScopeRevision: c.ScopeRevision, Classification: "no_action", EvidenceIDs: tc.ids, Reason: "no defect", ExpectationBasis: "AC1"}
+			_, err := a.Route("w", c, []string{"finding-a", "finding-b"})
+			if (err == nil) != tc.valid {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestVerificationChangePolicy(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
