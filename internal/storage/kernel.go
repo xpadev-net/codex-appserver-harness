@@ -38,6 +38,13 @@ func OpenKernel(path string) (*KernelStore, error) {
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return nil, errors.New("kernel DB must be a regular file")
 	}
+	inspected, err := inspectDatabaseFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if inspected != 0 && inspected != KernelSchemaVersion {
+		return nil, fmt.Errorf("kernel refuses schema %d; explicit offline migration required", inspected)
+	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err

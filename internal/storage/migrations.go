@@ -5,7 +5,36 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 )
+
+// Inspect existing files using a read-only SQLite connection so rejecting an
+// unknown/legacy DB cannot checkpoint its WAL or change file permissions.
+func inspectDatabaseFile(path string) (int, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if info.Size() == 0 {
+		return 0, nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return 0, err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: absolute, RawQuery: "mode=ro&_busy_timeout=5000"}).String()
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	return databaseVersion(db)
+}
 
 // databaseVersion inspects before any DDL or journal-mode changes. Version zero
 // denotes a truly empty SQLite database, never an unrecognized existing schema.

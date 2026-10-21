@@ -18,12 +18,15 @@ type Store struct{ DB *sql.DB }
 
 func Open(path string) (*Store, error) {
 	if path != ":memory:" {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		version, err := inspectDatabaseFile(path)
 		if err != nil {
 			return nil, err
 		}
-		if err = file.Chmod(0600); err != nil {
-			file.Close()
+		if version != 0 && version != 1 {
+			return nil, fmt.Errorf("legacy runtime does not support schema version %d", version)
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
 			return nil, err
 		}
 		if err = file.Close(); err != nil {
@@ -42,6 +45,12 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("legacy runtime does not support schema version %d", version)
+	}
+	if path != ":memory:" {
+		if err = os.Chmod(path, 0600); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	s := &Store{db}
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
