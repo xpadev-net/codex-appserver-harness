@@ -56,7 +56,7 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 	if err := output.Flush(); err != nil {
 		return "", err
 	}
-	text := cleanDiagnosticText(string(tail.data))
+	text := runner.RedactText(cleanDiagnosticText(string(tail.data)))
 	if text != "" {
 		return text, nil
 	}

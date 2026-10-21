@@ -90,7 +90,7 @@ case "$*" in
  *"annotations?per_page=100"*) printf '%s' '[[]]' ;;
  *"actions/jobs/456/logs"*)
   case "$*" in *"--allow-escape-sequences"*) ;; *) exit 19 ;; esac
-  printf '\033[32massertion expected true, got false; credential=%s\033[0m\n' "$GH_TOKEN" ;;
+  printf '\033[32massertion expected true, got false; credential=private-controller-\033[0mtest-token\n' ;;
  *) exit 12 ;;
 esac
 `
