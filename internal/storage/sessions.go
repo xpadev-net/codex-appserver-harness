@@ -198,6 +198,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	if active != "" || stopped != 0 || creating != 0 {
 		return errors.New("exclusive prepared process required before turn start")
 	}
+	if err = k.bindWakeRunTx(ctx, tx, b, snapshot, run); err != nil {
+		return err
+	}
 	if b.Kind == "task" {
 		task, err := loadTask(ctx, tx, b.TaskID)
 		if err != nil {
@@ -467,6 +470,13 @@ func (k *KernelStore) ArchiveSessionRun(ctx context.Context, sessionID, runID, r
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET active_run_id='' WHERE id=? AND active_run_id=? AND process_stopped=1", sessionID, runID); err != nil {
+		return err
+	}
+	wakeOutcome := "archived"
+	if !binding.Closed && (state == "failed" || state == "interrupted") {
+		wakeOutcome = "failed"
+	}
+	if err = k.finishWakeTx(ctx, tx, sessionID, runID, wakeOutcome); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -330,6 +330,13 @@ func (k *KernelStore) finishTaskResultTx(ctx context.Context, tx *sql.Tx, b cont
 	if _, err := tx.ExecContext(ctx, "UPDATE kernel_sessions SET active_run_id='' WHERE id=? AND active_run_id=? AND process_stopped=1", b.ID, receipt.RunID); err != nil {
 		return err
 	}
+	wakeOutcome := "archived"
+	if result != nil && !receipt.Archived {
+		wakeOutcome = "applied"
+	}
+	if err := k.finishWakeTx(ctx, tx, b.ID, receipt.RunID, wakeOutcome); err != nil {
+		return err
+	}
 	wave, err := loadWave(ctx, tx, task.WaveID)
 	if err != nil {
 		return err
