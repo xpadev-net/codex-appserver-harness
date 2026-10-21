@@ -121,16 +121,18 @@ func TestLiveDynamicToolResume(t *testing.T) {
 	obs["controller_paths_hidden"] = true
 	// A 401 is observed, not inferred from a failed command or absent token.
 	ghEnv := append(append([]string{}, environment...), "GH_TOKEN=unauthenticated-boundary-probe")
+	githubStatuses := map[string]string{}
 	for _, endpoint := range []string{"user", "repos/xpadev-net/codex-appserver-harness"} {
 		cmd := exec.CommandContext(ctx, launcher, "gh", "api", endpoint, "-H", "Authorization:", "--jq", "has(\"permissions\")")
 		cmd.Env = ghEnv
-		_, err = cmd.Output()
-		exit, ok := err.(*exec.ExitError)
-		if !ok || !regexp.MustCompile(`HTTP 401`).Match(exit.Stderr) {
+		body, runErr := cmd.Output()
+		status, allowed := anonymousGitHubBoundary(endpoint, body, runErr)
+		githubStatuses[endpoint] = status
+		obs["github_boundary_status"] = githubStatuses
+		if !allowed {
 			t.Fatal("GitHub credential boundary is inconclusive; no model turn started")
 		}
 	}
-	obs["github_unauthenticated_api_status"] = 401
 	args := []string{binary, "app-server", "--listen", "stdio://", "--disable", "goals", "--disable", "multi_agent", "--disable", "multi_agent_v2"}
 	stopped := map[*codex.Client]bool{}
 	stop := func(client *codex.Client) {
@@ -220,6 +222,38 @@ func TestLiveDynamicToolResume(t *testing.T) {
 	obs["second_process_stopped"] = true
 	obs["stage"] = "completed"
 	obs["state"] = "verified"
+}
+
+func anonymousGitHubBoundary(endpoint string, body []byte, err error) (string, bool) {
+	if exit, ok := err.(*exec.ExitError); ok && regexp.MustCompile(`HTTP 401`).Match(exit.Stderr) {
+		return "http_401", true
+	}
+	if strings.HasPrefix(endpoint, "repos/") && err == nil && strings.TrimSpace(string(body)) == "false" {
+		return "anonymous_public_metadata", true
+	}
+	return "inconclusive_or_authenticated", false
+}
+
+func TestAnonymousGitHubBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, body string
+		err                  error
+		allowed              bool
+	}{
+		{"user_unauthenticated", "user", "", &exec.ExitError{Stderr: []byte("HTTP 401")}, true},
+		{"repository_unauthenticated", "repos/owner/repo", "", &exec.ExitError{Stderr: []byte("HTTP 401")}, true},
+		{"public_metadata", "repos/owner/repo", "false\n", nil, true},
+		{"repository_permissions", "repos/owner/repo", "true\n", nil, false},
+		{"authenticated_user", "user", "false\n", nil, false},
+		{"transport_failure", "repos/owner/repo", "false", fmt.Errorf("transport failed"), false},
+		{"forbidden_is_not_anonymous", "user", "", &exec.ExitError{Stderr: []byte("HTTP 403")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, allowed := anonymousGitHubBoundary(tc.endpoint, []byte(tc.body), tc.err); allowed != tc.allowed {
+				t.Fatal("incorrect boundary classification")
+			}
+		})
+	}
 }
 
 type spikeTurnEvidence struct {

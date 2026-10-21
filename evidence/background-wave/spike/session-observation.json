@@ -4,7 +4,7 @@
   "authentication_subject_sha256": "2d82e5214f175f78ad121f2fa868bc8b51383b2a45d8fde58d9507c207318d97",
   "authentication_type": "chatgpt",
   "binary_version": "codex-cli 0.163.0",
-  "completed_turns": 2,
+  "completed_turns": 0,
   "controller_paths_hidden": true,
   "credential_values_recorded": false,
   "executed_tests": 1,
@@ -15,51 +15,27 @@
     "v2/ThreadResumeParams.json": "8152ea774ace4eb5623081abd64a1135f28cbff1e73ca641cfb80ac16f6eed32",
     "v2/ThreadStartParams.json": "80a40a7fac15b4bf70efb7f893fb353acc0a0d30c68f54aee4f01923deca85de"
   },
-  "first_process_stopped": true,
-  "github_unauthenticated_api_status": 401,
+  "github_boundary_status": {
+    "repos/xpadev-net/codex-appserver-harness": "http_401",
+    "user": "http_401"
+  },
   "last_turn": {
-    "thread_id": "01a15fcd-d1c9-7131-9ec3-a77f913f848b",
-    "turn_id": "01a15fcd-ea09-7a10-a20c-9070833606f0",
-    "call_id": "exec-9b7cccd8-afd3-4d65-97af-b579e9752e20",
+    "thread_id": "01a15fd0-996c-7f40-8d60-1a43dd031930",
+    "turn_id": "01a15fd0-9a35-7050-8f6a-898e43c42b5a",
+    "call_id": "exec-12fabcec-3092-46f6-b1cf-284258ab6d56",
     "tool_request_id": 0,
-    "turn_start_request_id": 101,
+    "turn_start_request_id": 100,
     "response_sent": true,
     "tool_completed": true,
-    "acknowledgement_verified": true,
+    "acknowledgement_verified": false,
     "status": "completed"
   },
   "launcher": "scripts/isolate-linux",
   "launcher_sha256": "13d738b10f13a37c472f499c7c6e05317311796802bdad36faa5261c7bff75c9",
   "model": "gpt-6.1-sol",
-  "observed_at": "2026-10-21T18:51:23.75008646Z",
+  "observed_at": "2026-10-21T18:54:25.921754005Z",
   "output_schema_fallback": false,
-  "resumed_history_verified": true,
-  "second_process_stopped": true,
-  "stage": "completed",
-  "state": "verified",
-  "thread_id": "01a15fcd-d1c9-7131-9ec3-a77f913f848b",
-  "turns": [
-    {
-      "thread_id": "01a15fcd-d1c9-7131-9ec3-a77f913f848b",
-      "turn_id": "01a15fcd-d246-78e0-ae7a-3a975d152d93",
-      "call_id": "exec-72ff3945-6b9d-47bb-a0f4-1681f1f9dfdb",
-      "tool_request_id": 0,
-      "turn_start_request_id": 100,
-      "response_sent": true,
-      "tool_completed": true,
-      "acknowledgement_verified": true,
-      "status": "completed"
-    },
-    {
-      "thread_id": "01a15fcd-d1c9-7131-9ec3-a77f913f848b",
-      "turn_id": "01a15fcd-ea09-7a10-a20c-9070833606f0",
-      "call_id": "exec-9b7cccd8-afd3-4d65-97af-b579e9752e20",
-      "tool_request_id": 0,
-      "turn_start_request_id": 101,
-      "response_sent": true,
-      "tool_completed": true,
-      "acknowledgement_verified": true,
-      "status": "completed"
-    }
-  ]
+  "stage": "first_turn_unknown_until_completed",
+  "state": "unknown",
+  "thread_id": "01a15fd0-996c-7f40-8d60-1a43dd031930"
 }
