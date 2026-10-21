@@ -1,13 +1,34 @@
 # Background Waveへの要件差分
 
 - 更新日: 2026-10-22（Asia/Tokyo）
-- 調査基点: `fd9f745`
+- 調査基点: `7dfa964`（v0.3文書反映後。runtimeは`fd9f745`と同一）
 - 役割: 既存要件と実装の差分、採用・変更・保留の判断根拠。
 - 要件の原本: [要件定義書](../requirements.md)。設計: [実装計画書](../implementation-plan.md)。実装順序: [実行計画](coding-agent/plans/active/background-wave-plan.md)。
 
 大きな依頼をWave→Phase→Taskとして保持し、Taskごとの使い捨てsessionが仕事を進め、実行中の待機後はイベントで再開する体験を中心へ移す。
 現行実装にはthread再利用と個別turnの完了通知があるため、その基盤を活かす。
 Wave全体を管理するLLMセッション、永続購読、tool callに伴う自動購読、並行schedulerは追加する。
+
+## v0.4で反映するレビューと判断
+
+v0.3の要件・設計・計画に対する文書レビューと、`7dfa964`の実装レビューを照合した。以下は改訂案であり、実装完了や実接続の成功ではない。
+
+| 指摘 | 採る変更 | 追跡 |
+| --- | --- | --- |
+| dynamic toolの実往復が未検証のまま後段へ進む | S / Task_0で先行確認。未成立は依存runtimeを保留し、要求配列方式へ自動fallbackしない | #46、AT-050 |
+| 初期完成がCloud/merge・移行と一体 | S/K/P/Mへ分離。KはPRなしの新DBで独立受入、P/Mと全体完成の要件は保持 | #48、要件§2.2/11 |
+| Phase条件・失敗・反復が曖昧 | all_success、drain_and_block、明示Task終端、有界fix_review templateを定義。例外だけ親の再計画 | #47、FR-038、AT-052〜054 |
+| 汎用Taskと大きな成果を表現できない | WorkItem参照0件以上、controller管理Artifact、digest/容量/出所/権限/保持、参照渡し | #48、FR-006、AT-051 |
+| 親の構造生成・費用・時間が無制限 | Phase/Task・親turn/再計画・Attempt/反復・期限/容量に既定値と原子的計数 | #49、FR-039、AT-055 |
+| main文脈の増大・履歴欠落 | 上限付きsnapshotとWave境界、DB/成果から再構成、旧run照合後の監査付きmain復旧 | #50、FR-040、AT-058 |
+| 並行PRの競合・外部messageの中継 | 既存base更新処理を新fix Task方式へ接続し、共有Git排他と出所/認可を試験 | #40/#41/#42、AT-056/057 |
+| process常駐・優先操作・性能の未定義 | 待機process停止、pause/cancel/steer/interruptの表、通知p95とRSS/cold startを観測 | #37/#38、NFR-012/013、AT-059 |
+
+migrationはFR-034の保持要求を維持し、schema基盤（Task_2）とlegacy作業移行（Task_12）を分ける。実DBの有無は導入前に確認し、移行対象がない場合はfixture合格と実移行not_applicableを別に記録する。
+Phaseの順次barrierは初期方式として維持する。Task成果依存を別fieldにし、将来pipelineを追加する場合はschema版で扱う。quorum/任意fan-out/任意JSは今回追加しない。
+現行initにはログ30日・容量1 GiB・照合60秒等があるため、「すべての既定値がない」とは扱わず、新Wave設定へ引き継ぐ値と新たな提案値を区別する。
+
+起票済みの未実装Taskは#34〜#43。現行コードで再現した部分no_actionによる未評価指摘の解決（#44）と、全範囲merge後の要求変更の復旧不能（#45）はコード修正が必要であり、この文書改訂で閉じない。
 
 ## 要求の根拠と設計判断
 
@@ -102,7 +123,7 @@ Phaseの順次進行とPhase内Taskの並行実行を初期設計に採用する
 - 既存role threadは履歴を保存し、実行中のものだけを移行Taskへ結び付ける。終了済みthreadは後続へ再利用しない。
 - Taskへ親と同じruntimeを用い、Wave呼び出しを禁止する。再分割や独立レビューは親へmessageで依頼する。
 - 直列実行は初期固定制約から設定値へ変更し、並行実行を初期完成条件へ昇格する。
-- Issue取得を唯一の入口にせず、直接依頼にも要求・coverage・WorkItemを持たせる。
+- Issue取得を唯一の入口にせず、直接依頼にも要求・coverage・汎用成果を持たせる。WorkItemは製品/PR成果がある場合に関連付ける。
 - 全体進行をtimerに依存させず、イベントとローカルIPCを通常経路にする。
 - PR作成をtool operationとして呼べるようにし、手動のsubscribe忘れを防ぐ。
 
@@ -114,8 +135,8 @@ Phaseの順次進行とPhase内Taskの並行実行を初期設計に採用する
 
 ## 完成を確認する差分
 
-AT-031〜049を追加し、Task DAG、並行性、購読と完了の競合、crash後の通知、同一threadの二重起動抑止、方向修正、移行、自動購読、Wave/Phase/Task所属、使い捨てsession、Wave呼び出し禁止、親子messageを確認する。
-最小の実演は「直接依頼→実装Phaseの独立Task→レビューPhase→fix Phaseの新Task→PR作成tool→通知待機→親子messageと未完了Taskの再開」とする。
-Cloudの正式承認等がunknownなら実演はそこで保留し、Wave全体や自動mergeの完成とは報告しない。
+AT-031〜059をK/P/Mの適用と別々の証拠で確認し、Task DAG、並行性、購読と完了の競合、crash後の通知、同一threadの二重起動抑止、方向修正、移行、自動購読、Wave/Phase/Task所属、使い捨てsession、Wave呼び出し禁止、親子messageを確認する。
+Kの最小実演は「直接依頼→汎用成果を作る独立Task 2件→レビュー→templateの新fix/review Task→報告、親子messageと通知再開」とする。PではPR作成tool→自動購読→外部通知→正式承認・mergeを追加する。
+Cloudの正式承認等がunknownならPと製品Waveは保留する。Kの合格は独立して記録できるが、自動mergeや全体完成とは報告しない。
 
-このPRは文書改訂であり、AT-031〜049の合格や新runtimeの完成を主張しない。
+この改訂は文書のみであり、AT-031〜059の合格や新runtimeの完成を主張しない。
