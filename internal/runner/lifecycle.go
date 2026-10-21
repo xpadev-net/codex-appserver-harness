@@ -188,6 +188,16 @@ func Inspect(ctx context.Context, s Spec) (Lifecycle, error) {
 		return Lifecycle{}, err
 	}
 	defer lock.Close()
+	// Completion can be published between the optimistic read and this lock.
+	if r, err := LoadResult(s.Root, s.JobID); err == nil {
+		state := "completed"
+		if r.ResolutionEvidence != "" {
+			state = "resolved"
+		}
+		return Lifecycle{State: state}, nil
+	} else if !os.IsNotExist(err) {
+		return Lifecycle{}, err
+	}
 	return inspectLocked(s)
 }
 

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,5 +118,37 @@ func TestInvalidLaunchSpecificationCanStillBeResolved(t *testing.T) {
 	s.Profile.SuccessPattern = "PASS"
 	if _, err := Execute(context.Background(), s); err == nil {
 		t.Fatal("repairing the profile bypassed the old job's resolution fence")
+	}
+}
+
+func TestCompletionPublicationCannotBeInspectedAsStopped(t *testing.T) {
+	s := spec(t)
+	ctx := context.Background()
+	for i := 0; i < 250; i++ {
+		s.JobID = fmt.Sprintf("completion%d", i)
+		lock, err := jobLock(ctx, s, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Mkdir(filepath.Join(s.Root, s.JobID), 0700); err != nil {
+			lock.Close()
+			t.Fatal(err)
+		}
+		if err = saveLifecycle(s, Lifecycle{State: "quiesced"}); err != nil {
+			lock.Close()
+			t.Fatal(err)
+		}
+		observed := make(chan Lifecycle, 1)
+		failures := make(chan error, 1)
+		go func(spec Spec) { life, err := Inspect(ctx, spec); observed <- life; failures <- err }(s)
+		if err = WriteJSON(filepath.Join(s.Root, s.JobID, "result.json"), Result{JobID: s.JobID, Status: "passed"}); err != nil {
+			lock.Close()
+			t.Fatal(err)
+		}
+		lock.Close()
+		life, err := <-observed, <-failures
+		if err != nil || (life.State != "completed" && life.State != "running") {
+			t.Fatal("completion race misclassified", life, err)
+		}
 	}
 }
