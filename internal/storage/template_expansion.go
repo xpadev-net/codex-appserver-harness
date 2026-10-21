@@ -538,6 +538,11 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	// fixes cannot race or produce competing replacements for one candidate.
 	origins := map[string][]string{}
 	peerOutputs := map[string]bool{}
+	replacedReports := map[string]bool{}
+	sourceReviewIDs := map[string]bool{}
+	for _, local := range sourceLocals {
+		sourceReviewIDs[structureID("task-", wave.ID, local)] = true
+	}
 	sourcePositions := map[string]int{}
 	for position, phase := range current.Phases {
 		for _, spec := range phase.Tasks {
@@ -556,6 +561,13 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		}
 		for _, id := range resultArtifactReferences(result) {
 			peerOutputs[id] = true
+			a, err := loadArtifact(ctx, tx, id)
+			if err != nil {
+				return plan, reviewRoots, err
+			}
+			if sourceReviewIDs[a.TaskID] {
+				replacedReports[id] = true
+			}
 		}
 		for _, next := range replacements[local] {
 			origins[next] = append(origins[next], local)
@@ -665,6 +677,8 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			for _, id := range old.InputArtifactIDs {
 				if subjectArtifacts[id] {
 					needsFixedSubject = true
+				} else if replacedReports[id] {
+					return plan, reviewRoots, fmt.Errorf("%w: explicit superseded review input needs parent remapping", ErrTemplateNeedsMain)
 				} else {
 					inputIDs[id] = true
 				}
@@ -748,7 +762,7 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 						if dep.ArtifactID != "" && !subjectArtifacts[dep.ArtifactID] {
 							return plan, reviewRoots, fmt.Errorf("%w: downstream review subject selector is unaffected", ErrTemplateNeedsMain)
 						}
-						if dep.ArtifactID == "" && replacements[dep.TaskID] == nil {
+						if dep.ArtifactID == "" {
 							producer, err := loadTask(ctx, tx, structureID("task-", wave.ID, dep.TaskID))
 							if err != nil {
 								return plan, reviewRoots, err
