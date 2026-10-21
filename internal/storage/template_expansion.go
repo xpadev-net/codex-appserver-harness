@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -33,6 +34,7 @@ type templateReviewLineage struct {
 	TemplateDigest    string `json:"template_digest"`
 	Round             int    `json:"round"`
 	ExpansionKey      string `json:"expansion_key"`
+	ReviewRoleID      string `json:"review_role_id"`
 }
 type templateAssignment struct {
 	Template          contract.FixReviewTemplate `json:"template"`
@@ -113,7 +115,7 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 	reviews := []contract.ReviewResult{}
 	assignments := map[string]*templateAssignment{}
 	round := 0
-	for _, spec := range current.Plan.Phases[phasePosition].Tasks {
+	for _, spec := range reviewSpecsThrough(current.Plan, phasePosition) {
 		if spec.Kind != "review" {
 			continue
 		}
@@ -134,9 +136,6 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 		review.Findings = append([]contract.ReviewFinding{}, review.Findings...)
 		sort.Slice(review.Findings, func(i, j int) bool { return review.Findings[i].ID < review.Findings[j].ID })
 		reviews = append(reviews, review)
-		if result.Review.Verdict != "findings" {
-			continue
-		}
 		root := task.LocalID
 		nextRound := 1
 		var lineage templateReviewLineage
@@ -147,10 +146,12 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return receipt, err
 		}
-		if round != 0 && round != nextRound {
-			return receipt, fmt.Errorf("%w: mixed review iterations", ErrTemplateNeedsMain)
+		if nextRound > round {
+			round = nextRound
 		}
-		round = nextRound
+		if result.Review.Verdict != "findings" {
+			continue
+		}
 		templates := []contract.FixReviewTemplate{}
 		for _, template := range current.Plan.Templates {
 			if template.InputTaskID == root {
@@ -181,9 +182,6 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 				return receipt, fmt.Errorf("%w: unsupported or ambiguous finding classification", ErrTemplateNeedsMain)
 			}
 			template := matching[0]
-			if nextRound > template.MaxRounds {
-				return receipt, fmt.Errorf("%w: template repeat limit exceeded", ErrTemplateNeedsMain)
-			}
 			owner := assignments[template.ID]
 			if owner == nil {
 				owner = &templateAssignment{Template: template, RootReviewLocalID: root, FindingIDs: []string{}}
@@ -236,6 +234,15 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 	}
 	if wave.FixRounds >= wave.Policy.Limits.FixRounds || round > wave.Policy.Limits.FixRounds {
 		return receipt, fmt.Errorf("%w: cumulative fix budget exhausted", ErrTemplateNeedsMain)
+	}
+	for _, owner := range owners {
+		used, err := templateOwnerUsesTx(ctx, tx, wave.ID, owner.Template.ID)
+		if err != nil {
+			return receipt, err
+		}
+		if used >= owner.Template.MaxRounds {
+			return receipt, fmt.Errorf("%w: template repeat limit exceeded", ErrTemplateNeedsMain)
+		}
 	}
 	// Sequential barriers: every Task up through this phase must have a valid,
 	// stopped/applied completed result; all later Tasks must still be unstarted.
@@ -301,7 +308,13 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 			return receipt, err
 		}
 		taskID := structureID("task-", wave.ID, local)
-		if err = kernelRecordTx(ctx, tx, "template_review_lineage", taskID, wave.ID, templateReviewLineage{RootReviewLocalID: root, TemplateDigest: digest, Round: round, ExpansionKey: key}); err != nil {
+		var input struct {
+			ReviewRoleID string `json:"review_role_id"`
+		}
+		if err = completionRecord(ctx, tx, "template_task_context", taskID, &input); err != nil {
+			return receipt, err
+		}
+		if err = kernelRecordTx(ctx, tx, "template_review_lineage", taskID, wave.ID, templateReviewLineage{RootReviewLocalID: root, TemplateDigest: digest, Round: round, ExpansionKey: key, ReviewRoleID: input.ReviewRoleID}); err != nil {
 			return receipt, err
 		}
 	}
@@ -334,11 +347,10 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	reviewRoots := map[string]string{}
 	sourceLocals := []string{}
 	sourceResults := []string{}
-	criteriaSet := map[string]bool{}
 	inputSet := map[string]bool{}
 	subjectArtifacts := map[string]bool{}
 	subjectProducers := map[string][]string{}
-	for _, spec := range current.Phases[position].Tasks {
+	for _, spec := range reviewSpecsThrough(current, position) {
 		if spec.Kind != "review" {
 			continue
 		}
@@ -355,9 +367,6 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		}
 		sourceLocals = append(sourceLocals, spec.ID)
 		sourceResults = append(sourceResults, task.ResultID)
-		for _, id := range spec.Criteria {
-			criteriaSet[id] = true
-		}
 		for _, id := range spec.InputArtifactIDs {
 			inputSet[id] = true
 			a, err := k.currentArtifactTx(ctx, tx, wave, id)
@@ -432,11 +441,6 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	}
 	sort.Strings(sourceLocals)
 	sort.Strings(sourceResults)
-	criteria := []string{}
-	for id := range criteriaSet {
-		criteria = append(criteria, id)
-	}
-	sort.Strings(criteria)
 	inputs := []string{}
 	reviewInputs := []string{}
 	for id := range inputSet {
@@ -452,9 +456,17 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	sort.Strings(inputs)
 	sort.Strings(reviewInputs)
 	previousFix := ""
-	newReviews := []string{}
+	reviewRoles := map[string]string{}
+	roleReviews := map[string]string{}
+	rootReviews := map[string][]string{}
+	replacements := map[string][]string{}
 	reviewPhase := contract.PhaseSpec{ID: structureID("review-phase-", wave.ID, key), Tasks: []contract.TaskSpec{}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{}}, FailurePolicy: "drain_and_block"}
 	for _, owner := range owners {
+		root, err := loadTask(ctx, tx, structureID("task-", wave.ID, owner.RootReviewLocalID))
+		if err != nil {
+			return plan, reviewRoots, err
+		}
+		criteria := append([]string{}, root.Spec.Criteria...)
 		fixID := structureID("fix-", wave.ID, key+":"+owner.Template.ID)
 		reviewID := structureID("review-", wave.ID, key+":"+owner.Template.ID)
 		dependencies := []contract.TaskDependency{}
@@ -472,17 +484,61 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		review := contract.TaskSpec{ID: reviewID, Kind: "review", Instruction: owner.Template.ReviewInstruction, Criteria: criteria, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: reviewInputs, WorkItemIDs: []string{}}
 		reviewPhase.Tasks = append(reviewPhase.Tasks, review)
 		reviewPhase.Completion.RequiredTaskIDs = append(reviewPhase.Completion.RequiredTaskIDs, reviewID)
-		newReviews = append(newReviews, reviewID)
+		reviewRoles[reviewID] = "template:" + owner.Template.ID
+		roleReviews["template:"+owner.Template.ID] = reviewID
+		rootReviews[owner.RootReviewLocalID] = append(rootReviews[owner.RootReviewLocalID], reviewID)
 		reviewRoots[reviewID] = owner.RootReviewLocalID
 		if err := kernelRecordTx(ctx, tx, "template_task_context", structureID("task-", wave.ID, fixID), wave.ID, map[string]any{"expansion_key": key, "template_id": owner.Template.ID, "finding_ids": owner.FindingIDs, "input_digest": inputDigest, "source_result_ids": sourceResults, "previous_fix_local_id": priorFix}); err != nil {
 			return plan, reviewRoots, err
 		}
 	}
+	// Preserve every existing review role. Saved owner templates may replace
+	// their original root role, but a clean or different required role is not
+	// interchangeable with another owner's re-review.
+	for _, local := range sourceLocals {
+		source, err := loadTask(ctx, tx, structureID("task-", wave.ID, local))
+		if err != nil {
+			return plan, reviewRoots, err
+		}
+		result, err := k.completedTaskResultTx(ctx, tx, wave, source)
+		if err != nil {
+			return plan, reviewRoots, err
+		}
+		root, role := source.LocalID, "root:"+source.LocalID
+		var lineage templateReviewLineage
+		err = completionRecord(ctx, tx, "template_review_lineage", source.ID, &lineage)
+		if err == nil {
+			root = lineage.RootReviewLocalID
+			role = lineage.ReviewRoleID
+			if role == "" {
+				role = "inherited:" + source.LocalID
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return plan, reviewRoots, err
+		}
+		if next := roleReviews[role]; next != "" {
+			replacements[local] = []string{next}
+			continue
+		}
+		if strings.HasPrefix(role, "root:") && result.Review.Verdict == "findings" && len(rootReviews[root]) > 0 {
+			replacements[local] = append([]string{}, rootReviews[root]...)
+			continue
+		}
+		id := structureID("role-review-", wave.ID, key+":"+source.ID)
+		copied := source.Spec
+		copied.ID = id
+		copied.DependsOn = []contract.TaskDependency{}
+		copied.InputArtifactIDs = reviewInputs
+		reviewPhase.Tasks = append(reviewPhase.Tasks, copied)
+		reviewPhase.Completion.RequiredTaskIDs = append(reviewPhase.Completion.RequiredTaskIDs, id)
+		reviewRoots[id], reviewRoles[id], roleReviews[role] = root, role, id
+		replacements[local] = []string{id}
+	}
 	// Owners fix the same subject in a deterministic sequence, so independent
 	// fixes cannot race or produce competing replacements for one candidate.
 	for i := range reviewPhase.Tasks {
 		reviewPhase.Tasks[i].DependsOn = []contract.TaskDependency{{TaskID: previousFix}}
-		if err := kernelRecordTx(ctx, tx, "template_task_context", structureID("task-", wave.ID, reviewPhase.Tasks[i].ID), wave.ID, map[string]any{"expansion_key": key, "input_task_local_id": previousFix, "source_result_ids": sourceResults}); err != nil {
+		if err := kernelRecordTx(ctx, tx, "template_task_context", structureID("task-", wave.ID, reviewPhase.Tasks[i].ID), wave.ID, map[string]any{"expansion_key": key, "input_task_local_id": previousFix, "source_result_ids": sourceResults, "input_digest": inputDigest, "review_role_id": reviewRoles[reviewPhase.Tasks[i].ID]}); err != nil {
 			return plan, reviewRoots, err
 		}
 	}
@@ -492,10 +548,6 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		for _, task := range phase.Tasks {
 			cloneIDs[task.ID] = structureID("future-", wave.ID, key+":"+task.ID)
 		}
-	}
-	replacements := map[string][]string{}
-	for _, local := range sourceLocals {
-		replacements[local] = newReviews
 	}
 	for i := range plan.Templates {
 		if next := cloneIDs[plan.Templates[i].InputTaskID]; next != "" {
@@ -580,6 +632,11 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			if err := cloneTemplateMetadataTx(ctx, tx, wave, old.ID, task.ID, key, cloneIDs, plan.Templates); err != nil {
 				return plan, reviewRoots, err
 			}
+			if needsFixedSubject && task.Kind == "review" {
+				if err := pinClonedReviewSubjectTx(ctx, tx, wave, task.ID, key, inputDigest, previousFix, cloneIDs); err != nil {
+					return plan, reviewRoots, err
+				}
+			}
 		}
 		plan.Phases = append(plan.Phases, phase)
 	}
@@ -587,6 +644,51 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		return plan, reviewRoots, err
 	}
 	return plan, reviewRoots, nil
+}
+
+func pinClonedReviewSubjectTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, local, key, digest, finalFix string, clones map[string]string) error {
+	id := structureID("task-", wave.ID, local)
+	var input map[string]any
+	err := completionRecord(ctx, tx, "template_task_context", id, &input)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+	if source, ok := input["input_task_local_id"].(string); ok && source != "" {
+		original := source
+		for old, next := range clones {
+			if next == source {
+				original = old
+				break
+			}
+		}
+		var prior TemplateSubject
+		err = completionRecord(ctx, tx, "template_subject", structureID("task-", wave.ID, original), &prior)
+		if err == nil && prior.Digest != digest {
+			return nil
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			if oldKey, ok := input["expansion_key"].(string); ok && oldKey != "" {
+				var prior TemplateExpansion
+				if err = completionRecord(ctx, tx, "template_expansion", oldKey, &prior); err != nil {
+					return err
+				}
+				if prior.InputDigest != digest {
+					return nil
+				}
+			}
+		}
+	}
+	input["input_task_local_id"], input["input_digest"], input["clone_expansion_key"] = finalFix, digest, key
+	if input["expansion_key"] == nil {
+		input["expansion_key"] = key
+	}
+	return kernelRecordTx(ctx, tx, "template_task_context", id, wave.ID, input)
 }
 
 func cloneTemplateMetadataTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, oldLocal, newLocal, key string, clones map[string]string, templates []contract.FixReviewTemplate) error {
@@ -631,4 +733,42 @@ func cloneTemplateMetadataTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, 
 		return err
 	}
 	return nil
+}
+
+func templateOwnerUsesTx(ctx context.Context, tx *sql.Tx, waveID, templateID string) (int, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT payload FROM records WHERE kind='template_expansion' AND work_item_id=?", waveID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	used := 0
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return 0, err
+		}
+		var prior TemplateExpansion
+		if err = json.Unmarshal(raw, &prior); err != nil {
+			return 0, err
+		}
+		for _, id := range prior.TemplateIDs {
+			if id == templateID {
+				used++
+				break
+			}
+		}
+	}
+	return used, rows.Err()
+}
+
+func reviewSpecsThrough(plan contract.PlanProposal, position int) []contract.TaskSpec {
+	reviews := []contract.TaskSpec{}
+	for _, phase := range plan.Phases[:position+1] {
+		for _, task := range phase.Tasks {
+			if task.Kind == "review" {
+				reviews = append(reviews, task)
+			}
+		}
+	}
+	return reviews
 }
