@@ -227,6 +227,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 			return err
 		}
 		task.InputDigest = inputs
+		if _, err = tx.ExecContext(ctx, "UPDATE kernel_plan_bindings SET input_digest=? WHERE wave_id=? AND revision=? AND task_id=?", inputs, task.WaveID, task.PlanRevision, task.ID); err != nil {
+			return err
+		}
 		task.Attempts++
 		task.State = contract.TaskRunning
 		if err = saveTask(ctx, tx, task); err != nil {

@@ -276,6 +276,7 @@ func (k *KernelStore) waveEventTx(ctx context.Context, tx *sql.Tx, w domain.Wave
 }
 
 type PlanAdmission struct {
+	Mode           string                `json:"mode"`
 	RequestTarget  contract.Target       `json:"request_target"`
 	Target         contract.Target       `json:"target"`
 	Key            string                `json:"key"`
@@ -298,7 +299,13 @@ func (k *KernelStore) AdoptPlan(ctx context.Context, target contract.Target, key
 	return receipt, tx.Commit()
 }
 func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contract.Target, key string, plan contract.PlanProposal) (PlanAdmission, error) {
-	receipt := PlanAdmission{RequestTarget: target, Key: key, Plan: plan, CreatedTaskIDs: []string{}, CarriedTaskIDs: []string{}}
+	return k.adoptPlanModeTx(ctx, tx, target, key, plan, "parent")
+}
+func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target contract.Target, key string, plan contract.PlanProposal, mode string) (PlanAdmission, error) {
+	receipt := PlanAdmission{Mode: mode, RequestTarget: target, Key: key, Plan: plan, CreatedTaskIDs: []string{}, CarriedTaskIDs: []string{}}
+	if mode != "parent" && mode != "template" {
+		return receipt, errors.New("invalid plan adoption authority")
+	}
 	if strings.TrimSpace(key) == "" || len(key) > 256 || !target.Valid() {
 		return receipt, errors.New("versioned adoption key required")
 	}
@@ -314,7 +321,11 @@ func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contra
 		if err = json.Unmarshal(previous, &prior); err != nil {
 			return receipt, err
 		}
-		if prior.Digest != digest || prior.RequestTarget != target {
+		priorMode := prior.Mode
+		if priorMode == "" {
+			priorMode = "parent"
+		}
+		if prior.Digest != digest || prior.RequestTarget != target || priorMode != mode {
 			return receipt, errors.New("plan replay identity conflict")
 		}
 		return prior, nil
@@ -353,7 +364,7 @@ func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contra
 	}
 	revision := wave.PlanRevision
 	if previousCount > 0 {
-		if wave.Replans >= wave.Policy.Limits.Replans {
+		if mode == "parent" && wave.Replans >= wave.Policy.Limits.Replans {
 			return receipt, errors.New("replan budget exhausted")
 		}
 		var current int
@@ -363,7 +374,9 @@ func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contra
 		if current > 0 {
 			revision++
 		}
-		wave.Replans++
+		if mode == "parent" {
+			wave.Replans++
+		}
 	}
 	receipt.Target = target
 	receipt.Target.PlanRevision = revision
