@@ -550,7 +550,7 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 					return "", err
 				}
 				found := false
-				for _, id := range result.Artifacts {
+				for _, id := range resultArtifactReferences(result) {
 					found = found || id == dependency.ArtifactID
 				}
 				if !found || result.TaskID != prior.ID || result.PhaseID != prior.PhaseID || result.Target != prior.Target() || result.Outcome != "result" {

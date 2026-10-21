@@ -96,13 +96,8 @@ func (k *KernelStore) CollectArtifacts(ctx context.Context) error {
 				if err = completionRecord(ctx, tx, "task_result", prior.ResultID, &result); err != nil {
 					return err
 				}
-				for _, id := range result.Artifacts {
+				for _, id := range resultArtifactReferences(result) {
 					protected[id] = true
-				}
-				for _, c := range result.CriterionResults {
-					for _, id := range c.EvidenceIDs {
-						protected[id] = true
-					}
 				}
 			}
 		}

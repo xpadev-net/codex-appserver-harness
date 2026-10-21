@@ -500,3 +500,88 @@ func TestArtifactConcurrentReplayCommitsOneManifest(t *testing.T) {
 		t.Fatal(manifests, events, err)
 	}
 }
+
+func TestArtifactDependencyEvidenceGrantAndRetentionFollowEveryResultReference(t *testing.T) {
+	ctx := context.Background()
+	store, w, r := artifactFixture(t)
+	base := store.clock()
+	w.Policy.Limits.RetentionSeconds = 10
+	tx, err := store.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveWave(ctx, tx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	criterion := mustImport(t, store, r, "criterion evidence")
+	r.Key = "verification"
+	verification := mustImport(t, store, r, "verification evidence")
+	plan := storagePlanFixture()
+	plan.Phases[0].Tasks[0].InputArtifactIDs = []string{criterion.ID, verification.ID}
+	receipt, err := store.AdoptPlan(ctx, w.Target(), "plan", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer, err := store.Task(ctx, receipt.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer, err := store.Task(ctx, receipt.CreatedTaskIDs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SessionID = producer.SessionID
+	r.Key = "report"
+	r.InputArtifactIDs = nil
+	r.Origin = domain.ArtifactOrigin{Kind: "task", Reference: producer.ID}
+	report := mustImport(t, store, r, "report")
+	result := contract.TaskResult{SchemaVersion: 1, Target: producer.Target(), TaskID: producer.ID, PhaseID: producer.PhaseID, Outcome: "result", Artifacts: []string{report.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", EvidenceIDs: []string{criterion.ID}, Status: "claimed", Basis: "observed"}}, Verification: &contract.VerificationReference{PlanID: "verification-plan", EvidenceIDs: []string{verification.ID}}}
+	if err = result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = store.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer.State, producer.CompletedAt, producer.ResultID = contract.TaskCompleted, base, "producer-result"
+	if err = saveTask(ctx, tx, producer); err != nil {
+		t.Fatal(err)
+	}
+	if err = kernelRecordTx(ctx, tx, "task_result", producer.ResultID, producer.ID, result); err != nil {
+		t.Fatal(err)
+	}
+	w.State, w.CompletedAt = domain.WaveCanceled, base
+	if err = saveWave(ctx, tx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	store.Now = func() time.Time { return base.Add(11 * time.Second) }
+	if err = store.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []domain.Artifact{criterion, verification, report} {
+		saved, err := store.Artifact(ctx, a.ID)
+		if err != nil || saved.State != "committed" {
+			t.Fatal("unfinished dependency evidence collected", saved, err)
+		}
+		if _, _, err = store.ReadArtifact(ctx, consumer.SessionID, consumer.Target(), a.ID, 0, 16); err != nil {
+			t.Fatal("bound dependency evidence unreadable", a.ID, err)
+		}
+	}
+	// A named dependency artifact can identify evidence outside Artifacts too.
+	tx, err = store.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := consumer.Spec
+	spec.DependsOn[0].ArtifactID = verification.ID
+	if _, err = store.taskInputDigestTx(ctx, tx, w, spec); err != nil {
+		t.Fatal("bound evidence rejected as explicit dependency", err)
+	}
+	tx.Rollback()
+}

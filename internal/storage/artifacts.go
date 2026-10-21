@@ -126,13 +126,34 @@ func artifactReadableTx(ctx context.Context, tx *sql.Tx, b contract.SessionBindi
 		if result.TaskID != prior.ID || result.Target != prior.Target() {
 			return errors.New("dependency result binding conflict")
 		}
-		for _, id := range result.Artifacts {
+		for _, id := range resultArtifactReferences(result) {
 			if id == a.ID {
 				return nil
 			}
 		}
 	}
 	return errors.New("Artifact was not granted to this Task")
+}
+
+// Evidence may be carried separately from top-level output artifacts. Read
+// grants, dependency bindings and retention must all follow the same closure.
+func resultArtifactReferences(result contract.TaskResult) []string {
+	ids := append([]string{}, result.Artifacts...)
+	for _, criterion := range result.CriterionResults {
+		ids = append(ids, criterion.EvidenceIDs...)
+	}
+	if result.Verification != nil {
+		ids = append(ids, result.Verification.EvidenceIDs...)
+	}
+	seen := map[string]bool{}
+	unique := []string{}
+	for _, id := range ids {
+		if !seen[id] {
+			unique = append(unique, id)
+			seen[id] = true
+		}
+	}
+	return unique
 }
 func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImport, data []byte) (domain.Artifact, error) {
 	var a domain.Artifact
