@@ -371,6 +371,15 @@ func (s *Store) RetryUnexecuted(ctx context.Context, id, evidence string) error 
 	return s.RetryUnexecutedBounded(ctx, id, evidence, 3)
 }
 func (s *Store) RetryUnexecutedBounded(ctx context.Context, id, evidence string, maximum int) error {
+	return s.retryUnexecutedBounded(ctx, id, "", evidence, maximum)
+}
+func (s *Store) RetrySplitChildBounded(ctx context.Context, id, child, evidence string, maximum int) error {
+	if child == "" {
+		return errors.New("split child key is required")
+	}
+	return s.retryUnexecutedBounded(ctx, id, child, evidence, maximum)
+}
+func (s *Store) retryUnexecutedBounded(ctx context.Context, id, child, evidence string, maximum int) error {
 	if evidence == "" {
 		return errors.New("reconciliation evidence required")
 	}
@@ -395,7 +404,7 @@ func (s *Store) RetryUnexecutedBounded(ctx context.Context, id, evidence string,
 	if err != nil {
 		return err
 	}
-	if w.Phase == domain.Blocked && w.RecoveryPhase != "" {
+	if op.Kind != "split" && w.Phase == domain.Blocked && w.RecoveryPhase != "" {
 		previous := w.Phase
 		w.Phase = w.RecoveryPhase
 		w.RecoveryPhase = ""
@@ -404,6 +413,64 @@ func (s *Store) RetryUnexecutedBounded(ctx context.Context, id, evidence string,
 	}
 	if !domain.CanDispatch(w, op) {
 		return errors.New("operation is no longer permitted")
+	}
+	if op.Kind == "split" {
+		if child == "" {
+			return errors.New("split retry requires a confirmed uncreated child key")
+		}
+		var raw []byte
+		if err = tx.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='split_progress' AND id=?", w.ID).Scan(&raw); err != nil {
+			return err
+		}
+		var progress map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &progress); err != nil {
+			return err
+		}
+		var children []map[string]json.RawMessage
+		if err = json.Unmarshal(progress["children"], &children); err != nil {
+			return err
+		}
+		found := false
+		for _, entry := range children {
+			var key, status string
+			var issue int
+			if err = json.Unmarshal(entry["key"], &key); err != nil {
+				return err
+			}
+			if key != child {
+				continue
+			}
+			if found {
+				return errors.New("duplicate child key")
+			}
+			found = true
+			if err = json.Unmarshal(entry["state"], &status); err != nil {
+				return err
+			}
+			if err = json.Unmarshal(entry["issue"], &issue); err != nil {
+				return err
+			}
+			if status != "creating" || issue != 0 {
+				return errors.New("only an ambiguous, uncreated child can be retried")
+			}
+			entry["state"] = json.RawMessage(`"pending"`)
+		}
+		if !found {
+			return errors.New("unknown split child")
+		}
+		progress["children"], err = json.Marshal(children)
+		if err != nil {
+			return err
+		}
+		updated, err := json.Marshal(progress)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE records SET payload=? WHERE kind='split_progress' AND id=?", updated, w.ID); err != nil {
+			return err
+		}
+	} else if child != "" {
+		return errors.New("child key supplied for a non-split operation")
 	}
 	if maximum < 1 {
 		return errors.New("network retry budget is disabled")
@@ -429,7 +496,7 @@ func (s *Store) RetryUnexecutedBounded(ctx context.Context, id, evidence string,
 	if _, err = tx.ExecContext(ctx, "INSERT INTO records VALUES('network_retry_count',?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload", w.ID, w.ID, counter); err != nil {
 		return err
 	}
-	proof, err := json.Marshal(map[string]any{"unexecuted_evidence": evidence, "observed_at": time.Now().UTC()})
+	proof, err := json.Marshal(map[string]any{"unexecuted_evidence": evidence, "child_key": child, "observed_at": time.Now().UTC()})
 	if err != nil {
 		return err
 	}

@@ -353,3 +353,37 @@ func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, s
 	next := domain.WorkItem{ID: splittingResidual(w, previous).ID, RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: scope.Revision, PolicyRevision: c.Config.Verification.Revision, Phase: domain.Ready}
 	return c.Store.ClaimNextRecords(ctx, w.ID, next, map[string]any{"scope": scope, "source": Source{digest(issue)}, "policy_snapshot": c.policyDigest(), "adoption_reason": reason, "continued_from": w.ID})
 }
+
+func (c *Controller) RetrySplitChild(ctx context.Context, id, operation, child, evidence, reason string) error {
+	if strings.TrimSpace(evidence) == "" || strings.TrimSpace(reason) == "" || child == "" {
+		return errors.New("child key, absence evidence and reason are required")
+	}
+	w, err := c.Store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if _, err = c.current(ctx, w); err != nil {
+		return err
+	}
+	ops, err := c.Store.Operations(ctx)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, op := range ops {
+		if op.ID == operation && op.WorkItemID == id && op.Kind == "split" {
+			found = true
+		}
+	}
+	if !found {
+		return errors.New("split operation is not associated with this work item")
+	}
+	issue, err := c.GitHub.FindChild(ctx, "harness-child:"+id+":"+child)
+	if err != nil {
+		return err
+	}
+	if issue != 0 {
+		return errors.New("child already exists; reconcile its result instead of retrying creation")
+	}
+	return c.Store.RetrySplitChildBounded(ctx, operation, child, evidence+": "+reason, c.Config.Limits.NetworkRetries)
+}
