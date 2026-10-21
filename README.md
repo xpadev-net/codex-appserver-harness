@@ -1,6 +1,9 @@
 # Codex Issue / PR harness
 
-Go製のIssue実装ハーネスです。[要件](requirements.md)と[実装計画](implementation-plan.md)に基づき、SQLiteで進行状態と外部操作を保存します。
+Go製のIssue実装ハーネスです。SQLiteで進行状態と外部操作を保存します。
+
+設計の改訂案は、大きな依頼をWave→Phase→Taskへ分解し、各Taskに独立した使い捨てsessionを割り当て、実行中は親子メッセージとイベント通知で再開する構成です。Taskは親と同じruntimeを使い、Wave呼び出しを禁止します。[改訂要件](requirements.md)、[現行との差分](docs/background-wave-gap-analysis.md)、[実装設計](implementation-plan.md)、[実行計画](docs/coding-agent/plans/active/background-wave-plan.md)を参照してください。
+Wave・メインOrchestrator・tool callによる自動購読・並行schedulerは未実装です。以下は現行バイナリの操作と制約です。
 
 必要環境: Linux、Go 1.26とCコンパイラ、Git、認証済み`gh`、Codex CLI **0.163.0**、Bubblewrap (`bwrap`)。
 
