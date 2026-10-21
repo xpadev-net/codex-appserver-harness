@@ -20,7 +20,7 @@ func fixture() Snapshot {
 	p.Base.SHA = c.BaseSHA
 	p.Base.Ref = "configured"
 	p.Base.Repo.ID = 1
-	v := policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"true"}, TimeoutSeconds: 1}}}
+	v := policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"true"}, TimeoutSeconds: 1, SuccessPattern: "PASS"}}}
 	scope := verification.Scope{Revision: 1, OriginalRequest: "requirements", Criteria: []verification.Criterion{{ID: "AC", Requirement: "behavior"}}, Included: []string{"AC"}}
 	plan := verification.Plan{SchemaVersion: 1, WorkItemID: "w", ScopeRevision: 1, PolicyRevision: 1, InputCandidateID: "c", Revision: 1, CriteriaTests: []verification.Mapping{{CriterionID: "AC", TestRef: "test", ExpectationBasis: "AC", ProfileID: "unit"}}, OnSuccess: "publish_pr"}
 	zero := 0

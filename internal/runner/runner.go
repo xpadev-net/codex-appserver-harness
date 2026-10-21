@@ -65,11 +65,7 @@ func (s Spec) Validate() error {
 	if s.LauncherContract != "argv_passthrough_v1" || !identifier.MatchString(s.JobID) || s.Candidate.ID == "" || !sha.MatchString(s.Candidate.SHA) || !sha.MatchString(s.Candidate.BaseSHA) || s.Candidate.ScopeRevision < 1 || s.Candidate.PolicyRevision < 1 || !filepath.IsAbs(s.Root) || !filepath.IsAbs(s.Repository) || !identifier.MatchString(s.ProfileID) || s.Profile.Revision < 1 || len(s.Profile.Argv) == 0 || s.Profile.Argv[0] == "" || s.Profile.TimeoutSeconds < 1 || len(s.Launcher) == 0 || s.Launcher[0] == "" {
 		return errors.New("invalid runner specification or isolation launcher missing")
 	}
-	if s.Profile.SuccessPattern != "" {
-		_, err := regexp.Compile(s.Profile.SuccessPattern)
-		return err
-	}
-	return nil
+	return s.Profile.ValidateEvidence()
 }
 func WriteJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
@@ -278,7 +274,7 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	if err = log.Sync(); err != nil {
 		return r, err
 	}
-	if s.Profile.SuccessPattern != "" {
+	{
 		if output.truncated {
 			r.Status = "unknown"
 			return r, errors.New("output truncated; success evidence inconclusive")
@@ -287,7 +283,8 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		if readErr != nil {
 			return r, readErr
 		}
-		if !regexp.MustCompile(s.Profile.SuccessPattern).Match(b) {
+		match := regexp.MustCompile(s.Profile.SuccessPattern).FindIndex(b)
+		if len(b) == 0 || match == nil || match[0] == match[1] {
 			r.Status = "failed"
 			return r, errors.New("required success evidence missing")
 		}

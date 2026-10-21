@@ -147,3 +147,44 @@ func TestRunnerUsesDedicatedHomeAndOmitsWorkerMountVariables(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
+func TestMissingEvidencePatternCannotPass(t *testing.T) {
+	s := spec(t)
+	s.Profile.Argv = []string{"true"}
+	s.Profile.SuccessPattern = ""
+	r, err := Execute(context.Background(), s)
+	v := policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": s.Profile}}
+	if err == nil || r.Status == "passed" || Passed(s.Candidate, v, []Result{r}) {
+		t.Fatal("empty evidence accepted", r, err)
+	}
+}
+
+func TestGoEvidenceRequiresExecutedPassingTest(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "go-cache")
+	for _, tc := range []struct {
+		name, source string
+		passed       bool
+	}{
+		{"no tests", "package sample", false},
+		{"all skipped", `package sample; import "testing"; func TestSkipped(t *testing.T) { t.Skip("not run") }`, false},
+		{"passing", `package sample; import "testing"; func TestBehavior(t *testing.T) {}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := spec(t)
+			os.WriteFile(filepath.Join(s.Repository, "go.mod"), []byte("module sample\ngo 1.26\n"), 0600)
+			os.WriteFile(filepath.Join(s.Repository, "sample_test.go"), []byte(tc.source), 0600)
+			sha, err := workspace.Freeze(context.Background(), s.Repository, "Go test fixture")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.Candidate.SHA = sha
+			s.Profile.Argv = []string{"env", "GOCACHE=" + cache, "go", "test", "-v", "./..."}
+			s.Profile.SuccessPattern = policy.GoTestSuccessPattern
+			s.Profile.TimeoutSeconds = 60
+			r, err := Execute(context.Background(), s)
+			if (r.Status == "passed") != tc.passed {
+				t.Fatal(r, err)
+			}
+		})
+	}
+}

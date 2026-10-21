@@ -14,7 +14,7 @@ import (
 func fixtures() (Scope, runner.Candidate, policy.Verification, Plan) {
 	s := Scope{Revision: 1, OriginalRequest: "implement acceptance", Criteria: []Criterion{{"AC1", "reject duplicates"}, {"AC2", "future behavior"}}, Included: []string{"AC1"}, Remaining: []string{"AC2"}}
 	c := runner.Candidate{ID: "c", ScopeRevision: 1, PolicyRevision: 1}
-	v := policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"true"}, TimeoutSeconds: 1}}}
+	v := policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"true"}, TimeoutSeconds: 1, SuccessPattern: "PASS"}}}
 	p := Plan{SchemaVersion: 1, WorkItemID: "w", ScopeRevision: 1, PolicyRevision: 1, InputCandidateID: "c", Revision: 1, CriteriaTests: []Mapping{{"AC1", "test::duplicates", "Issue AC1", "unit"}}, RequestedProfiles: []string{}, UnverifiedCriteria: []string{}, Blockers: []string{}, OnSuccess: "publish_pr"}
 	return s, c, v, p
 }
