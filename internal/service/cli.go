@@ -85,7 +85,7 @@ func CLI(ctx context.Context, args []string) error {
 		} else if !missing(err) {
 			return err
 		}
-		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution", "final_failure", "final_recovery_audit", "budget_baseline", "final_failure_history", "parent_final_history", "split_progress"} {
+		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution", "final_failure", "final_recovery_audit", "budget_baseline", "final_failure_history", "parent_final_history", "split_progress", "evidence_retention"} {
 			records, err := s.Records(ctx, kind, w.ID)
 			if err != nil {
 				return err

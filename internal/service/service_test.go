@@ -1153,7 +1153,11 @@ func TestExistingPRUpdateRecoveryAcrossPublicationBoundaries(t *testing.T) {
 			if boundary == "after PATCH" {
 				var scope verification.Scope
 				c.Store.Record(ctx, "scope", w.ID, &scope)
-				if _, err := gh.Publish(ctx, c.Config.BaseBranch, w.Branch, w.ID, "Harness implementation "+w.ID, publicationBody(w, scope, candidate)); err != nil {
+				results, err := c.results(ctx, candidate, w)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := gh.Publish(ctx, c.Config.BaseBranch, w.Branch, w.ID, "Harness implementation "+w.ID, publicationBody(w, scope, candidate, []string{"unit"}, results)); err != nil {
 					t.Fatal(err)
 				}
 			}
