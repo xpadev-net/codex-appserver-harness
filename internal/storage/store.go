@@ -376,6 +376,11 @@ func (s *Store) claimSuccessor(ctx context.Context, previous string, w domain.Wo
 			return err
 		}
 	}
+	if finalKey == "" {
+		if err = transferFinal(ctx, tx, prev, w); err != nil {
+			return err
+		}
+	}
 	initializeClock(&w)
 	b, err := json.Marshal(w)
 	if err != nil {
@@ -862,6 +867,18 @@ func (s *Store) Adopt(ctx context.Context, id string, scopeRevision, policyRevis
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE kind='correction' AND id=?", id); err != nil {
+		return err
+	}
+	next := w
+	next.ScopeRevision = scopeRevision
+	next.PolicyRevision = policyRevision
+	if err = transferFinal(ctx, tx, w, next); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO records SELECT 'final_failure_history',?,work_item_id,payload FROM records WHERE kind='final_failure' AND id=?", fmt.Sprintf("%s:scope%d", id, w.ScopeRevision), id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE kind='final_failure' AND id=?", id); err != nil {
 		return err
 	}
 	w.ScopeRevision = scopeRevision

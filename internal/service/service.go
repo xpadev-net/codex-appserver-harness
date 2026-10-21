@@ -265,8 +265,14 @@ func (c *Controller) Tick(ctx context.Context) error {
 		}
 		if item.Phase == domain.Merged || item.Phase == domain.Split {
 			var completion map[string]any
-			if missing(c.Store.Record(ctx, "parent_completion", fmt.Sprintf("r%d-i%d", item.RepositoryID, item.Issue), &completion)) && !c.finalBlocked(ctx, item) {
-				active = true
+			if missing(c.Store.Record(ctx, "parent_completion", fmt.Sprintf("r%d-i%d", item.RepositoryID, item.Issue), &completion)) {
+				blocked, err := c.finalBlocked(ctx, item)
+				if err != nil {
+					return err
+				}
+				if !blocked {
+					active = true
+				}
 			}
 		}
 	}

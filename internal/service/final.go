@@ -13,24 +13,12 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
-type FinalAcceptanceState struct {
-	WorkItemID     string           `json:"work_item_id"`
-	ScopeRevision  int              `json:"scope_revision"`
-	State          string           `json:"state"`
-	Reason         string           `json:"reason,omitempty"`
-	Classification string           `json:"classification,omitempty"`
-	RequiredAction string           `json:"required_action,omitempty"`
-	Candidate      runner.Candidate `json:"candidate"`
-	Attempt        int              `json:"attempt"`
-	Retries        int              `json:"retries"`
-	Failure        *runner.Result   `json:"failure,omitempty"`
-	RecoveryID     string           `json:"recovery_work_item,omitempty"`
-	UpdatedAt      time.Time        `json:"updated_at"`
-}
+type FinalAcceptanceState = storage.FinalAcceptanceState
 
 type BudgetBaseline struct {
 	ValidationJobs int   `json:"validation_jobs"`
@@ -63,7 +51,24 @@ func (c *Controller) finalAcceptance(ctx context.Context, w domain.WorkItem, s v
 		Candidate     runner.Candidate `json:"candidate"`
 	}
 	if err = c.Store.Record(ctx, "parent_completion", issueKey(w), &proof); err == nil && proof.ScopeRevision == s.Revision && proof.Candidate.PolicyRevision == c.Config.Verification.Revision {
-		return nil
+		var state FinalAcceptanceState
+		if err = c.Store.Record(ctx, "parent_final_state", issueKey(w), &state); err != nil && !missing(err) {
+			return err
+		}
+		if state.State == "completed" {
+			return nil
+		}
+		if state.WorkItemID == "" {
+			state.WorkItemID = w.ID
+		}
+		state.State = "completed"
+		state.ScopeRevision = s.Revision
+		state.Candidate = proof.Candidate
+		state.Classification = ""
+		state.Reason = ""
+		state.RequiredAction = ""
+		state.Failure = nil
+		return c.saveFinal(ctx, w, state)
 	}
 	if err != nil && !missing(err) {
 		return err
@@ -94,6 +99,10 @@ func (c *Controller) finalAcceptance(ctx context.Context, w domain.WorkItem, s v
 		if err = c.saveFinal(ctx, w, state); err != nil {
 			return err
 		}
+	}
+	ownDone, err := c.splitComplete(ctx, w, map[string]bool{})
+	if err != nil || !ownDone {
+		return err
 	}
 	items, err := c.Store.List(ctx)
 	if err != nil {
@@ -362,9 +371,34 @@ func (c *Controller) startFinalAssessment(ctx context.Context, w domain.WorkItem
 	return c.Store.EventRecords(ctx, e, map[string]map[string]any{"correction": {w.ID: Correction{Mode: "assessment", Reason: "classify final acceptance failure", EvidenceIDs: []string{failure.JobID}, FeedbackIDs: []string{}}}})
 }
 
-func (c *Controller) finalBlocked(ctx context.Context, w domain.WorkItem) bool {
+func (c *Controller) finalBlocked(ctx context.Context, w domain.WorkItem) (bool, error) {
+	lock, err := c.splitLease("final:" + issueKey(w))
+	if errors.Is(err, ErrSplitBusy) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer lock.Close()
 	var state FinalAcceptanceState
-	return c.Store.Record(ctx, "parent_final_state", issueKey(w), &state) == nil && state.ScopeRevision == w.ScopeRevision && state.State == "blocked"
+	if err = c.Store.Record(ctx, "parent_final_state", issueKey(w), &state); missing(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if state.RecoveryID != "" && state.State != "completed" && state.State != "blocked" {
+		owner, err := c.Store.Get(ctx, state.WorkItemID)
+		if err != nil {
+			return false, err
+		}
+		if owner.Phase == domain.Canceled {
+			if err = c.blockFinal(ctx, owner, state, "canceled_recovery", "final recovery was canceled: "+owner.Reason, "inspect canceled recovery; issue claim and merged history are retained"); err != nil {
+				return false, err
+			}
+			state.State = "blocked"
+		}
+	}
+	return state.ScopeRevision >= w.ScopeRevision && state.State == "blocked", nil
 }
 
 func (c *Controller) recoverFinalAssertion(ctx context.Context, w domain.WorkItem, scope verification.Scope, evidence, reason string) error {

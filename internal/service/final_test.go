@@ -9,6 +9,8 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
+	"github.com/xpadev-net/codex-appserver-harness/internal/worker"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 type failingFinalJobs struct {
@@ -216,5 +218,169 @@ func TestFinalUnknownLaunchRequiresQuiescenceBeforeRetry(t *testing.T) {
 	state = finalState(t, c)
 	if state.State != "completed" || state.Attempt != 1 || gh.closed != 1 || agents.calls != 2 {
 		t.Fatal(state, gh.closed, agents.calls)
+	}
+}
+
+type reviewSplitRepairAgent struct{ *fakeAgents }
+
+func (a reviewSplitRepairAgent) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	r, err := a.fakeAgents.Run(ctx, w, op, input, schema)
+	if strings.Contains(w.ID, "final-repair") && op.Kind == "implement" {
+		// Restore the assessment checkpoint; request decomposition without making a fix.
+		workspace.Git(ctx, w.Worktree, "reset", "--hard", "HEAD")
+		body, _ := json.Marshal(worker.Handoff{SchemaVersion: 1, WorkItemID: w.ID, ScopeRevision: w.ScopeRevision, InputCandidateID: w.Candidate, Outcome: "split", Summary: "needs decomposition", CoveredCriteria: []string{}, RemainingWork: []string{"fix"}, RequestedProfiles: []string{}, Blockers: []string{}})
+		r.Final = string(body)
+	}
+	return r, err
+}
+func TestRepairSplitMustWaitForChildren(t *testing.T) {
+	c, gh, a, fake := setup(t)
+	var initial verification.Scope
+	c.Store.Record(context.Background(), "scope", "w", &initial)
+	initial.Criteria = append(initial.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	initial.Included = []string{"AC1", "AC2"}
+	c.Store.Put(context.Background(), "scope", "w", "w", initial)
+	c.Agents = reviewSplitRepairAgent{a}
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	for i := 0; i < 40; i++ {
+		drive(t, c, 1)
+		stateErr := func() bool {
+			var s FinalAcceptanceState
+			if c.Store.Record(context.Background(), "parent_final_state", "r1-i1", &s) != nil || s.RecoveryID == "" {
+				return false
+			}
+			w, _ := c.Store.Get(context.Background(), s.RecoveryID)
+			return w.Phase == domain.Split
+		}()
+		if stateErr {
+			break
+		}
+	}
+	// Call the parent's acceptance check before giving any split child a turn.
+	s := finalState(t, c)
+	w, _ := c.Store.Get(context.Background(), s.RecoveryID)
+	if w.Phase != domain.Split {
+		t.Fatal("probe did not split", w)
+	}
+	var scope verification.Scope
+	c.Store.Record(context.Background(), "scope", w.ID, &scope)
+	if err := c.finalAcceptance(context.Background(), w, scope); err != nil {
+		t.Fatal(err)
+	}
+	if gh.issue.State == "closed" {
+		t.Fatal("parent closed while repair children are still READY; merges:", gh.merges)
+	}
+}
+func TestAdoptFinalRepairRetiresFailure(t *testing.T) {
+	c, gh, a, fake := setup(t)
+	a.classification = "spec_ambiguity"
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	drive(t, c, 25)
+	ctx := context.Background()
+	state := finalState(t, c)
+	w, _ := c.Store.Get(ctx, state.RecoveryID)
+	if w.Phase != domain.Blocked {
+		t.Fatal("probe not blocked", w)
+	}
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", w.ID, &scope)
+	scope.Revision++
+	gh.issue.Body = "clarified requirements"
+	scope.OriginalRequest = gh.issue.Body
+	if err := c.Store.Adopt(ctx, w.ID, scope.Revision, w.PolicyRevision, map[string]any{"scope": scope, "source": Source{digest(gh.issue)}, "policy_snapshot": c.policyDigest()}); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 1)
+	w, _ = c.Store.Get(ctx, w.ID)
+	if w.Phase == domain.Blocked {
+		t.Fatal("adopted final repair cannot start:", w.Reason)
+	}
+	drive(t, c, 40)
+	if state = finalState(t, c); state.State != "completed" || state.ScopeRevision != scope.Revision || gh.closed != 1 {
+		t.Fatal(state, gh.closed)
+	}
+	var stale runner.Result
+	if err := c.Store.Record(ctx, "final_failure", w.ID, &stale); !missing(err) {
+		t.Fatal("adoption retained active failure", err)
+	}
+	history, err := c.Store.Records(ctx, "final_failure_history", w.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatal(history, err)
+	}
+}
+func TestCancelFinalRepairAllowsPool(t *testing.T) {
+	c, gh, _, fake := setup(t)
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	ctx := context.Background()
+	var state FinalAcceptanceState
+	for i := 0; i < 30; i++ {
+		drive(t, c, 1)
+		c.Store.Record(ctx, "parent_final_state", "r1-i1", &state)
+		if state.RecoveryID != "" {
+			break
+		}
+	}
+	if state.RecoveryID == "" {
+		t.Fatal("missing repair")
+	}
+	if err := c.Store.Apply(ctx, domain.Event{ID: "cancel-repair", WorkItemID: state.RecoveryID, Kind: "cancel", Reason: "operator abandons repair"}); err != nil {
+		t.Fatal(err)
+	}
+	before := gh.poolCalls
+	drive(t, c, 8)
+	if gh.poolCalls == before {
+		t.Fatal("canceled repair permanently prevents unrelated issue acquisition")
+	}
+}
+
+func TestFinalCompletionReconcilesInterruptedLifecycleWrite(t *testing.T) {
+	c, gh, _, fake := setup(t)
+	ctx := context.Background()
+	drive(t, c, 24)
+	state := finalState(t, c)
+	state.State = "running"
+	if err := c.saveFinal(ctx, domain.WorkItem{RepositoryID: 1, Issue: 1}, state); err != nil {
+		t.Fatal(err)
+	}
+	calls := fake.calls
+	drive(t, c, 2)
+	state = finalState(t, c)
+	if state.State != "completed" || fake.calls != calls || gh.closed != 1 {
+		t.Fatal(state, fake.calls, calls, gh.closed)
+	}
+}
+
+func TestFinalRepairPartialContinuationTransfersFinalOwnership(t *testing.T) {
+	c, gh, _, fake := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	var state FinalAcceptanceState
+	for range 25 {
+		drive(t, c, 1)
+		c.Store.Record(ctx, "parent_final_state", "r1-i1", &state)
+		if state.RecoveryID != "" {
+			break
+		}
+	}
+	repair, err := c.Store.Get(ctx, state.RecoveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Store.Record(ctx, "scope", repair.ID, &scope)
+	scope.Revision++
+	scope.Included = []string{"AC1"}
+	scope.Remaining = []string{"AC2"}
+	if err = c.Store.Adopt(ctx, repair.ID, scope.Revision, repair.PolicyRevision, map[string]any{"scope": scope, "source": Source{digest(gh.issue)}, "policy_snapshot": c.policyDigest()}); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 65)
+	state = finalState(t, c)
+	if state.State != "completed" || state.WorkItemID != repair.ID+"-remaining" || gh.merges != 3 || gh.closed != 1 {
+		t.Fatal(state, gh.merges, gh.closed)
 	}
 }
