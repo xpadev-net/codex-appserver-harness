@@ -536,8 +536,80 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	}
 	// Owners fix the same subject in a deterministic sequence, so independent
 	// fixes cannot race or produce competing replacements for one candidate.
+	origins := map[string][]string{}
+	peerOutputs := map[string]bool{}
+	for _, local := range sourceLocals {
+		source, err := loadTask(ctx, tx, structureID("task-", wave.ID, local))
+		if err != nil {
+			return plan, reviewRoots, err
+		}
+		result, err := k.completedTaskResultTx(ctx, tx, wave, source)
+		if err != nil {
+			return plan, reviewRoots, err
+		}
+		for _, id := range resultArtifactReferences(result) {
+			peerOutputs[id] = true
+		}
+		for _, next := range replacements[local] {
+			origins[next] = append(origins[next], local)
+		}
+	}
 	for i := range reviewPhase.Tasks {
-		reviewPhase.Tasks[i].DependsOn = []contract.TaskDependency{{TaskID: previousFix}}
+		review := &reviewPhase.Tasks[i]
+		if len(origins[review.ID]) == 0 {
+			for _, local := range sourceLocals {
+				source, err := loadTask(ctx, tx, structureID("task-", wave.ID, local))
+				if err != nil {
+					return plan, reviewRoots, err
+				}
+				root := source.LocalID
+				var lineage templateReviewLineage
+				err = completionRecord(ctx, tx, "template_review_lineage", source.ID, &lineage)
+				if err == nil {
+					root = lineage.RootReviewLocalID
+				} else if !errors.Is(err, sql.ErrNoRows) {
+					return plan, reviewRoots, err
+				}
+				if root == reviewRoots[review.ID] {
+					origins[review.ID] = append(origins[review.ID], local)
+				}
+			}
+		}
+		review.DependsOn = []contract.TaskDependency{{TaskID: previousFix}}
+		seen := map[string]bool{previousFix: true}
+		explicitInputs := map[string]bool{}
+		for _, local := range origins[review.ID] {
+			source, err := loadTask(ctx, tx, structureID("task-", wave.ID, local))
+			if err != nil {
+				return plan, reviewRoots, err
+			}
+			for _, id := range source.Spec.InputArtifactIDs {
+				explicitInputs[id] = true
+			}
+			for _, dep := range source.Spec.DependsOn {
+				if next := replacements[dep.TaskID]; next != nil {
+					if dep.ArtifactID != "" {
+						return plan, reviewRoots, fmt.Errorf("%w: explicit peer review output needs parent remapping", ErrTemplateNeedsMain)
+					}
+					for _, id := range next {
+						if id == review.ID {
+							return plan, reviewRoots, fmt.Errorf("%w: peer review roles cannot be merged", ErrTemplateNeedsMain)
+						}
+						if !seen[id] {
+							review.DependsOn = append(review.DependsOn, contract.TaskDependency{TaskID: id})
+							seen[id] = true
+						}
+					}
+				}
+			}
+		}
+		filtered := []string{}
+		for _, id := range review.InputArtifactIDs {
+			if !peerOutputs[id] || explicitInputs[id] {
+				filtered = append(filtered, id)
+			}
+		}
+		review.InputArtifactIDs = filtered
 		if err := kernelRecordTx(ctx, tx, "template_task_context", structureID("task-", wave.ID, reviewPhase.Tasks[i].ID), wave.ID, map[string]any{"expansion_key": key, "input_task_local_id": previousFix, "source_result_ids": sourceResults, "input_digest": inputDigest, "review_role_id": reviewRoles[reviewPhase.Tasks[i].ID]}); err != nil {
 			return plan, reviewRoots, err
 		}
@@ -633,6 +705,23 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 				return plan, reviewRoots, err
 			}
 			if needsFixedSubject && task.Kind == "review" {
+				var priorContext templateTaskInput
+				contextErr := completionRecord(ctx, tx, "template_task_context", structureID("task-", wave.ID, task.ID), &priorContext)
+				if contextErr != nil && !errors.Is(contextErr, sql.ErrNoRows) {
+					return plan, reviewRoots, contextErr
+				}
+				if errors.Is(contextErr, sql.ErrNoRows) {
+					for _, id := range old.InputArtifactIDs {
+						if !subjectArtifacts[id] {
+							return plan, reviewRoots, fmt.Errorf("%w: downstream review has another explicit possible subject", ErrTemplateNeedsMain)
+						}
+					}
+					for _, dep := range old.DependsOn {
+						if dep.ArtifactID != "" && !subjectArtifacts[dep.ArtifactID] {
+							return plan, reviewRoots, fmt.Errorf("%w: downstream review subject selector is unaffected", ErrTemplateNeedsMain)
+						}
+					}
+				}
 				if err := pinClonedReviewSubjectTx(ctx, tx, wave, task.ID, key, inputDigest, previousFix, cloneIDs); err != nil {
 					return plan, reviewRoots, err
 				}

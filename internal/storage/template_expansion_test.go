@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -921,5 +922,157 @@ func TestTemplateRevalidatesEarlierReviewRoleAfterLaterPhaseFix(t *testing.T) {
 	}
 	if !instructions[a.ReviewInstruction] || !instructions[b.ReviewInstruction] || len(instructions) != 2 {
 		t.Fatal("earlier role was left on superseded subject", instructions)
+	}
+}
+
+func TestTemplateAmbiguousDownstreamReviewSubjectRequiresParent(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := mustImport(t, store, ArtifactImport{SessionID: wave.OrchestratorSessionID, Target: wave.Target(), Key: "B", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "external", Reference: "B"}}, "B claims")
+	plan := storagePlanFixture()
+	plan.Templates = []contract.FixReviewTemplate{kernelTemplate()}
+	plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "later", Tasks: []contract.TaskSpec{{ID: "later-review", Kind: "review", Instruction: "review B using A as supporting research", Criteria: []string{"AC"}, InputArtifactIDs: []string{other.ID}, DependsOn: []contract.TaskDependency{{TaskID: "work"}}}}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"later-review"}}, FailurePolicy: "drain_and_block"})
+	initial, err := store.AdoptPlan(ctx, wave.Target(), "initial", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := store.Task(ctx, initial.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := completeTemplateTask(t, store, work, "A research", "", nil)
+	source, err := store.Task(ctx, initial.CreatedTaskIDs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeTemplateTask(t, store, source, "A findings", a.Digest, []string{"artifact_defect"})
+	before, err := store.Wave(ctx, wave.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: wave.Target(), ReviewTaskID: source.ID}); !errors.Is(err, ErrTemplateNeedsMain) {
+		t.Fatal("ambiguous review was silently retargeted", err)
+	}
+	after, err := store.Wave(ctx, wave.ID)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal(after, err)
+	}
+	future, err := store.Task(ctx, initial.CreatedTaskIDs[2])
+	if err != nil || future.State != contract.TaskReady {
+		t.Fatal(future, err)
+	}
+	// The existing planned review's independent B subject remains valid; parent
+	// planning can explicitly choose the appropriate replacement dependency.
+	if _, _, err = store.ReadArtifact(ctx, future.SessionID, future.Target(), other.ID, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTemplatePreservesPeerReviewDependenciesAndFreshReports(t *testing.T) {
+	for _, crossPhase := range []bool{false, true} {
+		t.Run(fmt.Sprint("cross-phase-", crossPhase), func(t *testing.T) {
+			ctx := context.Background()
+			store, request := waveStoreFixture(t)
+			request.Policy.Limits.Replans = 0
+			wave, err := store.CreateWave(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := storagePlanFixture()
+			first := plan.Phases[1].Tasks[0]
+			first.ID = "review-A"
+			first.Instruction = "validate factual support"
+			second := first
+			second.ID = "review-B"
+			second.Instruction = "validate citations using A's report"
+			second.DependsOn = []contract.TaskDependency{{TaskID: "work"}, {TaskID: first.ID}}
+			plan.Phases[1].Tasks = []contract.TaskSpec{first, second}
+			plan.Phases[1].Completion.RequiredTaskIDs = []string{first.ID, second.ID}
+			if crossPhase {
+				plan.Phases[1].Tasks = []contract.TaskSpec{first}
+				plan.Phases[1].Completion.RequiredTaskIDs = []string{first.ID}
+				plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "citations", Tasks: []contract.TaskSpec{second}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{second.ID}}, FailurePolicy: "drain_and_block"})
+			}
+			owner := kernelTemplate()
+			owner.InputTaskID = second.ID
+			owner.ReviewInstruction = "recheck citations using A's latest report"
+			plan.Templates = []contract.FixReviewTemplate{owner}
+			initial, err := store.AdoptPlan(ctx, wave.Target(), "initial", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, err := store.Task(ctx, initial.CreatedTaskIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := completeTemplateTask(t, store, work, "candidate", "", nil)
+			sourceA, err := store.Task(ctx, initial.CreatedTaskIDs[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldReport := completeTemplateTask(t, store, sourceA, "old factual report", candidate.Digest, nil)
+			sourceB, err := store.Task(ctx, initial.CreatedTaskIDs[2])
+			if err != nil {
+				t.Fatal(err)
+			}
+			completeTemplateTask(t, store, sourceB, "citation findings", candidate.Digest, []string{"artifact_defect"})
+			expanded, err := store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: wave.Target(), ReviewTaskID: sourceB.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixed domain.Artifact
+			var a, b domain.Task
+			for _, id := range expanded.Admission.CreatedTaskIDs {
+				task, err := store.Task(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if task.Spec.Kind == "fix" {
+					fixed = completeTemplateTask(t, store, task, "corrected candidate", "", nil)
+				} else if task.Spec.Instruction == first.Instruction {
+					a = task
+				} else {
+					b = task
+				}
+			}
+			found := false
+			for _, dep := range b.Spec.DependsOn {
+				found = found || dep.TaskID == a.LocalID
+			}
+			if !found {
+				t.Fatal("peer review prerequisite lost", b.Spec.DependsOn, a)
+			}
+			bb, err := store.SessionBinding(ctx, b.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bb = reserveSessionFixture(t, store, bb)
+			if err = store.BindSessionThread(ctx, bb, "thread-"+b.ID); err != nil {
+				t.Fatal(err)
+			}
+			bb, err = store.SessionBinding(ctx, bb.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := contract.SessionRun{ID: "premature", ThreadID: bb.ThreadID, State: "starting", Started: time.Now().UTC(), BaselineKnown: true}
+			if err = store.ReserveSessionRun(ctx, bb, sessionSnapshot(), run); err == nil {
+				t.Fatal("B started before fresh A")
+			}
+			if err = store.MarkSessionStopped(ctx, bb.ID, bb.PreparationID); err != nil {
+				t.Fatal(err)
+			}
+			fresh := completeTemplateTask(t, store, a, "fresh factual report", fixed.Digest, nil)
+			if _, _, err = store.ReadArtifact(ctx, b.SessionID, b.Target(), fresh.ID, 0, 100); err != nil {
+				t.Fatal("B cannot read fresh A", err)
+			}
+			if _, _, err = store.ReadArtifact(ctx, b.SessionID, b.Target(), oldReport.ID, 0, 100); err == nil {
+				t.Fatal("old peer report was automatically reused")
+			}
+			completeTemplateTask(t, store, b, "fresh citations report", fixed.Digest, nil)
+		})
 	}
 }
