@@ -86,10 +86,7 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 	}
 	var result contract.TaskResult
-	validationErr := contract.ValidateSessionInput([]byte(run.Final))
-	if validationErr == nil {
-		validationErr = contract.DecodeStrict([]byte(run.Final), &result)
-	}
+	validationErr := contract.DecodeStrict([]byte(run.Final), &result)
 	if validationErr == nil {
 		validationErr = result.Validate()
 	}
@@ -131,10 +128,24 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 	for _, id := range resultArtifactReferences(result) {
 		a, err := loadArtifact(ctx, tx, id)
 		if err != nil {
-			return k.pendingTaskResultTx(ctx, tx, task, receipt, "referenced Artifact is unavailable")
+			if errors.Is(err, sql.ErrNoRows) {
+				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "referenced Artifact ID was never issued")
+			}
+			return receipt, err
 		}
-		if err = artifactReadableTx(ctx, tx, b, wave, a); err != nil {
-			return k.pendingTaskResultTx(ctx, tx, task, receipt, "referenced Artifact is not granted in the current scope")
+		if a.State == "expired" || a.State == "deleting" {
+			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "referenced Artifact is expired")
+		}
+		grant := a
+		grant.State = "committed" // Permission is independent from a staged write.
+		if err = artifactReadableTx(ctx, tx, b, wave, grant); err != nil {
+			if errors.Is(err, ErrArtifactGrant) || errors.Is(err, ErrArtifactScope) {
+				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "referenced Artifact is not granted in the current scope")
+			}
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "Artifact dependency binding requires reconciliation")
+		}
+		if a.State != "committed" {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "referenced Artifact is not committed")
 		}
 		if _, err = k.readArtifactObject(a); err != nil {
 			return k.pendingTaskResultTx(ctx, tx, task, receipt, "referenced Artifact content requires reconciliation")
@@ -205,6 +216,12 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 	}
 	receipt.State, receipt.Reason = task.State, task.Reason
 	return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, &result)
+}
+
+func (k *KernelStore) invalidTaskResultTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, task domain.Task, receipt ResultApplication, reason string) (ResultApplication, error) {
+	task.State, task.Reason, task.CompletedAt = contract.TaskFailed, reason, k.clock()
+	receipt.State, receipt.Reason = task.State, reason
+	return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 }
 func (k *KernelStore) pendingTaskResultTx(ctx context.Context, tx *sql.Tx, task domain.Task, receipt ResultApplication, reason string) (ResultApplication, error) {
 	task.State, task.Reason = contract.TaskBlocked, reason

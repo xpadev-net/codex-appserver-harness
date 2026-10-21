@@ -31,6 +31,10 @@ type ArtifactImport struct {
 	InputArtifactIDs []string              `json:"input_artifact_ids"`
 }
 
+var ErrArtifactGrant = errors.New("Artifact was not granted to this Task")
+var ErrArtifactScope = errors.New("Artifact is outside the current scope/policy")
+var ErrArtifactUnavailable = errors.New("Artifact is not committed")
+
 func loadArtifact(ctx context.Context, q queryer, id string) (domain.Artifact, error) {
 	var a domain.Artifact
 	var raw []byte
@@ -87,8 +91,11 @@ func artifactAuthorityTx(ctx context.Context, tx *sql.Tx, sessionID string, targ
 	return b, w, nil
 }
 func artifactReadableTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave, a domain.Artifact) error {
-	if a.State != "committed" || a.WaveID != w.ID || a.ScopeRevision != w.ScopeRevision || a.PolicyRevision != w.Policy.Revision {
-		return errors.New("Artifact unavailable or outside the current scope/policy")
+	if a.State != "committed" {
+		return ErrArtifactUnavailable
+	}
+	if a.WaveID != w.ID || a.ScopeRevision != w.ScopeRevision || a.PolicyRevision != w.Policy.Revision {
+		return ErrArtifactScope
 	}
 	if b.Kind == "orchestrator" && w.OrchestratorSessionID == b.ID {
 		return nil
@@ -132,7 +139,7 @@ func artifactReadableTx(ctx context.Context, tx *sql.Tx, b contract.SessionBindi
 			}
 		}
 	}
-	return errors.New("Artifact was not granted to this Task")
+	return ErrArtifactGrant
 }
 
 // Evidence may be carried separately from top-level output artifacts. Read

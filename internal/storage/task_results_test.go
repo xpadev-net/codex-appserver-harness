@@ -6,11 +6,13 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/worker"
 )
 
 func recordedTaskResultFixture(t *testing.T, mutate func(*contract.TaskResult)) (*KernelStore, contract.SessionBinding, contract.SessionRun, contract.TaskResult) {
@@ -376,5 +378,55 @@ func recordAndStopTaskResult(t *testing.T, store *KernelStore, b contract.Sessio
 	}
 	if err = store.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTaskResultValidLargeOutputUsesOutputContract(t *testing.T) {
+	ctx := context.Background()
+	store, b, run, _ := recordedTaskResultFixture(t, func(r *contract.TaskResult) {
+		r.Remaining = []string{strings.Repeat("a", 15000), strings.Repeat("b", 15000), strings.Repeat("c", 15000), strings.Repeat("d", 15000), strings.Repeat("e", 15000)}
+	})
+	if len(run.Final) <= contract.MaxSessionInput {
+		t.Fatal("fixture output is not larger than main input limit")
+	}
+	if err := worker.ValidateTaskOutput([]byte(run.Final), b); err != nil {
+		t.Fatal("fixture rejected by worker output contract", err)
+	}
+	if err := store.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := store.ApplyTaskResult(ctx, b.ID, run.ID)
+	if err != nil || applied.State != contract.TaskCompleted {
+		t.Fatal(applied, err)
+	}
+}
+func TestTaskResultPermanentArtifactViolationCanBeReplaced(t *testing.T) {
+	for _, mode := range []string{"undeclared", "never-issued"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			store, b := boundTaskFixture(t)
+			id := "artifact-00000000000000000000000000000000"
+			if mode == "undeclared" {
+				a := mustImport(t, store, ArtifactImport{SessionID: b.ParentSessionID, Target: b.Target, Key: "not-granted", Kind: "note", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "external", Reference: "private main input"}}, "not granted to Task")
+				id = a.ID
+			}
+			result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "result", Artifacts: []string{id}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "invalid reference", EvidenceIDs: []string{id}}}}
+			recordAndStopTaskResult(t, store, b, "invalid-reference", result)
+			applied, err := store.ApplyTaskResult(ctx, b.ID, "invalid-reference")
+			if err != nil || applied.State != contract.TaskFailed || applied.ResultID != "" {
+				t.Fatal(applied, err)
+			}
+			plan := storagePlanFixture()
+			plan.Phases[0].ID = "work-new"
+			plan.Phases[0].Tasks[0].ID = "work-new"
+			plan.Phases[0].Completion.RequiredTaskIDs = []string{"work-new"}
+			plan.Phases[1].ID = "review-new"
+			plan.Phases[1].Tasks[0].ID = "review-new"
+			plan.Phases[1].Tasks[0].DependsOn[0].TaskID = "work-new"
+			plan.Phases[1].Completion.RequiredTaskIDs = []string{"review-new"}
+			if _, err = store.AdoptPlan(ctx, b.Target, "replace-invalid", plan); err != nil {
+				t.Fatal("invalid reference permanently held replacement", err)
+			}
+		})
 	}
 }
