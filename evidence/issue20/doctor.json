@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "observed_at": "2026-10-21T05:10:40.41672002Z",
+  "repository": "xpadev-net/codex-appserver-harness",
+  "repository_id": 1426858504,
+  "default_branch": "master",
+  "codex_version": "codex-cli 0.163.0",
+  "capabilities": {
+    "app_server": {
+      "state": "verified",
+      "reason": "initialize/initialized completed",
+      "evidence": "codex-cli 0.163.0"
+    },
+    "ci_mapping": {
+      "state": "unknown",
+      "reason": "not observed"
+    },
+    "cloud_native_approval": {
+      "state": "unknown",
+      "reason": "not observed"
+    },
+    "cloud_request": {
+      "state": "unknown",
+      "reason": "not observed"
+    },
+    "github_read": {
+      "state": "verified",
+      "reason": "repository metadata retrieved",
+      "evidence": "gh api repos/xpadev-net/codex-appserver-harness"
+    },
+    "github_write": {
+      "state": "unknown",
+      "reason": "not observed"
+    },
+    "review_sha": {
+      "state": "unknown",
+      "reason": "not observed"
+    },
+    "rules_enforced": {
+      "state": "unknown",
+      "reason": "not observed"
+    },
+    "thread_resume": {
+      "state": "unknown",
+      "reason": "not observed"
+    }
+  },
+  "auto_merge_ready": false
+}

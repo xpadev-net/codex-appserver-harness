@@ -1,0 +1,47 @@
+{
+  "observed_at": "2026-10-21T05:03:12.127845+00:00",
+  "repository": "xpadev-net/codex-appserver-harness",
+  "repository_id": 1426858504,
+  "pull_request": 31,
+  "head_sha": "2aaba99e5935c94ef3117b49c2ae1c78440dcf92",
+  "base_sha": "3d01d685b17be90d9b8464312e5b84be9412bc31",
+  "test_merge_sha": "d66735841ee0cbc14644cb227c93b3f16c89362f",
+  "test_merge_parents": [
+    "3d01d685b17be90d9b8464312e5b84be9412bc31",
+    "2aaba99e5935c94ef3117b49c2ae1c78440dcf92"
+  ],
+  "checks": [
+    {
+      "id": 119047934868,
+      "name": "test",
+      "head_sha": "2aaba99e5935c94ef3117b49c2ae1c78440dcf92",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/xpadev-net/codex-appserver-harness/actions/runs/39547198333/job/119047934868",
+      "app_id": 15368,
+      "run_id": 39547198333,
+      "job_id": 119047934868,
+      "event": "pull_request",
+      "run_head_sha": "2aaba99e5935c94ef3117b49c2ae1c78440dcf92",
+      "checkout_sha": "d66735841ee0cbc14644cb227c93b3f16c89362f",
+      "go_test_observed": true,
+      "go_vet_observed": true
+    },
+    {
+      "id": 119047910950,
+      "name": "test",
+      "head_sha": "2aaba99e5935c94ef3117b49c2ae1c78440dcf92",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/xpadev-net/codex-appserver-harness/actions/runs/39547190701/job/119047910950",
+      "app_id": 15368,
+      "run_id": 39547190701,
+      "job_id": 119047910950,
+      "event": "push",
+      "run_head_sha": "2aaba99e5935c94ef3117b49c2ae1c78440dcf92",
+      "checkout_sha": "2aaba99e5935c94ef3117b49c2ae1c78440dcf92",
+      "go_test_observed": true,
+      "go_vet_observed": true
+    }
+  ]
+}
