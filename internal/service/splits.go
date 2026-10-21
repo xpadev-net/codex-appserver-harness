@@ -211,6 +211,12 @@ func (s scopedCreator) CreateChild(ctx context.Context, title, body, marker stri
 // AdoptContinuation preserves the merged PR and starts a separately versioned
 // successor. Old completion/approval evidence is not assigned to the new scope.
 func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, scope verification.Scope, reason string) error {
+	lock, err := c.splitLease("final:" + issueKey(w))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
 	if w.Phase != domain.Merged || scope.Revision != w.ScopeRevision+1 || strings.TrimSpace(reason) == "" || len(scope.PreviouslyMerged) != 0 || c.Config.Verification.Revision < w.PolicyRevision {
 		return errors.New("continuation adoption requires a new scope and fresh coverage")
 	}

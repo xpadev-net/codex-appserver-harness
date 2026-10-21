@@ -36,7 +36,16 @@ func transferFinal(ctx context.Context, tx *sql.Tx, previous, next domain.WorkIt
 	key := fmt.Sprintf("r%d-i%d", previous.RepositoryID, previous.Issue)
 	var state FinalAcceptanceState
 	if err := completionRecord(ctx, tx, "parent_final_state", key, &state); errors.Is(err, sql.ErrNoRows) {
-		return nil
+		if next.ScopeRevision == previous.ScopeRevision {
+			return nil
+		}
+		state = FinalAcceptanceState{WorkItemID: next.ID, ScopeRevision: next.ScopeRevision, State: "waiting", RecoveryID: next.ID, UpdatedAt: time.Now().UTC()}
+		data, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO records VALUES('parent_final_state',?,?,?)", key, next.ID, data)
+		return err
 	} else if err != nil {
 		return err
 	}
