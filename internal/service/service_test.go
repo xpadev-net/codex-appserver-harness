@@ -169,6 +169,7 @@ type fakeAgents struct {
 	prompts        []string
 	classification string
 	autoSplit      bool
+	nestedSplit    bool
 	partialChild   bool
 	interim        bool
 }
@@ -182,7 +183,7 @@ func (f *fakeAgents) Run(_ context.Context, w domain.WorkItem, op domain.Operati
 	}
 	json.Unmarshal([]byte(input), &in)
 	var output any
-	if f.autoSplit && w.ID == "w" && op.Kind == "implement" {
+	if op.Kind == "implement" && ((f.autoSplit && w.ID == "w") || (f.nestedSplit && w.ID == "w-part0")) {
 		output = worker.Handoff{SchemaVersion: 1, WorkItemID: w.ID, ScopeRevision: w.ScopeRevision, InputCandidateID: w.Candidate, Outcome: "split", Summary: "needs decomposition", CoveredCriteria: []string{}, RemainingWork: []string{"two independent criteria"}, RequestedProfiles: []string{}, Blockers: []string{}}
 	} else if op.Kind == "propose_split" {
 		children := []splitting.Child{}
@@ -1397,5 +1398,64 @@ func TestRetryOnlyConfirmedUncreatedSplitChild(t *testing.T) {
 				t.Fatal(gh.children, api.calls, gh.merges, gh.issue.State)
 			}
 		})
+	}
+}
+
+func TestNestedSplitReleasesExistingDependentAfterFinalAcceptance(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	agents.autoSplit, agents.nestedSplit, agents.partialChild = true, true, true
+	for range 15 {
+		drive(t, c, 1)
+		if root, _ := c.Store.Get(ctx, "w"); root.Phase == domain.Split {
+			break
+		}
+	}
+	if err := c.Store.Apply(ctx, domain.Event{ID: "pause-b", WorkItemID: "w-part1", Kind: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := c.Store.DependenciesReady(ctx, "w-part1"); err != nil || ready {
+		t.Fatal("unfinished split released dependent", ready, err)
+	}
+	drive(t, c, 65)
+	a, err := c.Store.Get(ctx, "w-part0")
+	if err != nil || a.Phase != domain.Split || gh.merges != 2 {
+		t.Fatal(a, gh.merges, err)
+	}
+	b, _ := c.Store.Get(ctx, "w-part1")
+	if b.Phase != domain.Ready {
+		t.Fatal("dependent ran while paused", b)
+	}
+	if ready, err := c.Store.DependenciesReady(ctx, b.ID); err != nil || !ready {
+		t.Fatal("complete split did not release dependent", ready, err)
+	}
+	key := fmt.Sprintf("r%d-i%d", a.RepositoryID, a.Issue)
+	var proof map[string]any
+	if err = c.Store.Record(ctx, "parent_completion", key, &proof); err != nil {
+		t.Fatal(err)
+	}
+	c.Store.DB.ExecContext(ctx, "DELETE FROM records WHERE kind='parent_completion' AND id=?", key)
+	if ready, err := c.Store.DependenciesReady(ctx, b.ID); err != nil || ready {
+		t.Fatal("missing acceptance released dependent", ready, err)
+	}
+	proof["scope_revision"] = a.ScopeRevision + 1
+	c.Store.Put(ctx, "parent_completion", key, a.ID, proof)
+	if ready, err := c.Store.DependenciesReady(ctx, b.ID); err != nil || ready {
+		t.Fatal("stale acceptance released dependent", ready, err)
+	}
+	proof["scope_revision"] = a.ScopeRevision
+	c.Store.Put(ctx, "parent_completion", key, a.ID, proof)
+	if err = c.Store.Apply(ctx, domain.Event{ID: "resume-b", WorkItemID: b.ID, Kind: "resume"}); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 45)
+	b, _ = c.Store.Get(ctx, b.ID)
+	if b.Phase != domain.Merged || gh.merges != 3 || gh.closed != 5 || agents.calls != 10 || gh.issue.State != "closed" {
+		t.Fatal(b, gh.merges, gh.closed, agents.calls, gh.issue.State)
 	}
 }
