@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// GoTestSuccessPattern requires an executed passing test, not a package summary.
+const GoTestSuccessPattern = `(?m)^--- PASS: [^\r\n]+`
+
 type Profile struct {
 	EntryPointSHA256 string   `json:"entrypoint_sha256,omitempty"`
 	Revision         int      `json:"revision"`
@@ -35,10 +38,8 @@ func (v Verification) Validate() error {
 		if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(id) || p.Revision < 1 || len(p.Argv) == 0 || p.Argv[0] == "" || p.TimeoutSeconds < 1 {
 			return errors.New("invalid profile")
 		}
-		if p.SuccessPattern != "" {
-			if _, err := regexp.Compile(p.SuccessPattern); err != nil {
-				return err
-			}
+		if err := p.ValidateEvidence(); err != nil {
+			return err
 		}
 	}
 	seen := map[string]bool{}
@@ -69,4 +70,19 @@ func (v Verification) ExecutionSet(requested []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// ValidateEvidence rejects profiles that can pass without execution evidence.
+func (p Profile) ValidateEvidence() error {
+	if strings.TrimSpace(p.SuccessPattern) == "" {
+		return errors.New("profile requires a success evidence pattern")
+	}
+	pattern, err := regexp.Compile(p.SuccessPattern)
+	if err != nil {
+		return err
+	}
+	if pattern.MatchString("") {
+		return errors.New("success evidence pattern must not match empty output")
+	}
+	return nil
 }

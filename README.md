@@ -27,7 +27,7 @@ go vet ./...
 
 既定ブランチとrepository IDはGitHub metadataから解決します。設定・状態ディレクトリは候補リポジトリの外に置きます。`init`は既存設定を上書きしません。
 
-生成した設定でprofileコマンド、検証担当に許可するファイルパス、優先label、予算を確定してください。既定の`go test ./...`はGoプロジェクト向けの初期設定です。`verifier_paths`は正確なファイル名または`tests/`のようなディレクトリprefixです。`./scripts/ci`等の相対entrypointには、信頼する版の`entrypoint_sha256`も設定します。
+生成した設定でprofileコマンド、検証担当に許可するファイルパス、優先label、予算を確定してください。既定の`go test -v ./...`はGoプロジェクト向けの初期設定です。各profileは実行・成功の証拠となる`success_pattern`を必須とし、既定では実際のテストの`--- PASS:`行を要求します。テスト0件・全skip・空出力を合格にしません。既存設定にもprofileに適したpatternを追加し、policy revisionを更新してください。`verifier_paths`は正確なファイル名または`tests/`のようなディレクトリprefixです。`./scripts/ci`等の相対entrypointには、信頼する版の`entrypoint_sha256`も設定します。
 
 `worker_codex_home`にはGitHub資格情報を含まない専用のCodex設定・認証を用意してください。ネイティブCodex実行ファイルを指定します。Nodeランチャーへのパスではありません。launcherは`launcher_contract: argv_passthrough_v1`として、後続のprogram/argv、cwd、環境、終了コードを保ち、終了時に子プロセスを残さないものを指定します。runnerは引数・cwd・終了コードのcanaryも確認します。実行環境の資格情報とネットワーク権限を検証してから`isolation_verified`を有効にします。workerとrunnerは実行時にもcontroller DB・既知のGitHub資格情報パスが見えないことを検査します。共有proxyが認証を注入する環境では、workerにGitHub書き込み権限を渡さない別のネットワーク設定も必要です。
 
