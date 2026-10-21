@@ -82,16 +82,29 @@ func (c *Controller) afterMerge(ctx context.Context, w domain.WorkItem) error {
 		if c.Store.GetInto(ctx, residual.ID, &next) == nil {
 			return nil
 		}
+		var hold map[string]any
+		if err := c.Store.Record(ctx, "continuation_hold", w.ID, &hold); err == nil {
+			return nil
+		} else if !missing(err) {
+			return err
+		}
+		if _, err := c.current(ctx, w); err != nil {
+			var conflict currentConflict
+			if !errors.As(err, &conflict) {
+				return err
+			}
+			return c.Store.Put(ctx, "continuation_hold", w.ID, w.ID, map[string]any{"reason": err.Error(), "required_action": "adopt a new scope revision for the successor", "observed_at": time.Now().UTC()})
+		}
+		var source Source
+		if err := c.Store.Record(ctx, "source", w.ID, &source); err != nil {
+			return err
+		}
 		nextScope, err := splitting.NextScope(scope)
 		if err != nil {
 			return err
 		}
 		next = domain.WorkItem{ID: residual.ID, RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Phase: domain.Ready}
-		issue, err := c.GitHub.GetIssue(ctx, w.Issue)
-		if err != nil {
-			return err
-		}
-		return c.Store.ClaimNextRecords(ctx, w.ID, next, map[string]any{"scope": nextScope, "source": Source{digest(issue)}, "policy_snapshot": c.policyDigest()})
+		return c.Store.ClaimNextRecords(ctx, w.ID, next, map[string]any{"scope": nextScope, "source": source, "policy_snapshot": c.policyDigest()})
 	}
 	return c.finalAcceptance(ctx, w, scope)
 }
@@ -179,7 +192,7 @@ func (c *Controller) finalAcceptance(ctx context.Context, w domain.WorkItem, s v
 	}
 	completion := []splitting.Completion{}
 	for _, item := range items {
-		if item.Issue != w.Issue || item.RepositoryID != w.RepositoryID {
+		if item.Issue != w.Issue || item.RepositoryID != w.RepositoryID || item.ScopeRevision != s.Revision {
 			continue
 		}
 		var childScope verification.Scope
@@ -307,4 +320,36 @@ func (s scopedCreator) FindChild(ctx context.Context, marker string) (int, error
 }
 func (s scopedCreator) CreateChild(ctx context.Context, title, body, marker string) (int, error) {
 	return s.GitHub.CreateChild(ctx, title, body+"\n\n"+s.Context, marker)
+}
+
+// AdoptContinuation preserves the merged PR and starts a separately versioned
+// successor. Old completion/approval evidence is not assigned to the new scope.
+func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, scope verification.Scope, reason string) error {
+	if w.Phase != domain.Merged || scope.Revision != w.ScopeRevision+1 || strings.TrimSpace(reason) == "" || len(scope.PreviouslyMerged) != 0 || c.Config.Verification.Revision < w.PolicyRevision {
+		return errors.New("continuation adoption requires a new scope and fresh coverage")
+	}
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	var previous verification.Scope
+	if err := c.Store.Record(ctx, "scope", w.ID, &previous); err != nil {
+		return err
+	}
+	if len(previous.Remaining) == 0 {
+		return errors.New("merged work item has no continuation")
+	}
+	issue, err := c.GitHub.GetIssue(ctx, w.Issue)
+	if err != nil {
+		return err
+	}
+	if issue.State != "open" {
+		return errors.New("continuation issue is not open")
+	}
+	for _, label := range issue.Labels {
+		if label.Name == c.Config.HoldLabel {
+			return errors.New("continuation issue is on hold")
+		}
+	}
+	next := domain.WorkItem{ID: splittingResidual(w, previous).ID, RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: scope.Revision, PolicyRevision: c.Config.Verification.Revision, Phase: domain.Ready}
+	return c.Store.ClaimNextRecords(ctx, w.ID, next, map[string]any{"scope": scope, "source": Source{digest(issue)}, "policy_snapshot": c.policyDigest(), "adoption_reason": reason, "continued_from": w.ID})
 }

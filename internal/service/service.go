@@ -60,6 +60,10 @@ type Controller struct {
 	Jobs         Jobs
 	Capabilities contract.Report
 }
+type currentConflict string
+
+func (e currentConflict) Error() string { return string(e) }
+
 type Source struct {
 	Digest string `json:"digest"`
 }
@@ -363,7 +367,7 @@ func (c *Controller) current(ctx context.Context, w domain.WorkItem) (verificati
 		return s, err
 	}
 	if savedPolicy != c.policyDigest() {
-		return s, errors.New("trusted policy changed; adopt an explicit new revision")
+		return s, currentConflict("trusted policy changed; adopt an explicit new revision")
 	}
 	if err := c.Store.Record(ctx, "scope", w.ID, &s); err != nil {
 		return s, err
@@ -377,11 +381,11 @@ func (c *Controller) current(ctx context.Context, w domain.WorkItem) (verificati
 		return s, err
 	}
 	if issue.State != "open" || digest(issue) != source.Digest || s.Revision != w.ScopeRevision || w.PolicyRevision != c.Config.Verification.Revision {
-		return s, errors.New("issue closed, scope changed, or policy revision changed")
+		return s, currentConflict("issue closed, scope changed, or policy revision changed")
 	}
 	for _, label := range issue.Labels {
 		if label.Name == c.Config.HoldLabel {
-			return s, errors.New("issue is on hold")
+			return s, currentConflict("issue is on hold")
 		}
 	}
 	return s, s.Validate()
