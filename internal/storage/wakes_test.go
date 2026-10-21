@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -87,7 +90,7 @@ func TestWakeReservationIsReplayableAndInputDoesNotDependOnDeliveryAck(t *testin
 		t.Fatal(w)
 	}
 	var input wakeInput
-	if err := json.Unmarshal(w.Snapshot.Input, &input); err != nil || len(input.Messages) != 1 || input.Messages[0].ID != m.ID || input.Messages[0].Request.Body != m.Request.Body || len(input.Notifications) != 1 || input.Notifications[0].ID != request.NotificationIDs[0] {
+	if err := json.Unmarshal(w.Snapshot.Input, &input); err != nil || len(input.Messages) != 1 || input.Messages[0].ID != m.ID || input.Messages[0].Body != m.Request.Body || input.Messages[0].BodyEncoding != "utf-8" || len(input.Notifications) != 1 || input.Notifications[0].ID != request.NotificationIDs[0] {
 		t.Fatal(input, err)
 	}
 	if !input.Notifications[0].DeliveryAcknowledged || input.Notifications[0].State != "pending" {
@@ -565,5 +568,52 @@ func TestWakeCannotBorrowAnotherSessionsNotification(t *testing.T) {
 	request.NotificationIDs = []string{parent[0].ID, parent[0].ID}
 	if _, err = k.ReserveWake(ctx, request); err == nil {
 		t.Fatal("duplicate input IDs accepted")
+	}
+}
+
+func TestSingleMaximumInlineMessageAlwaysFitsWakeTransport(t *testing.T) {
+	for _, character := range []string{"<", "&", "\x00", "\"", "\u2028"} {
+		t.Run(fmt.Sprintf("%x", []byte(character)), func(t *testing.T) {
+			ctx := context.Background()
+			k, wave, tasks := mailboxFixture(t)
+			body := strings.Repeat(character, contract.MaxInline/len(character))
+			m, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: "main", Target: wave.Target(), Key: "full-body", Recipient: tasks[0].ID, Body: body})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, err := k.PendingWakeNotifications(ctx, tasks[0].SessionID, 10)
+			if err != nil || len(pending) != 1 {
+				t.Fatal(pending, err)
+			}
+			w, err := k.ReserveWake(ctx, WakeRequest{SessionID: tasks[0].SessionID, Key: "body", NotificationIDs: []string{pending[0].ID}})
+			if err != nil {
+				t.Fatal("valid single message became undeliverable", err)
+			}
+			if err = contract.ValidateSessionInput(w.Snapshot.Input); err != nil {
+				t.Fatal(err)
+			}
+			var input wakeInput
+			if err = json.Unmarshal(w.Snapshot.Input, &input); err != nil || len(input.Messages) != 1 {
+				t.Fatal(err)
+			}
+			message := input.Messages[0]
+			decoded := []byte(message.Body)
+			if message.BodyEncoding == "base64" {
+				decoded, err = base64.StdEncoding.DecodeString(strings.Join(message.EncodedBodyChunks, ""))
+				if err != nil || message.Body != "" {
+					t.Fatal(message, err)
+				}
+				for _, chunk := range message.EncodedBodyChunks {
+					if len(chunk) > contract.MaxInline {
+						t.Fatal("oversize encoded inline value")
+					}
+				}
+			} else if message.BodyEncoding != "utf-8" {
+				t.Fatal(message.BodyEncoding)
+			}
+			if string(decoded) != body || message.ID != m.ID || message.BodyDigest != fmt.Sprintf("%x", sha256.Sum256(decoded)) {
+				t.Fatal("message body/provenance changed during transport")
+			}
+		})
 	}
 }

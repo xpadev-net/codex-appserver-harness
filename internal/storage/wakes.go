@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,8 +49,51 @@ type wakeInput struct {
 	SessionID     string            `json:"session_id"`
 	Targets       []contract.Target `json:"targets"`
 	Notifications []Notification    `json:"notifications"`
-	Messages      []Message         `json:"messages"`
+	Messages      []WakeMessage     `json:"messages"`
 	Context       json.RawMessage   `json:"context"`
+}
+
+// WakeMessage preserves the complete authorized body. Encoding overhead must
+// not make one valid inline message impossible to deliver within a snapshot.
+type WakeMessage struct {
+	ID                 string          `json:"id"`
+	SenderSessionID    string          `json:"sender_session_id"`
+	RecipientSessionID string          `json:"recipient_session_id"`
+	TaskID             string          `json:"task_id"`
+	Target             contract.Target `json:"target"`
+	SourceRunID        string          `json:"source_run_id"`
+	ReplyTo            string          `json:"reply_to"`
+	Body               string          `json:"body"`
+	BodyEncoding       string          `json:"body_encoding"`
+	EncodedBodyChunks  []string        `json:"encoded_body_chunks"`
+	BodyDigest         string          `json:"body_digest"`
+}
+
+func encodeWakeJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buffer.Bytes()), nil
+}
+func wakeMessage(m Message) WakeMessage {
+	w := WakeMessage{ID: m.ID, SenderSessionID: m.SenderSessionID, RecipientSessionID: m.RecipientSessionID, TaskID: m.TaskID, Target: m.Target, SourceRunID: m.Request.SourceRunID, ReplyTo: m.Request.ReplyTo, Body: m.Request.Body, BodyEncoding: "utf-8", EncodedBodyChunks: []string{}, BodyDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(m.Request.Body)))}
+	bodyJSON, _ := encodeWakeJSON(w.Body)
+	if len(bodyJSON) > contract.MaxInline+1024 {
+		// Quotes, controls and JS separator characters can still expand in
+		// JSON even with HTML escaping disabled. Chunk the reversible encoding
+		// so every inline value also respects its individual byte limit.
+		w.Body, w.BodyEncoding = "", "base64"
+		encoded := base64.StdEncoding.EncodeToString([]byte(m.Request.Body))
+		for len(encoded) > 0 {
+			length := min(len(encoded), contract.MaxInline)
+			w.EncodedBodyChunks = append(w.EncodedBodyChunks, encoded[:length])
+			encoded = encoded[length:]
+		}
+	}
+	return w
 }
 
 func notificationTx(ctx context.Context, q queryer, id string) (Notification, error) {
@@ -263,7 +308,7 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 		return reservation, ErrWakeHeld
 	}
 	intent := WakeIntent{ID: id, SessionID: b.ID, RequestDigest: digest, NotificationIDs: request.NotificationIDs, Targets: []contract.Target{}, State: "reserved", CreatedAt: k.clock()}
-	input := wakeInput{SchemaVersion: 1, SessionID: b.ID, Notifications: []Notification{}, Messages: []Message{}, Context: request.Context}
+	input := wakeInput{SchemaVersion: 1, SessionID: b.ID, Notifications: []Notification{}, Messages: []WakeMessage{}, Context: request.Context}
 	seenTargets := map[string]bool{}
 	seenMessages := map[string]bool{}
 	for _, notificationID := range request.NotificationIDs {
@@ -297,13 +342,13 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 			if state != "pending" || run != "" {
 				return reservation, errors.New("wake message is already bound or processed")
 			}
-			input.Messages = append(input.Messages, m)
+			input.Messages = append(input.Messages, wakeMessage(m))
 			seenMessages[m.ID] = true
 		}
 	}
 	sort.Slice(intent.Targets, func(i, j int) bool { return intent.Targets[i].WaveID < intent.Targets[j].WaveID })
 	input.Targets = intent.Targets
-	rawInput, err := json.Marshal(input)
+	rawInput, err := encodeWakeJSON(input)
 	if err != nil {
 		return reservation, err
 	}
