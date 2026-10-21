@@ -125,6 +125,7 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 	if len(result.WorkItemRefs) > 0 || (result.Outcome == "result" && len(task.Spec.WorkItemIDs) > 0) {
 		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product result validation is not connected")
 	}
+	pendingReason := ""
 	for _, id := range resultArtifactReferences(result) {
 		a, err := loadArtifact(ctx, tx, id)
 		if err != nil {
@@ -142,21 +143,26 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 			if errors.Is(err, ErrArtifactGrant) || errors.Is(err, ErrArtifactScope) {
 				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "referenced Artifact is not granted in the current scope")
 			}
-			return k.pendingTaskResultTx(ctx, tx, task, receipt, "Artifact dependency binding requires reconciliation")
+			pendingReason = "Artifact dependency binding requires reconciliation"
+			continue
 		}
 		if a.State != "committed" {
-			return k.pendingTaskResultTx(ctx, tx, task, receipt, "referenced Artifact is not committed")
+			pendingReason = "referenced Artifact is not committed"
+			continue
 		}
 		if _, err = k.readArtifactObject(a); err != nil {
-			return k.pendingTaskResultTx(ctx, tx, task, receipt, "referenced Artifact content requires reconciliation")
+			pendingReason = "referenced Artifact content requires reconciliation"
 		}
 	}
 	if result.Review != nil {
 		matched := false
+		unknownReviewInput := false
 		for _, id := range task.Spec.InputArtifactIDs {
 			a, err := k.currentArtifactTx(ctx, tx, wave, id)
 			if err != nil {
-				return k.pendingTaskResultTx(ctx, tx, task, receipt, "review input is unavailable")
+				pendingReason = "review input is unavailable"
+				unknownReviewInput = true
+				continue
 			}
 			matched = matched || a.Digest == result.Review.TargetDigest
 		}
@@ -167,7 +173,9 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 			}
 			priorResult, err := k.completedTaskResultTx(ctx, tx, wave, prior)
 			if err != nil {
-				return k.pendingTaskResultTx(ctx, tx, task, receipt, "review dependency result requires reconciliation")
+				pendingReason = "review dependency result requires reconciliation"
+				unknownReviewInput = true
+				continue
 			}
 			for _, id := range resultArtifactReferences(priorResult) {
 				if dep.ArtifactID != "" && id != dep.ArtifactID {
@@ -175,7 +183,9 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 				}
 				a, err := k.currentArtifactTx(ctx, tx, wave, id)
 				if err != nil {
-					return k.pendingTaskResultTx(ctx, tx, task, receipt, "review dependency Artifact is unavailable")
+					pendingReason = "review dependency Artifact is unavailable"
+					unknownReviewInput = true
+					continue
 				}
 				if err = artifactReadableTx(ctx, tx, b, wave, a); err != nil {
 					continue
@@ -183,7 +193,7 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 				matched = matched || a.Digest == result.Review.TargetDigest
 			}
 		}
-		if !matched {
+		if !matched && !unknownReviewInput {
 			task.State, task.Reason, task.CompletedAt = contract.TaskFailed, "review target is not a bound immutable input", k.clock()
 			receipt.State, receipt.Reason = task.State, task.Reason
 			return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
@@ -194,16 +204,28 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 			var owner, waveID string
 			var scope, plan int
 			var raw []byte
-			if err = tx.QueryRowContext(ctx, "SELECT session_id,wave_id,scope_revision,plan_revision,payload FROM kernel_subscriptions WHERE id=?", id).Scan(&owner, &waveID, &scope, &plan, &raw); err != nil || owner != b.ID || waveID != wave.ID || scope != wave.ScopeRevision || plan != wave.PlanRevision {
-				return k.pendingTaskResultTx(ctx, tx, task, receipt, "waiting requires this Task's durable current subscriptions")
+			err = tx.QueryRowContext(ctx, "SELECT session_id,wave_id,scope_revision,plan_revision,payload FROM kernel_subscriptions WHERE id=?", id).Scan(&owner, &waveID, &scope, &plan, &raw)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return receipt, err
+			}
+			if errors.Is(err, sql.ErrNoRows) || owner != b.ID || waveID != wave.ID || scope != wave.ScopeRevision || plan != wave.PlanRevision {
+				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "waiting requires this Task's durable current subscriptions")
 			}
 			var subscription struct {
 				Target contract.Target `json:"target"`
 			}
-			if err = json.Unmarshal(raw, &subscription); err != nil || subscription.Target != task.Target() {
-				return k.pendingTaskResultTx(ctx, tx, task, receipt, "waiting subscription policy/target is stale")
+			if err = json.Unmarshal(raw, &subscription); err != nil {
+				return receipt, err
+			}
+			if subscription.Target != task.Target() {
+				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "waiting subscription policy/target is stale")
 			}
 		}
+	}
+	if pendingReason != "" {
+		return k.pendingTaskResultTx(ctx, tx, task, receipt, pendingReason)
+	}
+	if result.Outcome == "waiting" {
 		task.State, task.Reason = contract.TaskWaiting, "waiting on durable subscriptions"
 	} else if result.Outcome == "blocked" {
 		task.State, task.Reason = contract.TaskBlocked, strings.Join(result.Blockers, "; ")

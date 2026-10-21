@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -212,31 +213,48 @@ func TestTaskResultLateCanceledOrSupersededOutcomeIsArchived(t *testing.T) {
 	}
 }
 func TestTaskResultWaitingRequiresOwnedDurableSubscription(t *testing.T) {
-	ctx := context.Background()
-	store, b, run, _ := recordedTaskResultFixture(t, func(r *contract.TaskResult) {
-		r.Outcome = "waiting"
-		r.Artifacts = nil
-		r.CriterionResults = nil
-		r.SubscriptionIDs = []string{"subscription"}
-	})
-	if err := store.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := store.ApplyTaskResult(ctx, b.ID, run.ID)
-	if !errors.Is(err, ErrTaskResultReferences) || receipt.State != contract.TaskBlocked {
-		t.Fatal(receipt, err)
-	}
-	subscription, _ := json.Marshal(map[string]any{"target": b.Target})
-	if _, err = store.DB.Exec("INSERT INTO kernel_subscriptions(id,session_id,wave_id,scope_revision,plan_revision,resource,cursor,payload) VALUES(?,?,?,?,?,'message',0,?)", "subscription", b.ID, b.Target.WaveID, b.Target.ScopeRevision, b.Target.PlanRevision, subscription); err != nil {
-		t.Fatal(err)
-	}
-	receipt, err = store.ApplyTaskResult(ctx, b.ID, run.ID)
-	if err != nil || receipt.State != contract.TaskWaiting {
-		t.Fatal(receipt, err)
-	}
-	task, err := store.Task(ctx, b.TaskID)
-	if err != nil || task.State.Terminal() || task.ResultID != "" {
-		t.Fatal(task, err)
+	for _, mode := range []string{"owned", "missing", "foreign", "stale-policy"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			store, b, run, _ := recordedTaskResultFixture(t, func(r *contract.TaskResult) {
+				r.Outcome = "waiting"
+				r.Artifacts = nil
+				r.CriterionResults = nil
+				r.SubscriptionIDs = []string{"subscription"}
+			})
+			if err := store.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "missing" {
+				owner := b.ID
+				target := b.Target
+				if mode == "foreign" {
+					owner = b.ParentSessionID
+				}
+				if mode == "stale-policy" {
+					target.PolicyRevision++
+				}
+				subscription, _ := json.Marshal(map[string]any{"target": target})
+				if _, err := store.DB.Exec("INSERT INTO kernel_subscriptions(id,session_id,wave_id,scope_revision,plan_revision,resource,cursor,payload) VALUES(?,?,?,?,?,'message',0,?)", "subscription", owner, b.Target.WaveID, b.Target.ScopeRevision, b.Target.PlanRevision, subscription); err != nil {
+					t.Fatal(err)
+				}
+			}
+			receipt, err := store.ApplyTaskResult(ctx, b.ID, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := contract.TaskFailed
+			if mode == "owned" {
+				expected = contract.TaskWaiting
+			}
+			if receipt.State != expected {
+				t.Fatal(receipt)
+			}
+			task, err := store.Task(ctx, b.TaskID)
+			if err != nil || task.ResultID != "" {
+				t.Fatal(task, err)
+			}
+		})
 	}
 }
 
@@ -426,6 +444,56 @@ func TestTaskResultPermanentArtifactViolationCanBeReplaced(t *testing.T) {
 			plan.Phases[1].Completion.RequiredTaskIDs = []string{"review-new"}
 			if _, err = store.AdoptPlan(ctx, b.Target, "replace-invalid", plan); err != nil {
 				t.Fatal("invalid reference permanently held replacement", err)
+			}
+		})
+	}
+}
+
+func TestTaskResultPermanentViolationWinsOverEarlierUnavailableArtifact(t *testing.T) {
+	for _, mode := range []string{"never-issued", "undeclared", "expired", "foreign-subscription"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			store, b := boundTaskFixture(t)
+			own := mustImport(t, store, ArtifactImport{SessionID: b.ID, Target: b.Target, Key: "missing-object", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: b.TaskID}}, "restore needed")
+			badID := "artifact-00000000000000000000000000000000"
+			if mode == "undeclared" || mode == "expired" {
+				a := mustImport(t, store, ArtifactImport{SessionID: b.ParentSessionID, Target: b.Target, Key: "not-granted", Kind: "note", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "external", Reference: "main input"}}, "not granted")
+				badID = a.ID
+				if mode == "expired" {
+					tx, err := store.kernelTx(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					a.State, a.ExpiredAt = "expired", store.clock()
+					if err = saveArtifact(ctx, tx, a); err != nil {
+						t.Fatal(err)
+					}
+					if err = tx.Commit(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "result", Artifacts: []string{own.ID, badID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "reported", EvidenceIDs: []string{own.ID}}}}
+			if mode == "foreign-subscription" {
+				result.Outcome = "waiting"
+				result.Artifacts = []string{own.ID}
+				result.SubscriptionIDs = []string{"foreign"}
+				payload, _ := json.Marshal(map[string]any{"target": b.Target})
+				if _, err := store.DB.Exec("INSERT INTO kernel_subscriptions(id,session_id,wave_id,scope_revision,plan_revision,resource,cursor,payload) VALUES('foreign',?,?,?,?,'message',0,?)", b.ParentSessionID, b.Target.WaveID, b.Target.ScopeRevision, b.Target.PlanRevision, payload); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recordAndStopTaskResult(t, store, b, "mixed-result", result)
+			if err := os.Remove(filepath.Join(store.Root, "objects", own.ID)); err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := store.ApplyTaskResult(ctx, b.ID, "mixed-result")
+			if err != nil || receipt.State != contract.TaskFailed {
+				t.Fatal("transient failure concealed permanent violation", receipt, err)
+			}
+			var active string
+			if err = store.DB.QueryRow("SELECT active_run_id FROM kernel_sessions WHERE id=?", b.ID).Scan(&active); err != nil || active != "" {
+				t.Fatal(active, err)
 			}
 		})
 	}
