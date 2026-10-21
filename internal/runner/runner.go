@@ -43,19 +43,22 @@ type Spec struct {
 	Launcher         []string       `json:"launcher"`
 }
 type Result struct {
-	JobID           string    `json:"job_id"`
-	Candidate       Candidate `json:"candidate"`
-	TestedSHA       string    `json:"tested_sha"`
-	ProfileID       string    `json:"profile_id"`
-	ProfileRevision int       `json:"profile_revision"`
-	Status          string    `json:"status"`
-	ExitCode        *int      `json:"exit_code"`
-	Started         time.Time `json:"started"`
-	Finished        time.Time `json:"finished"`
-	LogPath         string    `json:"log_path"`
-	Environment     string    `json:"environment"`
-	LogTruncated    bool      `json:"log_truncated"`
-	Reason          string    `json:"reason,omitempty"`
+	ResolutionEvidence string    `json:"resolution_evidence,omitempty"`
+	ResolutionState    string    `json:"resolution_state,omitempty"`
+	ResolvedAt         time.Time `json:"resolved_at,omitempty"`
+	JobID              string    `json:"job_id"`
+	Candidate          Candidate `json:"candidate"`
+	TestedSHA          string    `json:"tested_sha"`
+	ProfileID          string    `json:"profile_id"`
+	ProfileRevision    int       `json:"profile_revision"`
+	Status             string    `json:"status"`
+	ExitCode           *int      `json:"exit_code"`
+	Started            time.Time `json:"started"`
+	Finished           time.Time `json:"finished"`
+	LogPath            string    `json:"log_path"`
+	Environment        string    `json:"environment"`
+	LogTruncated       bool      `json:"log_truncated"`
+	Reason             string    `json:"reason,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -99,6 +102,9 @@ func LoadResult(root, id string) (Result, error) {
 		return r, errors.New("invalid job id")
 	}
 	b, err := os.ReadFile(filepath.Join(root, id, "result.json"))
+	if os.IsNotExist(err) {
+		b, err = os.ReadFile(filepath.Join(root, id+".resolved.json"))
+	}
 	if err != nil {
 		return r, err
 	}
@@ -115,12 +121,26 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	if err = s.Validate(); err != nil {
 		return r, err
 	}
+	lease, err := jobLock(ctx, s, true)
+	if err != nil {
+		return r, err
+	}
+	defer lease.Close()
+	if _, err = LoadResult(s.Root, s.JobID); err == nil {
+		return r, errors.New("job already completed or resolved")
+	} else if !os.IsNotExist(err) {
+		return r, err
+	}
 	dir := filepath.Join(s.Root, s.JobID)
 	if err = os.MkdirAll(s.Root, 0700); err != nil {
 		return r, err
 	}
 	if err = os.Mkdir(dir, 0700); err != nil {
 		return r, fmt.Errorf("job already exists or unavailable; reconcile: %w", err)
+	}
+	life := Lifecycle{State: "preparing", Process: identity(os.Getpid())}
+	if err = saveLifecycle(s, life); err != nil {
+		return r, err
 	}
 	jobCtx, stopJob := context.WithCancel(ctx)
 	defer stopJob()
@@ -244,6 +264,13 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	if err = cmd.Start(); err != nil {
 		return r, err
 	}
+	life.State = "running"
+	life.Profile = identity(cmd.Process.Pid)
+	if err = saveLifecycle(s, life); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		return r, err
+	}
 	waitErr := cmd.Wait()
 	if flushErr := redacted.Flush(); flushErr != nil {
 		waitErr = errors.Join(waitErr, flushErr)
@@ -254,6 +281,10 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		r.ExitCode = &code
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	life.State = "quiesced"
+	if err = saveLifecycle(s, life); err != nil {
+		return r, err
+	}
 	if ctx.Err() != nil {
 		r.Status = "canceled"
 		return r, ctx.Err()
@@ -357,6 +388,41 @@ func Launch(ctx context.Context, executable, specPath string) (*os.Process, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	b, err := os.ReadFile(specPath)
+	if err != nil {
+		return nil, err
+	}
+	var spec Spec
+	if err = json.Unmarshal(b, &spec); err != nil {
+		return nil, err
+	}
+	if err = spec.Validate(); err != nil {
+		return nil, err
+	}
+	lease, err := jobLock(ctx, spec, false)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+	if _, err = LoadResult(spec.Root, spec.JobID); err == nil {
+		return nil, errors.New("job already completed or resolved")
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	life, err := inspectLocked(spec)
+	if err != nil {
+		return nil, err
+	}
+	if life.State != "not_started" {
+		return nil, errors.New("existing runner requires reconciliation")
+	}
+	life = Lifecycle{State: "launching"}
+	if err = saveLifecycle(spec, life); err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(executable, "_runner", specPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout = io.Discard
@@ -364,6 +430,8 @@ func Launch(ctx context.Context, executable, specPath string) (*os.Process, erro
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	life.Process = identity(cmd.Process.Pid)
+	persistErr := saveLifecycle(spec, life)
 	go cmd.Wait()
-	return cmd.Process, nil
+	return cmd.Process, persistErr
 }

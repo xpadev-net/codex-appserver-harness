@@ -106,6 +106,14 @@ Issue本文・title・policyが変わると古い判定を保留します。新�
   --reason 'external reconciliation proved no effect' --evidence EVIDENCE_REFERENCE
 ```
 
+runnerはjobごとのleaseとプロセス識別情報から`not_started` / `running` / `completed` / `stopped` / `unknown`を照合します。`Launched=false`だけでは再起動しません。未起動または全子プロセスの停止を確認した運用者は、証拠参照と確認状態を指定します。不明な古いjobには外部で確認した完全な停止の証拠が必要です。既知の稼働プロセスがある場合は拒否します。解決したjob IDは遅れて到着する起動からも保護し、成功結果にはしません。続行は予算を維持した`retry`で行います。
+
+```sh
+./harness reconcile-job --config CONFIG --id WORK_ITEM --operation JOB_ID \
+  --job-state not_started --evidence AUDIT_REFERENCE --reason 'confirmed process was never started'
+./harness retry --config CONFIG --id WORK_ITEM --reason 'runner launch repaired'
+```
+
 Webhookは任意です。未受信イベントは定期照合で回復します。署名secretは設定ファイルに入れず`HARNESS_WEBHOOK_SECRET`で渡します。
 
 ```sh

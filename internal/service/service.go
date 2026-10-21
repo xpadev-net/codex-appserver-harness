@@ -53,6 +53,10 @@ type Jobs interface {
 	Start(context.Context, runner.Spec) error
 	Read(runner.Spec) (runner.Result, error)
 }
+type JobReconciler interface {
+	Inspect(context.Context, runner.Spec) (runner.Lifecycle, error)
+	Resolve(context.Context, runner.Spec, string, string, string) (runner.Result, error)
+}
 type Controller struct {
 	Config       Config
 	Store        *storage.Store
@@ -589,4 +593,44 @@ func (c *Controller) poolDependencies(ctx context.Context, issue github.Issue) (
 type ReconcileIntent struct {
 	OperationID string `json:"operation_id"`
 	Active      bool   `json:"active"`
+}
+
+func (j FileJobs) Inspect(ctx context.Context, s runner.Spec) (runner.Lifecycle, error) {
+	return runner.Inspect(ctx, s)
+}
+func (j FileJobs) Resolve(ctx context.Context, s runner.Spec, state, evidence, reason string) (runner.Result, error) {
+	return runner.Resolve(ctx, s, state, evidence, reason)
+}
+
+func (c *Controller) ResolveJob(ctx context.Context, id, job, state, evidence, reason string) error {
+	api, ok := c.Jobs.(JobReconciler)
+	if !ok {
+		return errors.New("runner does not support lifecycle reconciliation")
+	}
+	raw, err := c.Store.Records(ctx, "job_intent", id)
+	if err != nil {
+		return err
+	}
+	for _, data := range raw {
+		var intent JobIntent
+		if err = json.Unmarshal(data, &intent); err != nil {
+			return err
+		}
+		if intent.Spec.JobID != job {
+			continue
+		}
+		r, err := api.Resolve(ctx, intent.Spec, state, evidence, reason)
+		if err != nil {
+			return err
+		}
+		if err = c.Store.Put(ctx, "runner_resolution", job, id, r); err != nil {
+			return err
+		}
+		life, err := api.Inspect(ctx, intent.Spec)
+		if err != nil {
+			return err
+		}
+		return c.Store.Put(ctx, "runner_lifecycle", job, id, life)
+	}
+	return errors.New("job is not associated with this work item")
 }
