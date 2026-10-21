@@ -48,3 +48,11 @@ CI 証拠は `gh api` で PR の head/base/test merge、check-run、workflow run
 [依頼コメント](https://github.com/xpadev-net/codex-appserver-harness/pull/32#issuecomment-6308650350) は主体 ID `96982836`、head `15f807fffa068c94cadd32d21d738eff91130557`、round marker を記録した。[provider 応答](https://github.com/xpadev-net/codex-appserver-harness/pull/32#issuecomment-6308650890) の actor は `chatgpt-codex-connector[bot]` / ID `199175422`。この主体での利用に Codex アカウント/GitHub 接続の設定を求める応答であり、レビュー受付・承認ではない。
 
 native review は空で、正式 APPROVED も観測していない。provider の設定要求を成功した review round に変換せず、`cloud_request` / `cloud_native_approval` / `review_sha` を unknown のまま残した。観測された bot ID を、未設定の trusted reviewer policy へ自動追加していない。provider が review を開始していないため、指摘あり/なし、re-push、旧 provider 結果、利用制限の実 fixture は未取得。fake contract test の結果で代用しない。
+
+## Git 認証設定の否定試験
+
+worker は common Git directory を読み取れるため、その local Git 設定も調べる。HTTP authorization header や credential 設定を検出した場合は、gh API が 401 でも probe を失敗させる。Git metadata を照合できない場合も成功として扱わない。GitHub API と Git の認証経路を同一視しない。
+
+制御した一時 clone に無効な公開 canary header を設定し、`HARNESS_LIVE_CHECKOUT` にその絶対 path を渡して実行した。API read / PATCH は 401 だったが、Git 認証設定を検出して probe は拒否した。[否定試験の証拠](../evidence/issue20/isolation-negative-observation.json) の unsupported は、この意図的に設定した一時 clone の結果であり、現 checkout で本物の credential 漏えいを観測したという意味ではない。実 credential は使用せず、元の repository の Git 設定は変更していない。
+
+現在の checkout では、認証設定が検出されないことと 401 を再確認した。[現在環境の証拠](../evidence/issue20/isolation-observation.json) の能力は引き続き unknown。これらの probe を、未設定の認証済み worker / 実 model turn の実証に置き換えない。

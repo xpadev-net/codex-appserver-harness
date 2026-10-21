@@ -34,6 +34,14 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{Root: t.TempDir(), RepositoryPath: filepath.Clean(filepath.Join(cwd, "../..")), Launcher: []string{filepath.Clean(filepath.Join(cwd, "../../scripts/isolate-linux"))}, CodexBinary: binary, WorkerCodexHome: t.TempDir()}
+	workspaceKind := "current repository checkout"
+	if checkout := os.Getenv("HARNESS_LIVE_CHECKOUT"); checkout != "" {
+		if !filepath.IsAbs(checkout) {
+			t.Fatal("absolute probe checkout required")
+		}
+		cfg.RepositoryPath = filepath.Clean(checkout)
+		workspaceKind = "operator-selected probe checkout"
+	}
 	if err = os.WriteFile(filepath.Join(cfg.Root, "state.db"), []byte("private controller probe sentinel"), 0600); err != nil {
 		t.Fatal("create controller sentinel")
 	} // No controller Codex home is mounted.
@@ -44,7 +52,7 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := (LiveAgents{Config: cfg}).environment(w, home, strings.TrimSpace(gitdir))
-	obs := map[string]any{"observed_at": time.Now().UTC(), "launcher": "scripts/isolate-linux", "model_turn": "not_attempted", "thread_resume": "not_attempted", "dedicated_codex_home": "empty probe home", "credential_values_recorded": false, "workspace": "current repository checkout"}
+	obs := map[string]any{"observed_at": time.Now().UTC(), "launcher": "scripts/isolate-linux", "model_turn": "not_attempted", "thread_resume": "not_attempted", "dedicated_codex_home": "empty probe home", "credential_values_recorded": false, "workspace": workspaceKind}
 	defer func() {
 		data, err := json.MarshalIndent(obs, "", "  ")
 		if err != nil {
@@ -93,6 +101,9 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 			return strings.TrimSpace(string(stdout)), "success"
 		}
 		status := "command_failed"
+		if exit, ok := err.(*exec.ExitError); ok {
+			status = "exit_" + strconv.Itoa(exit.ExitCode())
+		}
 		if match := regexp.MustCompile(`HTTP ([0-9]{3})`).FindStringSubmatch(stderr.String()); len(match) > 1 {
 			status = "http_" + match[1]
 		}
@@ -110,7 +121,14 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	_, gitStatus := run(env, "git", "rev-parse", "--is-inside-work-tree")
 	authNames, authStatus := run(env, "git", "config", "--local", "--name-only", "--get-regexp", `(extraheader|^credential\.)`)
 	obs["git_repository_probe_status"] = gitStatus
-	obs["git_auth_configuration_present"] = authStatus == "success" && authNames != ""
+	obs["git_auth_config_query_status"] = authStatus
+	gitAuth := authStatus == "success" && authNames != ""
+	obs["git_auth_configuration_present"] = gitAuth
+	if gitStatus != "success" || (authStatus != "success" && authStatus != "exit_1") {
+		obs["credential_isolation"] = "unknown"
+		obs["model_turn_reason"] = "mounted Git metadata could not be inspected"
+		t.Fatal("Git credential reachability is unresolved; sanitized evidence saved")
+	}
 	version, status := run(env, binary, "--version")
 	obs["codex_launch_status"] = status
 	obs["codex_version"] = version
@@ -156,9 +174,9 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		client.Close()
 	}
 	obs["isolated_app_server_initialized"] = initialized
-	if !hidden || directAuth || authenticated || permissions || writeExposed {
+	if !hidden || directAuth || gitAuth || authenticated || permissions || writeExposed {
 		obs["credential_isolation"] = "unsupported"
-		obs["model_turn_reason"] = "worker has controller paths or authenticated GitHub authority; no untrusted turn started"
+		obs["model_turn_reason"] = "worker has controller paths, Git authentication configuration or authenticated GitHub authority; no untrusted turn started"
 		t.Fatal("worker credential isolation failed; sanitized evidence saved")
 	}
 	obs["credential_isolation"] = "unknown"
