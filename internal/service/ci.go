@@ -11,6 +11,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
+	"github.com/xpadev-net/codex-appserver-harness/internal/review"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 )
 
@@ -26,13 +27,18 @@ type CIEvidence struct {
 	ObservedAt       time.Time        `json:"observed_at"`
 }
 
-func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s gate.Snapshot) (bool, error) {
+func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s gate.Snapshot, findings ...review.Finding) (bool, error) {
 	target := s.Candidate.SHA
 	if s.CI.TestedSHA != "" {
 		target = s.CI.TestedSHA
 	}
 	records := map[string]map[string]any{"ci_evidence": {}, "ci_dispatched": {}}
 	ids := []string{}
+	feedbackIDs := []string{}
+	for _, finding := range findings {
+		ids = append(ids, finding.ID)
+		feedbackIDs = append(feedbackIDs, finding.ID)
+	}
 	alreadyAssessed := false
 	for _, req := range s.RequiredChecks {
 		check := gate.LatestCheck(s.Checks, req, target)
@@ -107,7 +113,7 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 		}
 		return false, nil
 	}
-	correction := Correction{Reason: "classify current candidate CI failures using the attached check results and log references", EvidenceIDs: ids, FeedbackIDs: []string{}, Mode: "assessment"}
+	correction := Correction{Reason: fmt.Sprintf("classify current candidate failures using attached CI diagnostics and review findings: %v", findings), EvidenceIDs: ids, FeedbackIDs: feedbackIDs, Mode: "assessment"}
 	records["correction"] = map[string]any{w.ID: correction}
 	hash := sha256.Sum256([]byte(fmt.Sprint(ids)))
 	e := domain.Event{ID: fmt.Sprintf("ci-batch-%x", hash[:16]), WorkItemID: w.ID, Kind: "repair_tests", Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Attempt: w.Attempt, Reason: correction.Reason}

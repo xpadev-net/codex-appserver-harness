@@ -247,23 +247,13 @@ func (c *Controller) observeReview(ctx context.Context, w domain.WorkItem) error
 			return err
 		}
 	}
-	if len(unresolved) > 0 {
-		ids := []string{}
-		for _, f := range unresolved {
-			ids = append(ids, f.ID)
-		}
-		correction := Correction{Reason: fmt.Sprint(unresolved), EvidenceIDs: ids, FeedbackIDs: ids, Mode: "assessment"}
-		if err = c.Store.Put(ctx, "correction", w.ID, w.ID, correction); err != nil {
-			return err
-		}
-		return c.emit(ctx, w, "repair_tests", "review findings require classification")
-	}
+
 	decision := review.Evaluate(candidate, round, p, reviews)
 	snapshot, err := c.snapshot(ctx, w, scope, pr, decision)
 	if err != nil {
 		return err
 	}
-	if handled, err := c.routeCIFailures(ctx, w, snapshot); handled || err != nil {
+	if handled, err := c.routeCIFailures(ctx, w, snapshot, unresolved...); handled || err != nil {
 		return err
 	}
 	if err = c.Store.Put(ctx, "gate", w.ID, w.ID, gate.Reasons(snapshot)); err != nil {

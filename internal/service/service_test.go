@@ -37,6 +37,7 @@ type fakeGH struct {
 	ciFailureSHA             string
 	ciFailFirst              bool
 	diagnosticsMissing       bool
+	reviewFinding            bool
 }
 
 func (f *fakeGH) GetIssue(_ context.Context, n int) (github.Issue, error) {
@@ -72,6 +73,10 @@ func (f *fakeGH) Publish(ctx context.Context, base, branch, id, title, body stri
 	return f.pr, nil
 }
 func (f *fakeGH) Reviews(context.Context, int) ([]github.Review, error) {
+	if f.reviewFinding {
+		return []github.Review{{ID: 99, User: github.User{ID: 7}, State: "CHANGES_REQUESTED", CommitID: f.pr.Head.SHA, SubmittedAt: f.requestTime.Add(time.Second), Body: "Fix the implementation edge case"}}, nil
+	}
+
 	if !f.approved {
 		return nil, nil
 	}
@@ -1012,5 +1017,32 @@ func TestBaseRefreshRetiresConsumedCICorrection(t *testing.T) {
 	}
 	if candidateID(w, candidate.SHA, base) == candidateID(w, candidate.SHA, candidate.BaseSHA) {
 		t.Fatal("base change reused candidate identity")
+	}
+}
+
+func TestReviewFeedbackAndCIFailureAreBatched(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.reviewFinding, gh.ciFailFirst = true, true
+	var w domain.WorkItem
+	for range 15 {
+		drive(t, c, 1)
+		w, _ = c.Store.Get(ctx, "w")
+		if w.Phase == domain.Verifying && agents.calls == 2 {
+			break
+		}
+	}
+	var correction Correction
+	if err := c.Store.Record(ctx, "correction", "w", &correction); err != nil {
+		t.Fatal(err)
+	}
+	if len(correction.EvidenceIDs) != 2 || len(correction.FeedbackIDs) != 1 || correction.Mode != "assessment" || agents.calls != 2 {
+		t.Fatal(w, correction, agents.calls)
+	}
+	evidence, err := c.Store.Records(ctx, "ci_evidence", "w")
+	if err != nil || len(evidence) != 1 {
+		t.Fatal(evidence, err)
 	}
 }

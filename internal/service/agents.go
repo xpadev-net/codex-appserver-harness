@@ -453,7 +453,7 @@ func (c *Controller) assessment(ctx context.Context, w domain.WorkItem, op domai
 	if err = c.Store.Put(ctx, "correction", w.ID, w.ID, correction); err != nil {
 		return err
 	}
-	if role == "none" && len(correction.FeedbackIDs) > 0 {
+	if role == "none" && len(correction.FeedbackIDs) > 0 && len(correction.FeedbackIDs) == len(correction.EvidenceIDs) {
 		for _, id := range correction.FeedbackIDs {
 			if err = c.Store.Put(ctx, "resolved_feedback", id, w.ID, map[string]string{"assessment": op.ID}); err != nil {
 				return err
