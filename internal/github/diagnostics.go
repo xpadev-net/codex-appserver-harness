@@ -39,8 +39,17 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 		pattern := regexp.MustCompile("^/" + regexp.QuoteMeta(c.Repository) + `/actions/runs/[0-9]+/job/([0-9]+)/?$`)
 		if match := pattern.FindStringSubmatch(u.Path); match != nil {
 			cmd := exec.CommandContext(ctx, "gh", "api", "repos/"+c.Repository+"/actions/jobs/"+match[1]+"/logs")
-			cmd.Stdout = output
+			logTail := &diagnosticTail{limit: 65536}
+			logOutput := runner.NewRedactedWriter(logTail)
+			cmd.Stdout = logOutput
 			logErr = cmd.Run()
+			flushErr := logOutput.Flush()
+			if logErr == nil {
+				logErr = flushErr
+			}
+			if logErr == nil {
+				_, logErr = output.Write(logTail.data)
+			}
 		}
 	}
 	if err := output.Flush(); err != nil {
