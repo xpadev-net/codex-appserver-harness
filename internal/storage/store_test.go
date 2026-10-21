@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -315,6 +316,7 @@ func TestDependenciesBlockDispatch(t *testing.T) {
 		t.Fatal("dependent work started", err)
 	}
 	dep.Phase = domain.Merged
+	s.Put(ctx, "scope", dep.ID, dep.ID, verification.Scope{Revision: 1, OriginalRequest: "required", Criteria: []verification.Criterion{{ID: "AC", Requirement: "required"}}, Included: []string{"AC"}})
 	b, _ := json.Marshal(dep)
 	s.DB.Exec("UPDATE work_items SET data=? WHERE id=?", b, dep.ID)
 	ok, err = s.BeginDispatch(ctx, "start:implement")

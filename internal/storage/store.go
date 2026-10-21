@@ -682,8 +682,9 @@ func dependenciesReady(ctx context.Context, q queryer, id string) (bool, error) 
 			if err != nil {
 				return false, err
 			}
-			if w.Phase != domain.Merged {
-				return false, nil
+			ok, err := dependencyComplete(ctx, q, w, map[string]bool{})
+			if err != nil || !ok {
+				return ok, err
 			}
 		}
 	}
