@@ -267,7 +267,7 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 		return errors.New("invalid session run fact")
 	}
 	switch run.State {
-	case "running", "unknown", "blocked", "completed", "failed", "interrupted":
+	case "running", "inProgress", "unknown", "blocked", "completed", "failed", "interrupted":
 	default:
 		return errors.New("run must be reserved before recording facts")
 	}
@@ -503,6 +503,72 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 		return err
 	}
 	if err = k.waveEventTx(ctx, tx, wave, "task_failed", task.ID, task.ID+":thread_lost", map[string]string{"reason": reason}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecoverUnboundMainThread audits a lost initial main thread/start after stopping
+// proof. There can be no sent turn without a bound thread. Preserve its unknown
+// creation intent and recovery snapshot before permitting a fresh generation.
+func (k *KernelStore) RecoverUnboundMainThread(ctx context.Context, expected contract.SessionBinding, snapshot contract.InputSnapshot, reason string) error {
+	if reason == "" || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) {
+		return errors.New("audited recovery snapshot required")
+	}
+	if err := contract.ValidateSessionInput(snapshot.Input); err != nil {
+		return err
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	b, err := sessionBindingTx(ctx, tx, expected.ID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(b, expected) || b.Kind != "orchestrator" || b.ThreadID != "" || b.Closed {
+		return errors.New("unbound main recovery binding conflict")
+	}
+	var creating, stopped int
+	var active string
+	if err = tx.QueryRowContext(ctx, "SELECT creating,process_stopped,active_run_id FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating, &stopped, &active); err != nil {
+		return err
+	}
+	if creating != 1 || stopped != 1 || active != "" {
+		return errors.New("unknown main creation must be stopped before recovery")
+	}
+	var count int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM kernel_run_bindings WHERE session_id=?", b.ID).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return errors.New("unbound main unexpectedly has sent runs")
+	}
+	var digest string
+	var data []byte
+	err = tx.QueryRowContext(ctx, "SELECT digest,data FROM kernel_snapshots WHERE id=?", snapshot.ID).Scan(&digest, &data)
+	if err == nil {
+		if digest != snapshot.Digest || string(data) != string(snapshot.Input) {
+			return errors.New("snapshot identity conflict")
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_snapshots(id,digest,data) VALUES(?,?,?)", snapshot.ID, snapshot.Digest, snapshot.Input); err != nil {
+			return err
+		}
+	} else {
+		return err
+	}
+	b.Generation++
+	b.PreparationID = ""
+	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_rebindings(session_id,generation,old_thread,new_thread,snapshot_id,reason,created_at) VALUES(?,?,'','',?,?,?)", b.ID, b.Generation, snapshot.ID, reason, k.clock()); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET creating=0,payload=? WHERE id=?", raw, b.ID); err != nil {
 		return err
 	}
 	return tx.Commit()

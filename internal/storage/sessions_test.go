@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/worker"
 )
@@ -410,4 +412,98 @@ func reserveSessionFixture(t *testing.T, store *KernelStore, b contract.SessionB
 		t.Fatal(err)
 	}
 	return fresh
+}
+
+func TestKernelUnboundMainRecoveryRetainsCreationAudit(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.SessionBinding(ctx, request.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = reserveSessionFixture(t, store, b)
+	if err = store.RecoverUnboundMainThread(ctx, b, sessionSnapshot(), "lost response"); err == nil {
+		t.Fatal("live unknown main recovered")
+	}
+	if err = store.MarkSessionStopped(ctx, b.ID, b.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReserveSessionThread(ctx, b); err == nil {
+		t.Fatal("unknown start repeated without disposition")
+	}
+	if err = store.RecoverUnboundMainThread(ctx, b, sessionSnapshot(), "lost response"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.SessionBinding(ctx, b.ID)
+	if err != nil || current.Generation != b.Generation+1 || current.ThreadID != "" {
+		t.Fatal(current, err)
+	}
+	current = reserveSessionFixture(t, store, current)
+	if err = store.MarkSessionStopped(ctx, b.ID, b.PreparationID); err == nil {
+		t.Fatal("old main stopping proof released recovery")
+	}
+	if err = store.BindSessionThread(ctx, current, "new-main"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Wave(ctx, wave.ID)
+	if err != nil || after.OrchestratorSessionID != b.ID {
+		t.Fatal(after, err)
+	}
+	var old contract.SessionBinding
+	if err = store.Record(ctx, "thread_creation_intent", fmt.Sprintf("%s:g%d", b.ID, b.Generation), &old); err != nil || old.PreparationID != b.PreparationID {
+		t.Fatal(old, err)
+	}
+}
+
+type kernelReconcileRPC struct {
+	binding contract.SessionBinding
+	status  string
+	calls   int
+}
+
+func (r *kernelReconcileRPC) Call(_ context.Context, method string, _ any, result any) error {
+	if method != "thread/read" {
+		return errors.New("reconciliation must not dispatch")
+	}
+	r.calls++
+	raw, err := json.Marshal(map[string]any{"thread": worker.Thread{ID: r.binding.ThreadID, CWD: r.binding.CWD, Turns: []worker.Turn{{ID: "recovered", Status: r.status, ItemsView: "full"}}}})
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, result)
+}
+func (*kernelReconcileRPC) Next(context.Context) (codex.Message, error) {
+	return codex.Message{}, errors.New("unexpected notification read")
+}
+func TestKernelReconcilePersistsActiveTurnAssociation(t *testing.T) {
+	ctx := context.Background()
+	store, b := boundTaskFixture(t)
+	run := contract.SessionRun{ID: "run", ThreadID: b.ThreadID, State: "starting", Started: time.Now().UTC(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if err := store.ReserveSessionRun(ctx, b, sessionSnapshot(), run); err != nil {
+		t.Fatal(err)
+	}
+	run.State = "unknown"
+	if err := store.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &kernelReconcileRPC{binding: b, status: "inProgress"}
+	w := worker.Worker{RPC: rpc, Journal: store}
+	session := worker.Session{WorkItemID: b.ID, ThreadID: b.ThreadID, CWD: b.CWD}
+	got, err := w.Reconcile(ctx, session, run)
+	if err == nil || got.TurnID != "recovered" {
+		t.Fatal(got, err)
+	}
+	var saved contract.SessionRun
+	if err = store.Record(ctx, "agent_run", run.ID, &saved); err != nil || saved.TurnID != "recovered" || saved.State != "inProgress" {
+		t.Fatal(saved, err)
+	}
+	rpc.status = "completed"
+	got, err = w.Reconcile(ctx, session, saved)
+	if err != nil || got.State != "completed" || rpc.calls != 2 {
+		t.Fatal(got, err, rpc.calls)
+	}
 }
