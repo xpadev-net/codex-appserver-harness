@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"unicode/utf8"
 )
@@ -256,7 +257,7 @@ func (r TaskResult) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, criterion := range r.CriterionResults {
-		if criterion.CriterionID == "" || seen[criterion.CriterionID] || !inline(criterion.Basis) || (criterion.Status != "claimed" && criterion.Status != "unverified") || (criterion.Status == "claimed" && len(criterion.EvidenceIDs) == 0) {
+		if criterion.CriterionID == "" || seen[criterion.CriterionID] || !inline(criterion.Basis) || !validIDs(criterion.EvidenceIDs) || (criterion.Status != "claimed" && criterion.Status != "unverified") || (criterion.Status == "claimed" && len(criterion.EvidenceIDs) == 0) {
 			return errors.New("invalid criterion evidence")
 		}
 		seen[criterion.CriterionID] = true
@@ -526,5 +527,21 @@ func ValidateSessionInput(data []byte) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	return uniqueJSONKeys(decoder)
+	if err := uniqueJSONKeys(decoder); err != nil {
+		return err
+	}
+	decoder = json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if text, ok := token.(string); ok && len(text) > MaxInline {
+			return errors.New("session inline value exceeds byte limit")
+		}
+	}
 }

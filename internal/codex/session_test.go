@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 	"time"
 )
@@ -11,6 +12,47 @@ import (
 type sessionStreamFixture struct {
 	incoming chan Message
 	sent     chan Message
+}
+
+type closingReplyStream struct {
+	responses chan Message
+	rpc       *SessionRPC
+}
+
+func (s *closingReplyStream) Next(ctx context.Context) (Message, error) {
+	select {
+	case m, ok := <-s.responses:
+		if !ok {
+			return Message{}, io.EOF
+		}
+		return m, nil
+	case <-ctx.Done():
+		return Message{}, ctx.Err()
+	}
+}
+func (s *closingReplyStream) Send(value any) error {
+	b, _ := json.Marshal(value)
+	var request Message
+	_ = json.Unmarshal(b, &request)
+	s.responses <- Message{ID: request.ID, Result: json.RawMessage(`{"id":"confirmed"}`)}
+	close(s.responses)
+	<-s.rpc.done // Both response and shutdown are ready before Call can select.
+	return nil
+}
+func TestSessionRPCPreservesConfirmedResponseBeforeEOF(t *testing.T) {
+	ctx := sessionTestContext(t)
+	for range 100 {
+		stream := &closingReplyStream{responses: make(chan Message, 1)}
+		rpc := NewSessionRPC(ctx, stream, nil)
+		stream.rpc = rpc
+		var result struct {
+			ID string `json:"id"`
+		}
+		if err := rpc.Call(ctx, "thread/start", nil, &result); err != nil || result.ID != "confirmed" {
+			t.Fatal("confirmed response discarded", result, err)
+		}
+		rpc.Close()
+	}
 }
 
 func newSessionStream() *sessionStreamFixture {

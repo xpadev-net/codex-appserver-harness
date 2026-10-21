@@ -139,4 +139,18 @@ func TestGenericTaskResultsAndInputBounds(t *testing.T) {
 	if err := ValidateSessionInput([]byte{'"', 0xff, '"'}); err == nil {
 		t.Fatal("invalid UTF-8")
 	}
+	if err := ValidateSessionInput([]byte(`{"request":"` + strings.Repeat("x", MaxInline+1) + `"}`)); err == nil {
+		t.Fatal("oversized inline input")
+	}
+}
+
+func TestTaskClaimRequiresUsableEvidenceIDs(t *testing.T) {
+	for _, ids := range [][]string{{""}, {" "}, {"evidence", "evidence"}, {strings.Repeat("x", MaxInline+1)}, {"evidence"}} {
+		result := TaskResult{SchemaVersion: 1, Target: Target{"wave", 1, 1, 1}, PhaseID: "p", TaskID: "a", Outcome: "result", Artifacts: []string{"artifact"}, CriterionResults: []CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "request", EvidenceIDs: ids}}}
+		err := result.Validate()
+		valid := len(ids) == 1 && ids[0] == "evidence"
+		if (err == nil) != valid {
+			t.Fatal("invalid evidence disposition", ids, err)
+		}
+	}
 }

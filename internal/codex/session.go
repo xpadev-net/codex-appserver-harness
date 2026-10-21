@@ -205,8 +205,7 @@ func (s *SessionRPC) Call(ctx context.Context, method string, params, result any
 	if err := s.stream.Send(map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		return err
 	}
-	select {
-	case reply := <-ch:
+	decode := func(reply rpcReply) error {
 		if len(reply.message.Error) > 0 {
 			return fmt.Errorf("app-server RPC %s failed", method)
 		}
@@ -214,12 +213,28 @@ func (s *SessionRPC) Call(ctx context.Context, method string, params, result any
 			return nil
 		}
 		return json.Unmarshal(reply.message.Result, result)
+	}
+	select {
+	case reply := <-ch:
+		return decode(reply)
 	case <-s.done:
+		// The reader may have delivered this response just before EOF. Keep
+		// confirmed IDs/results even when shutdown wins the outer select.
+		select {
+		case reply := <-ch:
+			return decode(reply)
+		default:
+		}
 		s.mu.Lock()
 		err := s.terminal
 		s.mu.Unlock()
 		return err
 	case <-ctx.Done():
+		select {
+		case reply := <-ch:
+			return decode(reply)
+		default:
+		}
 		return ctx.Err()
 	}
 }
