@@ -345,6 +345,9 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 				if !testsChanged {
 					rebound, err := verification.Rebind(previous, w.ID, next, scope, c.Config.Verification)
 					if err == nil && rebound.Ready() {
+						if err = rebound.ValidateCommit(ctx, w.Worktree, next.SHA); err != nil {
+							return c.reject(ctx, w, op, err.Error())
+						}
 						if err = c.Store.Put(ctx, "plan", w.ID, w.ID, rebound); err != nil {
 							return err
 						}
@@ -377,6 +380,9 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 	next, err := c.freeze(ctx, w, base)
 	if err != nil {
 		return err
+	}
+	if err = plan.ValidateCommit(ctx, w.Worktree, next.SHA); err != nil {
+		return c.reject(ctx, w, op, err.Error())
 	}
 	plan, err = verification.Rebind(plan, w.ID, next, scope, c.Config.Verification)
 	if err != nil {
