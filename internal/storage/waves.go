@@ -408,6 +408,9 @@ func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contra
 				if existing.State != contract.TaskCompleted || existing.ScopeRevision != wave.ScopeRevision || existing.PolicyRevision != wave.Policy.Revision || existing.PhaseID != phaseID || !reflect.DeepEqual(existing.Spec, spec) || existing.ResultID == "" || existing.InputDigest != inputs {
 					return receipt, errors.New("only unchanged completed Task results may be explicitly carried; allocate fresh Task/phase keys")
 				}
+				if _, err = k.completedTaskResultTx(ctx, tx, wave, existing); err != nil {
+					return receipt, err
+				}
 				if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_plan_bindings(wave_id,revision,task_id,source_result_id,input_digest) VALUES(?,?,?,?,?)", wave.ID, revision, taskID, existing.ResultID, inputs); err != nil {
 					return receipt, err
 				}
@@ -544,11 +547,18 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 		value := ""
 		if err == nil && prior.State == contract.TaskCompleted && prior.ScopeRevision == wave.ScopeRevision && prior.PolicyRevision == wave.Policy.Revision {
 			value = prior.ResultID
-			if dependency.ArtifactID != "" {
-				var result contract.TaskResult
-				if err = completionRecord(ctx, tx, "task_result", prior.ResultID, &result); err != nil {
+			result, err := k.completedTaskResultTx(ctx, tx, wave, prior)
+			if err != nil {
+				return "", err
+			}
+			for _, artifactID := range resultArtifactReferences(result) {
+				artifact, err := k.currentArtifactTx(ctx, tx, wave, artifactID)
+				if err != nil {
 					return "", err
 				}
+				references["dependency_artifact:"+dependency.TaskID+":"+artifactID] = artifact.Digest
+			}
+			if dependency.ArtifactID != "" {
 				found := false
 				for _, id := range resultArtifactReferences(result) {
 					found = found || id == dependency.ArtifactID

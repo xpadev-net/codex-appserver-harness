@@ -218,6 +218,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 			if prior.State != contract.TaskCompleted || prior.ResultID == "" || prior.ScopeRevision != wave.ScopeRevision || prior.PolicyRevision != wave.Policy.Revision {
 				return errors.New("required Task result is not ready in the current scope")
 			}
+			if _, err = k.completedTaskResultTx(ctx, tx, wave, prior); err != nil {
+				return err
+			}
 		}
 		inputs, err := k.taskInputDigestTx(ctx, tx, wave, task.Spec)
 		if err != nil {
