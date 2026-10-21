@@ -45,6 +45,8 @@ type Notification struct {
 	DeliverySequence     int64              `json:"delivery_sequence"`
 	Kind                 string             `json:"kind"`
 	TaskID               string             `json:"task_id"`
+	MessageID            string             `json:"message_id,omitempty"`
+	SenderSessionID      string             `json:"sender_session_id,omitempty"`
 	TaskState            contract.TaskState `json:"task_state"`
 	WaveState            domain.WaveState   `json:"wave_state"`
 	ResultID             string             `json:"result_id"`
@@ -318,6 +320,9 @@ func (k *KernelStore) fanoutNotificationTx(ctx context.Context, tx *sql.Tx, inte
 		if _, err = tx.ExecContext(ctx, "UPDATE kernel_subscriptions SET cursor=max(cursor,?) WHERE id=?", intent.Sequence, id); err != nil {
 			return err
 		}
+	}
+	if err = k.fanoutMessageNotificationTx(ctx, tx, intent); err != nil {
+		return err
 	}
 	return kernelRecordTx(ctx, tx, "notification_fanout", intent.EventID, intent.Target.WaveID, intent)
 }

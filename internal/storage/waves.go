@@ -526,6 +526,15 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_plans(wave_id,revision,adoption_key,digest,payload) VALUES(?,?,?,?,?)", wave.ID, revision, key, digest, raw); err != nil {
 		return receipt, err
 	}
+	for taskID := range included {
+		task, err := loadTask(ctx, tx, taskID)
+		if err != nil {
+			return receipt, err
+		}
+		if _, err = k.ensureTaskMailboxesTx(ctx, tx, wave, task); err != nil {
+			return receipt, err
+		}
+	}
 	for kind, amount := range map[string]int{"phases": newPhases, "tasks": newTasks} {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_budget_ledger(wave_id,operation_key,kind,amount,unknown,payload) VALUES(?,?,?,?,0,?)", wave.ID, "plan:"+key, kind, amount, []byte(`{}`)); err != nil {
 			return receipt, err
