@@ -90,6 +90,9 @@ func TestWakeReservationIsReplayableAndInputDoesNotDependOnDeliveryAck(t *testin
 	if err := json.Unmarshal(w.Snapshot.Input, &input); err != nil || len(input.Messages) != 1 || input.Messages[0].ID != m.ID || input.Messages[0].Request.Body != m.Request.Body || len(input.Notifications) != 1 || input.Notifications[0].ID != request.NotificationIDs[0] {
 		t.Fatal(input, err)
 	}
+	if !input.Notifications[0].DeliveryAcknowledged || input.Notifications[0].State != "pending" {
+		t.Fatal("snapshot lost delivery facts or confused them with processing", input.Notifications[0])
+	}
 	entries, err := k.Mailbox(ctx, task.SessionID, 0, 10)
 	if err != nil || entries[0].State != "bound_to_run" || entries[0].RunID != w.Intent.RunID || !entries[0].DeliveryAcknowledged {
 		t.Fatal(entries, err)

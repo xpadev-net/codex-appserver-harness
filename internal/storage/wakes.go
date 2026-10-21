@@ -55,7 +55,9 @@ func notificationTx(ctx context.Context, q queryer, id string) (Notification, er
 	var n Notification
 	var session, sub, event, state, run string
 	var raw []byte
-	err := q.QueryRowContext(ctx, "SELECT session_id,subscription_id,event_id,state,run_id,payload FROM kernel_notifications WHERE id=?", id).Scan(&session, &sub, &event, &state, &run, &raw)
+	var sequence int64
+	var acknowledged bool
+	err := q.QueryRowContext(ctx, "SELECT n.rowid,n.session_id,n.subscription_id,n.event_id,n.state,n.run_id,n.payload,EXISTS(SELECT 1 FROM records d WHERE d.kind='notification_delivery' AND d.id=n.id) FROM kernel_notifications n WHERE n.id=?", id).Scan(&sequence, &session, &sub, &event, &state, &run, &raw, &acknowledged)
 	if err != nil {
 		return n, err
 	}
@@ -66,6 +68,7 @@ func notificationTx(ctx context.Context, q queryer, id string) (Notification, er
 		return n, errors.New("inconsistent wake notification")
 	}
 	n.State, n.RunID = state, run
+	n.DeliverySequence, n.DeliveryAcknowledged = sequence, acknowledged
 	return n, nil
 }
 func wakeTx(ctx context.Context, q queryer, id string) (WakeReservation, error) {
