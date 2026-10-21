@@ -59,9 +59,7 @@ func transferFinal(ctx context.Context, tx *sql.Tx, previous, next domain.WorkIt
 		state.Reason = ""
 		state.RequiredAction = ""
 		state.State = "waiting"
-		if state.RecoveryID != "" {
-			state.RecoveryID = next.ID
-		}
+		state.RecoveryID = next.ID
 	}
 	state.WorkItemID = next.ID
 	state.UpdatedAt = time.Now().UTC()
@@ -98,7 +96,7 @@ func finalAcceptanceSubject(ctx context.Context, q queryer, original domain.Work
 	if err != nil {
 		return original, err
 	}
-	if subject.RepositoryID != original.RepositoryID || subject.Issue != original.Issue || subject.ScopeRevision != state.ScopeRevision || subject.PolicyRevision != original.PolicyRevision {
+	if subject.RepositoryID != original.RepositoryID || subject.Issue != original.Issue || subject.ScopeRevision != state.ScopeRevision || subject.PolicyRevision < original.PolicyRevision {
 		return original, nil
 	}
 	current := subject
@@ -158,7 +156,7 @@ func finalAcceptanceSubject(ctx context.Context, q queryer, original domain.Work
 		if err != nil {
 			return original, err
 		}
-		if parent.RepositoryID != original.RepositoryID || parent.Issue != original.Issue || parent.ScopeRevision > current.ScopeRevision || parent.PolicyRevision != original.PolicyRevision {
+		if parent.RepositoryID != original.RepositoryID || parent.Issue != original.Issue || parent.ScopeRevision > current.ScopeRevision || parent.PolicyRevision > current.PolicyRevision {
 			return original, nil
 		}
 		current = parent
