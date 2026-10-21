@@ -630,3 +630,25 @@ func TestWorkerLauncherEnvironmentIsExplicit(t *testing.T) {
 		t.Fatal("worker environment contract mismatch")
 	}
 }
+
+func TestIgnoredTestsCannotBecomeCandidateEvidence(t *testing.T) {
+	c, gh, _, jobs := setup(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(c.Config.RepositoryPath, ".gitignore"), []byte("tests/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Freeze(ctx, c.Config.RepositoryPath, "ignore tests"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Git(ctx, c.Config.RepositoryPath, "push", "origin", "trunk"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 8)
+	w, err := c.Store.Get(ctx, "w")
+	if err != nil || w.Phase != domain.Blocked || !strings.Contains(w.Reason, "not a tracked regular file") {
+		t.Fatal(w, err)
+	}
+	if gh.posts != 0 || gh.merges != 0 || jobs.calls != 0 {
+		t.Fatal("uncommitted test evidence escaped to validation/publication")
+	}
+}

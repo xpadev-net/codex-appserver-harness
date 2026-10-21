@@ -102,3 +102,30 @@ func TestPlanReuseAndStrictNull(t *testing.T) {
 		t.Fatal("null reason accepted")
 	}
 }
+
+func TestValidateCommitUsesImmutableRegularFiles(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.invalid"}, {"config", "user.name", "test"}, {"config", "commit.gpgsign", "false"}} {
+		if _, err := workspace.Git(ctx, repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(repo, "test"), []byte("original"), 0600)
+	os.Symlink("test", filepath.Join(repo, "link"))
+	sha, err := workspace.Freeze(ctx, repo, "tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(repo, "test"))
+	os.WriteFile(filepath.Join(repo, "untracked"), []byte("new test"), 0600)
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{{"test::case", true}, {"untracked", false}, {"link", false}, {"missing", false}} {
+		p := Plan{CriteriaTests: []Mapping{{TestRef: tc.name}}}
+		if err := p.ValidateCommit(ctx, repo, sha); (err == nil) != tc.valid {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+	}
+}

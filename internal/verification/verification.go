@@ -261,3 +261,35 @@ func (p Plan) ValidateFiles(root string) error {
 	}
 	return nil
 }
+
+// ValidateCommit checks the immutable Git tree rather than the mutable worktree.
+// Test references must be tracked regular files; symlinks and submodules cannot
+// serve as executable test evidence.
+func (p Plan) ValidateCommit(ctx context.Context, repo, sha string) error {
+	commit, err := workspace.Resolve(ctx, repo, sha)
+	if err != nil {
+		return err
+	}
+	tree, err := workspace.Git(ctx, repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+	if err != nil {
+		return err
+	}
+	files := map[string]bool{}
+	for _, entry := range strings.Split(tree, "\x00") {
+		meta, name, ok := strings.Cut(entry, "\t")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) == 3 && fields[1] == "blob" && (fields[0] == "100644" || fields[0] == "100755") {
+			files[name] = true
+		}
+	}
+	for _, mapping := range p.CriteriaTests {
+		name := strings.Split(mapping.TestRef, "::")[0]
+		if !files[name] {
+			return fmt.Errorf("test reference %q is not a tracked regular file in candidate %s", name, commit)
+		}
+	}
+	return nil
+}
