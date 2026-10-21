@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -1304,8 +1305,17 @@ func TestEarlyJobResolutionWaitsForExplicitRetry(t *testing.T) {
 type failedChildCreation struct {
 	*fakeGH
 	calls, failAt int
+	onFind        func()
 }
 
+func (f *failedChildCreation) FindChild(ctx context.Context, marker string) (int, error) {
+	if f.onFind != nil {
+		callback := f.onFind
+		f.onFind = nil
+		callback()
+	}
+	return f.fakeGH.FindChild(ctx, marker)
+}
 func (f *failedChildCreation) CreateChild(ctx context.Context, title, body, marker string) (int, error) {
 	f.calls++
 	if f.calls == f.failAt {
@@ -1354,6 +1364,18 @@ func TestRetryOnlyConfirmedUncreatedSplitChild(t *testing.T) {
 			c.Store.Record(ctx, "split_progress", "w", &unchanged)
 			if unchanged.Children[failAt-1].State != "creating" {
 				t.Fatal("failed transaction reset child", unchanged)
+			}
+			api.onFind = func() {
+				if err := c.RetrySplitChild(ctx, w.ID, op.ID, target, "audit:absent", "concurrent retry"); !errors.Is(err, ErrSplitBusy) {
+					t.Fatal("retry raced active progress", err)
+				}
+			}
+			if err := c.Tick(ctx); err == nil {
+				t.Fatal("ambiguous creation unexpectedly progressed")
+			}
+			var count int
+			if err := c.Store.Record(ctx, "network_retry_count", w.ID, &count); err == nil && count != 0 {
+				t.Fatal("busy retry consumed budget", count)
 			}
 			if err := c.RetrySplitChild(ctx, w.ID, op.ID, target, "audit:external-absence-confirmed", "resume only this creation"); err != nil {
 				t.Fatal(err)

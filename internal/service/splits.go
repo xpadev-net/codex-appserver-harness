@@ -12,7 +12,10 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -20,6 +23,15 @@ func splittingResidual(w domain.WorkItem, s verification.Scope) splitting.Residu
 	return splitting.Residual{ID: w.ID + "-remaining", ParentWorkItemID: w.ID, ScopeRevision: s.Revision, Criteria: append([]string{}, s.Remaining...), DependsOn: []string{w.ID}, State: "planned"}
 }
 func (c *Controller) split(ctx context.Context, w domain.WorkItem, op domain.Operation) error {
+	lock, err := c.splitLease(w.ID)
+	if errors.Is(err, ErrSplitBusy) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
 	if w.Terminal() {
 		return c.done(ctx, op, "split canceled")
 	}
@@ -355,6 +367,12 @@ func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, s
 }
 
 func (c *Controller) RetrySplitChild(ctx context.Context, id, operation, child, evidence, reason string) error {
+	lock, err := c.splitLease(id)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
 	if strings.TrimSpace(evidence) == "" || strings.TrimSpace(reason) == "" || child == "" {
 		return errors.New("child key, absence evidence and reason are required")
 	}
@@ -386,4 +404,28 @@ func (c *Controller) RetrySplitChild(ctx context.Context, id, operation, child, 
 		return errors.New("child already exists; reconcile its result instead of retrying creation")
 	}
 	return c.Store.RetrySplitChildBounded(ctx, operation, child, evidence+": "+reason, c.Config.Limits.NetworkRetries)
+}
+
+var ErrSplitBusy = errors.New("split reconciliation is active; retry after it finishes")
+
+// CLI and controller share a host-local lease across the complete read/lookup/
+// write cycle. OS ownership ends on crash, without an expiry-based takeover.
+func (c *Controller) splitLease(id string) (*os.File, error) {
+	root := filepath.Join(c.Config.Root, "split-locks")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return nil, err
+	}
+	key := sha256.Sum256([]byte(id))
+	file, err := os.OpenFile(filepath.Join(root, fmt.Sprintf("%x.lock", key)), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, ErrSplitBusy
+		}
+		return nil, err
+	}
+	return file, nil
 }
