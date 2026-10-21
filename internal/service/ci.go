@@ -107,15 +107,15 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 		records["ci_evidence"][id] = evidence
 		records["ci_dispatched"][id] = true
 	}
+	if alreadyAssessed {
+		return true, c.block(ctx, w, "previously assessed CI attempt still fails; repair or rerun CI before retry")
+	}
 	if len(ids) == 0 {
-		if alreadyAssessed {
-			return true, c.block(ctx, w, "previously assessed CI attempt still fails; repair or rerun CI before retry")
-		}
 		return false, nil
 	}
 	correction := Correction{Reason: fmt.Sprintf("classify current candidate failures using attached CI diagnostics and review findings: %v", findings), EvidenceIDs: ids, FeedbackIDs: feedbackIDs, Mode: "assessment"}
 	records["correction"] = map[string]any{w.ID: correction}
 	hash := sha256.Sum256([]byte(fmt.Sprint(ids)))
-	e := domain.Event{ID: fmt.Sprintf("ci-batch-%x", hash[:16]), WorkItemID: w.ID, Kind: "repair_tests", Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Attempt: w.Attempt, Reason: correction.Reason}
+	e := domain.Event{ID: fmt.Sprintf("ci-batch-%x-attempt%d", hash[:16], w.Attempt), WorkItemID: w.ID, Kind: "repair_tests", Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Attempt: w.Attempt, Reason: correction.Reason}
 	return true, c.Store.EventRecords(ctx, e, records)
 }

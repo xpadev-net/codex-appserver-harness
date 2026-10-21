@@ -1046,3 +1046,27 @@ func TestReviewFeedbackAndCIFailureAreBatched(t *testing.T) {
 		t.Fatal(evidence, err)
 	}
 }
+
+type unchangedRepair struct{ fake *fakeAgents }
+
+func (a unchangedRepair) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	before, readErr := os.ReadFile(filepath.Join(w.Worktree, "app.txt"))
+	r, err := a.fake.Run(ctx, w, op, input, schema)
+	if err == nil && readErr == nil && op.Kind == "implement" {
+		err = os.WriteFile(filepath.Join(w.Worktree, "app.txt"), before, 0600)
+	}
+	return r, err
+}
+func TestUnchangedReviewRepairsReachBudgetInsteadOfStalling(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.Limits.RepairRounds = 2
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.reviewFinding = true
+	c.Agents = unchangedRepair{agents}
+	drive(t, c, 50)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Blocked || !strings.Contains(w.Reason, "budget") || agents.calls > 8 {
+		t.Fatal("unchanged batch stalled or bypassed budget", w, agents.calls)
+	}
+}
