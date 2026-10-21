@@ -716,3 +716,60 @@ func TestSplitParentWaitsForChildResidualAndFinalAcceptance(t *testing.T) {
 		t.Fatal(gh.issue.State, gh.merges, gh.closed)
 	}
 }
+
+func TestEditedIssueBetweenMergeAndContinuationRequiresAdoption(t *testing.T) {
+	c, gh, _, _ := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "old remaining"})
+	scope.Remaining = []string{"AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	var w domain.WorkItem
+	for range 20 {
+		drive(t, c, 1)
+		w, _ = c.Store.Get(ctx, "w")
+		if w.Phase == domain.Merged {
+			break
+		}
+	}
+	if w.Phase != domain.Merged {
+		t.Fatal(w)
+	}
+	gh.issue.Body = "new acceptance requirements"
+	if err := c.afterMerge(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Store.Get(ctx, "w-remaining"); !missing(err) {
+		t.Fatal("stale scope successor registered", err)
+	}
+	var hold map[string]any
+	if err := c.Store.Record(ctx, "continuation_hold", w.ID, &hold); err != nil {
+		t.Fatal(err)
+	}
+	var source Source
+	c.Store.Record(ctx, "source", w.ID, &source)
+	if source.Digest == digest(gh.issue) {
+		t.Fatal("new digest bound to old scope")
+	}
+	scope.Revision++
+	scope.OriginalRequest = gh.issue.Body
+	scope.Criteria[1].Requirement = "new remaining"
+	scope.Included, scope.Remaining = []string{"AC1", "AC2"}, []string{}
+	if err := c.AdoptContinuation(ctx, w, scope, "adopt edited acceptance"); err != nil {
+		t.Fatal(err)
+	}
+	var adopted verification.Scope
+	c.Store.Record(ctx, "scope", "w-remaining", &adopted)
+	if adopted.Revision != 2 || adopted.Criteria[1].Requirement != "new remaining" {
+		t.Fatal(adopted)
+	}
+	drive(t, c, 30)
+	if gh.issue.State != "closed" || gh.merges != 2 {
+		t.Fatal(gh.issue, gh.merges)
+	}
+	saved, _ := c.Store.Get(ctx, w.ID)
+	if saved.Phase != domain.Merged || saved.ScopeRevision != 1 || saved.Candidate != w.Candidate {
+		t.Fatal("merged history changed", saved)
+	}
+}

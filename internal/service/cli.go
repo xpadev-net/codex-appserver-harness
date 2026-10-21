@@ -77,7 +77,7 @@ func CLI(ctx context.Context, args []string) error {
 			return err
 		}
 		out := map[string]any{"work_item": w}
-		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error"} {
+		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold"} {
 			records, err := s.Records(ctx, kind, w.ID)
 			if err != nil {
 				return err
@@ -293,6 +293,9 @@ func CLI(ctx context.Context, args []string) error {
 		issue, err := controller.GitHub.GetIssue(ctx, w.Issue)
 		if err != nil {
 			return err
+		}
+		if w.Phase == domain.Merged {
+			return controller.AdoptContinuation(ctx, w, scope, *reason)
 		}
 		return s.Adopt(ctx, w.ID, scope.Revision, cfg.Verification.Revision, map[string]any{"scope": scope, "source": Source{digestIssue(issue)}, "adoption_reason": *reason, "policy_snapshot": controller.policyDigest()})
 	}

@@ -61,7 +61,7 @@ Implement the requested behavior.
 
 依存するIssueは本文の独立した行に`harness-depends-on: 12, 34`と記載できます。管理対象の依存Issueは最終受入検証まで完了している必要があります。分割で作った子作業はDBの依存DAGでもdispatchを制御します。
 
-Issue本文・title・policyが変わると古い判定を保留します。新しいscope JSON（revisionを1増やす）と理由を渡して明示的に取り込みます。policyを変える場合は`verification.revision`も増やし、以前のpolicy snapshotを保持します。
+Issue本文・title・policyが変わると古い判定を保留します。新しいscope JSON（revisionを1増やす）と理由を渡して明示的に取り込みます。部分PRのmerge後、後続登録前に編集された場合は`continuation_hold`を保存します。同じ`adopt`操作で新revisionの後続WorkItemを登録し、merge済みPRの履歴は保持します。この新scopeでは`previously_merged`を空にし、全条件を新revisionで検証してください。policyを変える場合は`verification.revision`も増やし、以前のpolicy snapshotを保持します。
 
 ```sh
 ./harness adopt --config CONFIG --id WORK_ITEM --file scope.json --reason 'updated acceptance criteria'
