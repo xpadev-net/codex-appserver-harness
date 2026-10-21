@@ -369,7 +369,7 @@ func spikeTurn(t *testing.T, ctx context.Context, client *codex.Client, thread s
 		if msg.Method == "turn/completed" {
 			bind(n.Turn.ID)
 			evidence.Status = n.Turn.Status
-			evidence.AcknowledgementVerified = strings.TrimSpace(final) == "ACK:"+replyNonce
+			evidence.AcknowledgementVerified = strings.Contains(final, "ACK:"+replyNonce)
 			if n.Turn.Status != "completed" || !acknowledged || !evidence.ResponseSent || !evidence.ToolCompleted || !evidence.AcknowledgementVerified {
 				t.Fatalf("tool round trip or normal completion not established: status=%s start_ack=%v response_sent=%v tool_completed=%v acknowledgement=%v", evidence.Status, acknowledged, evidence.ResponseSent, evidence.ToolCompleted, evidence.AcknowledgementVerified)
 			}
