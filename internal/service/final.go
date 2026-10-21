@@ -334,16 +334,23 @@ func (c *Controller) RetryFinal(ctx context.Context, id, evidence, reason string
 	if state.Classification == "requires_assessment" {
 		return c.recoverFinalAssertion(ctx, w, scope, evidence, reason)
 	}
-	if state.Retries >= c.Config.Limits.RunnerRetries {
-		return errors.New("final runner retry budget exhausted")
+	retryJob := true
+	switch state.Classification {
+	case "hold", "budget", "isolation", "scope_or_policy_conflict":
+		retryJob = false
 	}
-	state.Retries++
-	state.Attempt++
+	if retryJob {
+		if state.Retries >= c.Config.Limits.RunnerRetries {
+			return errors.New("final runner retry budget exhausted")
+		}
+		state.Retries++
+		state.Attempt++
+	}
 	state.State = "waiting"
 	state.Reason = reason
 	state.RequiredAction = ""
 	state.Failure = nil
-	if err = c.Store.Put(ctx, "operator_audit", fmt.Sprintf("retry-final:%s:%d", issueKey(w), state.Attempt), w.ID, map[string]string{"evidence": evidence, "reason": reason}); err != nil {
+	if err = c.Store.Put(ctx, "operator_audit", fmt.Sprintf("retry-final:%s:%d", issueKey(w), time.Now().UnixNano()), w.ID, map[string]string{"evidence": evidence, "reason": reason}); err != nil {
 		return err
 	}
 	return c.saveFinal(ctx, w, state)
@@ -485,4 +492,27 @@ func (c *Controller) finalOrphans(ctx context.Context, w domain.WorkItem, state 
 		}
 	}
 	return false, nil
+}
+
+// A continuation of a final repair is part of the same recovery budget, even
+// though its PR and remaining criteria belong to a separate WorkItem.
+func (c *Controller) claimContinuation(ctx context.Context, previous, next domain.WorkItem, records map[string]any) error {
+	var state FinalAcceptanceState
+	if err := c.Store.Record(ctx, "parent_final_state", issueKey(previous), &state); err == nil {
+		if state.WorkItemID == previous.ID && state.RecoveryID != "" {
+			next.RepairRounds = previous.RepairRounds
+			jobs, err := c.jobAttempts(ctx, previous.ID)
+			if err != nil {
+				return err
+			}
+			metrics, err := c.Metrics(ctx, previous.ID)
+			if err != nil {
+				return err
+			}
+			records["budget_baseline"] = BudgetBaseline{ValidationJobs: jobs, ObservedTokens: metrics["observed_tokens"].(int64)}
+		}
+	} else if !missing(err) {
+		return err
+	}
+	return c.Store.ClaimNextRecords(ctx, previous.ID, next, records)
 }

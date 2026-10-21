@@ -383,4 +383,47 @@ func TestFinalRepairPartialContinuationTransfersFinalOwnership(t *testing.T) {
 	if state.State != "completed" || state.WorkItemID != repair.ID+"-remaining" || gh.merges != 3 || gh.closed != 1 {
 		t.Fatal(state, gh.merges, gh.closed)
 	}
+	next, _ := c.Store.Get(ctx, state.WorkItemID)
+	previous, _ := c.Store.Get(ctx, repair.ID)
+	var baseline BudgetBaseline
+	if err = c.Store.Record(ctx, "budget_baseline", next.ID, &baseline); err != nil || baseline.ValidationJobs != 3 || baseline.ObservedTokens < 20 || next.RepairRounds != previous.RepairRounds || next.RepairRounds < 1 {
+		t.Fatal("continuation reset recovery budgets", baseline, next, previous, err)
+	}
+	jobs, err := c.jobAttempts(ctx, next.ID)
+	if err != nil || jobs != 5 {
+		t.Fatal("cumulative validation count", jobs, err)
+	}
+}
+
+func TestFinalAdministrativeHoldDoesNotSpendRunnerRetry(t *testing.T) {
+	c, gh, agents, fake := setup(t)
+	ctx := context.Background()
+	c.Config.Limits.RunnerRetries = 0
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	for range 20 {
+		drive(t, c, 1)
+		w, _ := c.Store.Get(ctx, "w")
+		if w.Phase == domain.Merged {
+			break
+		}
+	}
+	if err := c.Store.Apply(ctx, domain.Event{ID: "hold-final", WorkItemID: "w", Kind: "hold"}); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 3)
+	state := finalState(t, c)
+	if state.State != "blocked" || state.Classification != "hold" || fake.calls != 1 {
+		t.Fatal(state, fake.calls)
+	}
+	if err := c.Store.Apply(ctx, domain.Event{ID: "release-final", WorkItemID: "w", Kind: "release"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RetryFinal(ctx, "w", "audit:hold-released", "resume the first final run"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 12)
+	state = finalState(t, c)
+	if state.State != "completed" || state.Retries != 0 || state.Attempt != 0 || gh.closed != 1 || fake.calls != 2 || agents.calls != 2 {
+		t.Fatal(state, gh.closed, fake.calls, agents.calls)
+	}
 }

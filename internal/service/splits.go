@@ -115,7 +115,7 @@ func (c *Controller) afterMerge(ctx context.Context, w domain.WorkItem) error {
 			return err
 		}
 		next = domain.WorkItem{ID: residual.ID, RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Phase: domain.Ready}
-		return c.Store.ClaimNextRecords(ctx, w.ID, next, map[string]any{"scope": nextScope, "source": source, "policy_snapshot": c.policyDigest()})
+		return c.claimContinuation(ctx, w, next, map[string]any{"scope": nextScope, "source": source, "policy_snapshot": c.policyDigest()})
 	}
 	return c.finalAcceptance(ctx, w, scope)
 }
@@ -233,7 +233,7 @@ func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, s
 		}
 	}
 	next := domain.WorkItem{ID: splittingResidual(w, previous).ID, RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: scope.Revision, PolicyRevision: c.Config.Verification.Revision, Phase: domain.Ready}
-	return c.Store.ClaimNextRecords(ctx, w.ID, next, map[string]any{"scope": scope, "source": Source{digest(issue)}, "policy_snapshot": c.policyDigest(), "adoption_reason": reason, "continued_from": w.ID})
+	return c.claimContinuation(ctx, w, next, map[string]any{"scope": scope, "source": Source{digest(issue)}, "policy_snapshot": c.policyDigest(), "adoption_reason": reason, "continued_from": w.ID})
 }
 
 func (c *Controller) RetrySplitChild(ctx context.Context, id, operation, child, evidence, reason string) error {
