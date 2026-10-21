@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"time"
 )
 
@@ -28,19 +29,8 @@ type Session struct {
 	CWD             string   `json:"cwd"`
 	Model           string   `json:"model"`
 }
-type Run struct {
-	BaselineTurnIDs []string        `json:"baseline_turn_ids"`
-	BaselineKnown   bool            `json:"baseline_known"`
-	ID              string          `json:"id"`
-	ThreadID        string          `json:"thread_id"`
-	TurnID          string          `json:"turn_id"`
-	State           string          `json:"state"`
-	Reason          string          `json:"reason"`
-	Started         time.Time       `json:"started"`
-	Final           string          `json:"final"`
-	Request         *codex.Message  `json:"request,omitempty"`
-	Usage           json.RawMessage `json:"usage,omitempty"`
-}
+type Run = contract.SessionRun
+
 type Thread struct {
 	ID    string `json:"id"`
 	CWD   string `json:"cwd"`

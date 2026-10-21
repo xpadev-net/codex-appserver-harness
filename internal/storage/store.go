@@ -35,6 +35,14 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	version, err := databaseVersion(db)
+	if err != nil || (version != 0 && version != 1) {
+		db.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("legacy runtime does not support schema version %d", version)
+	}
 	s := &Store{db}
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
  CREATE TABLE IF NOT EXISTS raw_deliveries(id TEXT PRIMARY KEY,event TEXT NOT NULL,payload BLOB NOT NULL,received_at TEXT NOT NULL,processed INTEGER NOT NULL DEFAULT 0);

@@ -13,26 +13,8 @@ import (
 
 // SessionBinding is a controller-owned identity, not model-supplied state.
 // Task bindings retain their thread until terminal; main rebinding is audited.
-type SessionBinding struct {
-	ID              string             `json:"id"`
-	Kind            string             `json:"kind"`
-	TaskID          string             `json:"task_id"`
-	PhaseID         string             `json:"phase_id"`
-	ParentSessionID string             `json:"parent_session_id"`
-	TaskState       contract.TaskState `json:"task_state"`
-	ThreadID        string             `json:"thread_id"`
-	CWD             string             `json:"cwd"`
-	Model           string             `json:"model"`
-	Sandbox         string             `json:"sandbox"`
-	Target          contract.Target    `json:"target"`
-	Closed          bool               `json:"closed"`
-	Generation      int                `json:"generation"`
-}
-type InputSnapshot struct {
-	ID     string `json:"id"`
-	Digest string `json:"digest"`
-	Input  []byte `json:"-"`
-}
+type SessionBinding = contract.SessionBinding
+type InputSnapshot = contract.InputSnapshot
 
 // Persistence must compare bindings inside each write transaction. ReserveRun
 // atomically records the snapshot/start intent and exclusive active run; it must
