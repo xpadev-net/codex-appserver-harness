@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -52,7 +53,11 @@ func OpenKernel(path string) (*KernelStore, error) {
 	if inspected != 0 && inspected != KernelSchemaVersion {
 		return nil, fmt.Errorf("kernel refuses schema %d; explicit offline migration required", inspected)
 	}
-	db, err := sql.Open("sqlite3", path)
+	dsn, err := sqliteFileDSN(path, "rwc")
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -173,36 +178,50 @@ func validateKernelSchema(db *sql.DB) error {
 	return nil
 }
 func normalizeSchemaSQL(s string) string {
-	var out strings.Builder
-	var quote byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if quote != 0 {
-			out.WriteByte(c)
-			if c == quote {
-				if i+1 < len(s) && s[i+1] == quote {
-					out.WriteByte(s[i+1])
-					i++
-				} else {
-					quote = 0
-				}
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"', '`':
-			quote = c
-		case '[':
-			quote = ']'
-		case ' ', '\t', '\r', '\n':
-			continue
-		}
-		if quote == 0 && c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		out.WriteByte(c)
+	tokens := []string{}
+	word := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$' || c >= 128
 	}
-	return out.String()
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			i++
+			continue
+		}
+		start := i
+		i++
+		if c == '\'' || c == '"' || c == '`' || c == '[' {
+			quote := c
+			if c == '[' {
+				quote = ']'
+			}
+			for i < len(s) {
+				if s[i] == quote {
+					if i+1 < len(s) && s[i+1] == quote {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			tokens = append(tokens, s[start:i])
+			continue
+		}
+		if word(c) {
+			for i < len(s) && word(s[i]) {
+				i++
+			}
+			tokens = append(tokens, strings.ToLower(s[start:i]))
+		} else {
+			tokens = append(tokens, s[start:i])
+		}
+	}
+	// A token array preserves boundaries: payloadBLOB and payload BLOB must
+	// remain distinct even though their whitespace-free spellings coincide.
+	encoded, _ := json.Marshal(tokens)
+	return string(encoded)
 }
 func (k *KernelStore) clock() time.Time {
 	if k.Now == nil {

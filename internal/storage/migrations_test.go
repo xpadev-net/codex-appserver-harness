@@ -128,7 +128,7 @@ func TestLegacyRuntimeRejectsUnknownSchemaBeforeDDL(t *testing.T) {
 }
 
 func TestKernelRejectsDamagedOtherwiseValidSchemas(t *testing.T) {
-	for _, ddl := range []string{"DROP TABLE kernel_snapshots", "ALTER TABLE records DROP COLUMN payload", "CREATE TRIGGER unexpected AFTER INSERT ON kernel_waves BEGIN DELETE FROM kernel_tasks; END"} {
+	for _, ddl := range []string{"DROP TABLE kernel_snapshots", "ALTER TABLE records DROP COLUMN payload", "DROP TABLE records; CREATE TABLE records(kind TEXT NOT NULL,id TEXT NOT NULL,work_item_id TEXT NOT NULL,payloadBLOB NOT NULL,PRIMARY KEY(kind,id))", "CREATE TRIGGER unexpected AFTER INSERT ON kernel_waves BEGIN DELETE FROM kernel_tasks; END"} {
 		t.Run(ddl, func(t *testing.T) {
 			path := kernelPath(t)
 			store, err := OpenKernel(path)
@@ -158,6 +158,44 @@ func TestKernelRejectsDamagedOtherwiseValidSchemas(t *testing.T) {
 				t.Fatal("damaged DB permissions changed", info, err)
 			}
 		})
+	}
+}
+
+func TestSQLiteFilesystemPathsAreNotDSNOptions(t *testing.T) {
+	for _, name := range []string{"state?copy.db", "state#copy.db", "state%copy.db", "state copy.db"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(filepath.Dir(kernelPath(t)), name)
+			store, err := OpenKernel(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = store.Put(context.Background(), "test", "id", "session", map[string]string{"value": "saved"}); err != nil {
+				t.Fatal(err)
+			}
+			store.Close()
+			reopened, err := OpenKernel(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened.Close()
+			if _, err = os.Stat(path); err != nil {
+				t.Fatal("requested DB was not created", err)
+			}
+			if name == "state?copy.db" {
+				if _, err = os.Stat(filepath.Join(filepath.Dir(path), "state")); !os.IsNotExist(err) {
+					t.Fatal("truncated database created", err)
+				}
+			}
+		})
+	}
+	path := filepath.Join(filepath.Dir(kernelPath(t)), "legacy?copy.db")
+	legacy, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Close()
+	if _, err = os.Stat(filepath.Join(filepath.Dir(path), "legacy")); !os.IsNotExist(err) {
+		t.Fatal("legacy open used a truncated DSN path", err)
 	}
 }
 func TestMigrationRegistryRejectsConflictsAndDoesNotRunOnOpen(t *testing.T) {

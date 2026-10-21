@@ -15,6 +15,16 @@ import (
 func inspectDatabaseFile(path string) (int, error) {
 	return inspectDatabaseFileWith(path, nil)
 }
+func sqliteFileDSN(path, mode string) (string, error) {
+	if path == ":memory:" {
+		return path, nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return (&url.URL{Scheme: "file", Path: absolute, RawQuery: url.Values{"mode": []string{mode}, "_busy_timeout": []string{"5000"}}.Encode()}).String(), nil
+}
 func inspectDatabaseFileWith(path string, validate func(*sql.DB, int) error) (int, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -26,11 +36,10 @@ func inspectDatabaseFileWith(path string, validate func(*sql.DB, int) error) (in
 	if info.Size() == 0 {
 		return 0, nil
 	}
-	absolute, err := filepath.Abs(path)
+	dsn, err := sqliteFileDSN(path, "ro")
 	if err != nil {
 		return 0, err
 	}
-	dsn := (&url.URL{Scheme: "file", Path: absolute, RawQuery: "mode=ro&_busy_timeout=5000"}).String()
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return 0, err
