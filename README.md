@@ -131,3 +131,21 @@ Webhookは任意です。未受信イベントは定期照合で回復します�
 ログはjobごとに8 MiBまで保存し、切り詰め時のパターン判定は判定不能にします。`max_artifact_bytes`で新規jobを停止し、`gc`は終端作業の保存期間を過ぎたログ・検証checkout・一時homeを削除し、ログの失効記録を残します。
 
 詳細: [接続契約](docs/connection-contracts.md)、[受入検証と未確認事項](docs/acceptance.md)。
+
+### 親の最終受入の復旧
+
+PR の `MERGED` / 分割元の `SPLIT` と親全体の完了は別に保存します。`inspect` の `parent_final_state` は `waiting` / `running` / `blocked` / `repairing` / `completed`、失敗理由・分類・対象 SHA・失敗 job・必要操作・後続 WorkItem を示します。`blocked` の失敗結果を再読してモデルを起動し続けることはありません。終端 WorkItem の最終受入が保留された場合、取得済み Issue の claim を保ち、新しい Issue の取得を許可します。
+
+環境障害・timeout・cancel・不明な実行は、原因と runner の停止を確認した上で明示的に再試行します。不明な job は先に `reconcile-job` で未起動 / 停止と証拠を記録します。`retry-final` は新しい job ID を発行し、`runner_retries` と検証 job 上限を引き継ぎます。失敗を成功に変更せず、古い証拠も保持します。
+
+```sh
+./harness retry-final --config CONFIG --id WORK_ITEM --evidence 'incident:runner-restored' --reason '実行環境を復旧し、旧 job の終了を確認'
+```
+
+テスト失敗は自動で後続修正 WorkItem を作り、失敗 SHA の checkout と元の要求・runner 証拠を独立検証担当へ渡します。分類後、実装不具合は実装担当、テスト不具合は検証担当、仕様不明や未分類は理由付き保留へ進みます。元の PR 履歴と scope は保持し、修正回数・既知の token 使用量・検証 job 数を引き継ぎます。修正 PR の独立検証・Cloud review・merge と親全体の最終受入が成立するまで親を閉じません。修正予算等で後続登録を保留した場合も `inspect` に必要操作が残ります。
+
+後続修正をさらに分割した場合、その修正ツリー自体の全作業と最終受入が完了するまで親を閉じません。後続の scope を `adopt` すると旧失敗証拠を履歴へ移し、新しい scope で実装・独立検証を開始します。部分 PR の後続へ最終受入の担当を原子的に引き継ぎます。修正 WorkItem の中止は最終受入の保留として照合し、元の Issue claim と PR 履歴を保って別の Issue の取得を許可します。
+
+実行前の hold / pause 等の保留を解除して再開する操作では、runner の再試行回数を消費しません。`runner_retries: 0` でも初回の最終受入を実行できます。修正の部分 PR とその後続も、累積の修正回数・検証 job 数・既知 token 使用量を共有します。
+
+修正の分割・部分 PR でも既存の分割深さを保持します。子の修正 scope を更新した場合、親と依存先は現在の Issue claim と保存した修正・後続の系譜を確認して、その完了証拠を参照します。Issue 番号や版の大小だけで異なる scope を同一視しません。

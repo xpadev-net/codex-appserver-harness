@@ -230,8 +230,17 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			if w.Phase == Verifying {
 				w.Phase = Reviewing
 			}
-		case "start":
+		case "start_assessment":
+			if w.Phase == Ready && e.Ref != "" {
+				w.Candidate = e.Ref
+				w.Phase = Verifying
+				emit = "verify"
+			}
+		case "start", "start_repair":
 			if w.Phase == Ready {
+				if e.Kind == "start_repair" {
+					w.RepairRounds++
+				}
 				w.Phase = Implementing
 				emit = "implement"
 			}

@@ -218,20 +218,31 @@ func (c *Controller) finishInterim(ctx context.Context, w domain.WorkItem, op do
 	return c.complete(ctx, w, op, results, "interim_complete", w.Candidate, "requested interim validation completed")
 }
 func (c *Controller) jobBudget(ctx context.Context, id string) error {
-	raw, err := c.Store.Records(ctx, "job_intent", id)
+	attempts, err := c.jobAttempts(ctx, id)
 	if err != nil {
 		return err
-	}
-	attempts := 0
-	for _, data := range raw {
-		var intent JobIntent
-		if err = json.Unmarshal(data, &intent); err != nil {
-			return err
-		}
-		attempts += intent.Attempt + 1
 	}
 	if attempts >= c.Config.Limits.ValidationJobs {
 		return fmt.Errorf("validation job budget exhausted (%d)", attempts)
 	}
 	return nil
+}
+func (c *Controller) jobAttempts(ctx context.Context, id string) (int, error) {
+	raw, err := c.Store.Records(ctx, "job_intent", id)
+	if err != nil {
+		return 0, err
+	}
+	var baseline BudgetBaseline
+	if err = c.Store.Record(ctx, "budget_baseline", id, &baseline); err != nil && !missing(err) {
+		return 0, err
+	}
+	attempts := baseline.ValidationJobs
+	for _, data := range raw {
+		var intent JobIntent
+		if err = json.Unmarshal(data, &intent); err != nil {
+			return 0, err
+		}
+		attempts += intent.Attempt + 1
+	}
+	return attempts, nil
 }

@@ -229,6 +229,18 @@ func (c *Controller) Tick(ctx context.Context) error {
 				return err
 			}
 			if ready {
+				var failure runner.Result
+				if err := c.Store.Record(ctx, "final_failure", w.ID, &failure); err == nil {
+					return c.startFinalAssessment(ctx, w, failure)
+				} else if !missing(err) {
+					return err
+				}
+				var recovery map[string]string
+				if err := c.Store.Record(ctx, "final_recovery_audit", w.ID, &recovery); err == nil {
+					return c.emit(ctx, w, "start_repair", "start correction for adopted final recovery scope")
+				} else if !missing(err) {
+					return err
+				}
 				return c.emit(ctx, w, "start", "issue_claimed")
 			}
 		case domain.Reviewing:
@@ -260,7 +272,13 @@ func (c *Controller) Tick(ctx context.Context) error {
 		if item.Phase == domain.Merged || item.Phase == domain.Split {
 			var completion map[string]any
 			if missing(c.Store.Record(ctx, "parent_completion", fmt.Sprintf("r%d-i%d", item.RepositoryID, item.Issue), &completion)) {
-				active = true
+				blocked, err := c.finalBlocked(ctx, item)
+				if err != nil {
+					return err
+				}
+				if !blocked {
+					active = true
+				}
 			}
 		}
 	}
