@@ -29,18 +29,18 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 		RawDetails string `json:"raw_details"`
 	}
 	annotationErr := c.Pages(ctx, fmt.Sprintf("check-runs/%d/annotations?per_page=100", check.ID), &annotations)
-	tail := &diagnosticTail{limit: 65536}
-	output := runner.NewRedactedWriter(tail)
+	annotationTail := &diagnosticTail{limit: 6144}
+	output := runner.NewRedactedWriter(annotationTail)
 	for _, a := range annotations {
 		fmt.Fprintf(output, "%s:%d %s\n%s\n%s\n", a.Path, a.StartLine, a.Title, a.Message, a.RawDetails)
 	}
 	logErr := error(nil)
+	logTail := &diagnosticTail{limit: 6144}
 	u, err := url.Parse(check.DetailsURL)
 	if err == nil && u.Scheme == "https" && u.Host == "github.com" && u.User == nil {
 		pattern := regexp.MustCompile("(?i)^/" + regexp.QuoteMeta(c.Repository) + `/actions/runs/[0-9]+/job/([0-9]+)/?$`)
 		if match := pattern.FindStringSubmatch(u.Path); match != nil {
 			cmd := exec.CommandContext(ctx, "gh", "api", "--allow-escape-sequences", "repos/"+c.Repository+"/actions/jobs/"+match[1]+"/logs")
-			logTail := &diagnosticTail{limit: 65536}
 			logOutput := runner.NewRedactedWriter(logTail)
 			cmd.Stdout = logOutput
 			logErr = cmd.Run()
@@ -48,15 +48,22 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 			if logErr == nil {
 				logErr = flushErr
 			}
-			if logErr == nil {
-				_, logErr = output.Write(logTail.data)
+			if logErr != nil {
+				logTail.data = nil
 			}
 		}
 	}
 	if err := output.Flush(); err != nil {
 		return "", err
 	}
-	text := runner.RedactText(cleanDiagnosticText(string(tail.data)))
+	sections := []string{}
+	if text := diagnosticSegment(annotationTail.data); text != "" {
+		sections = append(sections, "Failure annotations:\n"+text)
+	}
+	if text := diagnosticSegment(logTail.data); text != "" {
+		sections = append(sections, "Job log excerpt:\n"+text)
+	}
+	text := strings.Join(sections, "\n\n")
 	if text != "" {
 		return text, nil
 	}
@@ -98,4 +105,12 @@ func cleanDiagnosticText(text string) string {
 		}
 		return -1
 	}, text))
+}
+
+func diagnosticSegment(data []byte) string {
+	text := runner.RedactText(cleanDiagnosticText(string(data)))
+	if len(text) > 6144 {
+		text = text[len(text)-6144:]
+	}
+	return text
 }

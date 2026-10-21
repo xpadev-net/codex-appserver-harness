@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/review"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
 type CIEvidence struct {
@@ -55,7 +57,7 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 			continue
 		}
 		if check.ID <= 0 {
-			return true, c.block(ctx, w, "CI result lacks check identity; reconcile before repair")
+			return true, c.holdCI(ctx, w, "CI result lacks check identity; reconcile before repair")
 		}
 		attempt, _ := json.Marshal([]any{w.Candidate, target, check.ID, check.StartedAt, check.CompletedAt, check.Conclusion})
 		hash := sha256.Sum256(attempt)
@@ -82,7 +84,7 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 			if err := c.Store.Put(ctx, "ci_evidence", id, w.ID, evidence); err != nil {
 				return true, err
 			}
-			return true, c.block(ctx, w, fmt.Sprintf("CI %s: %s (%s); inspect %s, resolve environment/policy and rerun CI before retry", classification, check.Name, check.Conclusion, id))
+			return true, c.holdCI(ctx, w, fmt.Sprintf("CI %s: %s (%s); inspect %s, resolve environment/policy and rerun CI before retry", classification, check.Name, check.Conclusion, id))
 		}
 		diagnostics, diagErr := c.GitHub.CheckDiagnostics(ctx, *check)
 		evidence.Diagnostics = diagnostics
@@ -94,7 +96,7 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 			if err := c.Store.Put(ctx, "ci_evidence", id, w.ID, evidence); err != nil {
 				return true, err
 			}
-			return true, c.block(ctx, w, "CI diagnostics unavailable; inspect "+id+" and restore authenticated diagnostic access before retry")
+			return true, c.holdCI(ctx, w, "CI diagnostics unavailable; inspect "+id+" and restore authenticated diagnostic access before retry")
 		}
 		var dispatched bool
 		if err := c.Store.Record(ctx, "ci_dispatched", id, &dispatched); err == nil && dispatched {
@@ -108,7 +110,7 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 		records["ci_dispatched"][id] = true
 	}
 	if alreadyAssessed {
-		return true, c.block(ctx, w, "previously assessed CI attempt still fails; repair or rerun CI before retry")
+		return true, c.holdCI(ctx, w, "previously assessed CI attempt still fails; repair or rerun CI before retry")
 	}
 	if len(ids) == 0 {
 		return false, nil
@@ -117,5 +119,20 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 	records["correction"] = map[string]any{w.ID: correction}
 	hash := sha256.Sum256([]byte(fmt.Sprint(ids)))
 	e := domain.Event{ID: fmt.Sprintf("ci-batch-%x-attempt%d", hash[:16], w.Attempt), WorkItemID: w.ID, Kind: "repair_tests", Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Attempt: w.Attempt, Reason: correction.Reason}
-	return true, c.Store.EventRecords(ctx, e, records)
+	err := c.Store.EventRecords(ctx, e, records)
+	if errors.Is(err, storage.ErrEventPreconditions) {
+		return true, nil
+	}
+	return true, err
+}
+
+// A diagnostic request may finish after an operator adopted a newer scope.
+// Guard the hold in the same transaction as the event; stale facts are ignored.
+func (c *Controller) holdCI(ctx context.Context, w domain.WorkItem, reason string) error {
+	e := domain.Event{ID: fmt.Sprintf("ci-hold:%s:%d", w.ID, time.Now().UnixNano()), WorkItemID: w.ID, Kind: "block", Candidate: w.Candidate, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Attempt: w.Attempt, Reason: reason}
+	err := c.Store.EventRecords(ctx, e, nil)
+	if errors.Is(err, storage.ErrEventPreconditions) {
+		return nil
+	}
+	return err
 }

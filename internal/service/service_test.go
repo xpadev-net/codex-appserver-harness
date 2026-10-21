@@ -37,6 +37,7 @@ type fakeGH struct {
 	ciFailureSHA             string
 	ciFailFirst              bool
 	diagnosticsMissing       bool
+	onDiagnostics            func()
 	reviewFinding            bool
 }
 
@@ -909,6 +910,12 @@ func TestCIRepairChangingTestsRetiresOldCorrection(t *testing.T) {
 }
 
 func (f *fakeGH) CheckDiagnostics(context.Context, github.Check) (string, error) {
+	if f.onDiagnostics != nil {
+		callback := f.onDiagnostics
+		f.onDiagnostics = nil
+		callback()
+	}
+
 	if f.diagnosticsMissing {
 		return "", fmt.Errorf("private diagnostics access unavailable")
 	}
@@ -1068,5 +1075,27 @@ func TestUnchangedReviewRepairsReachBudgetInsteadOfStalling(t *testing.T) {
 	w, _ := c.Store.Get(ctx, "w")
 	if w.Phase != domain.Blocked || !strings.Contains(w.Reason, "budget") || agents.calls > 8 {
 		t.Fatal("unchanged batch stalled or bypassed budget", w, agents.calls)
+	}
+}
+
+func TestStaleDiagnosticHoldCannotBlockAdoptedScope(t *testing.T) {
+	c, gh, _, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	candidate, _ := c.candidate(ctx, w)
+	check := github.Check{ID: 101, Name: "required", HeadSHA: candidate.SHA, Status: "completed", Conclusion: "failure"}
+	check.App.ID = 9
+	gh.diagnosticsMissing = true
+	gh.onDiagnostics = func() {
+		if err := c.Store.Adopt(ctx, w.ID, 2, 1, map[string]any{"scope": "adopted new requirements"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handled, err := c.routeCIFailures(ctx, w, gate.Snapshot{Candidate: candidate, RequiredChecks: []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}, Checks: []github.Check{check}})
+	after, _ := c.Store.Get(ctx, w.ID)
+	if err != nil || !handled || after.Phase != domain.Ready || after.ScopeRevision != 2 {
+		t.Fatal(after, handled, err)
 	}
 }

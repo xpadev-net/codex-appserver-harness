@@ -144,3 +144,22 @@ func TestDiagnosticControlSequencesAreRemoved(t *testing.T) {
 		t.Fatalf("unexpected diagnostic text: %q", text)
 	}
 }
+
+func TestFailureAnnotationsSurviveLongJobLogs(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+ *"annotations?per_page=100"*) printf '%s' '[[{"path":"tests/behavior_test.go","start_line":17,"message":"unique acceptance failure"}]]' ;;
+ *"actions/jobs/456/logs"*) i=0; while test "$i" -lt 5000; do printf 'unrelated job output\n'; i=$((i+1)); done ;;
+ *) exit 12 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	text, err := (Client{Repository: "owner/repo", RepositoryID: 1}).CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
+	if err != nil || !strings.Contains(text, "unique acceptance failure") || !strings.Contains(text, "unrelated job output") || len(text) > 16384 {
+		t.Fatal("failure diagnostics were lost or unbounded", len(text), err)
+	}
+}

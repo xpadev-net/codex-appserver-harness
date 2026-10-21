@@ -790,6 +790,8 @@ func (s *Store) Adopt(ctx context.Context, id string, scopeRevision, policyRevis
 }
 
 // EventRecords commits operator intent and its associated state transition together.
+var ErrEventPreconditions = errors.New("event record preconditions changed")
+
 func (s *Store) EventRecords(ctx context.Context, e domain.Event, records map[string]map[string]any) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -801,7 +803,7 @@ func (s *Store) EventRecords(ctx context.Context, e domain.Event, records map[st
 		return err
 	}
 	if e.Candidate != "" && (w.Candidate != e.Candidate || w.ScopeRevision != e.ScopeRevision || w.PolicyRevision != e.PolicyRevision || w.Attempt != e.Attempt) {
-		return errors.New("event record preconditions changed")
+		return ErrEventPreconditions
 	}
 
 	for kind, entries := range records {
