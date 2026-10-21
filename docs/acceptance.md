@@ -17,6 +17,22 @@
 service統合テストはfake GitHub / model / job adapterと実際のローカルGit repositoryを使う。
 この試験はCloudの実際のAPPROVED出力、アカウント権限、実モデルの品質や本番runner profileの十分性を証明しない。
 
+## v0.4の適用と現在の未達
+
+上表は旧PRハーネスの実装・試験への対応であり、v0.4の全ATが合格したという表ではない。
+特にAT-009の「新fix Task/session」は未実装で、旧role thread再利用の試験を新版の合格へ読み替えない。
+2026-10-22のコードレビューでは`7dfa964`でGo tests/vet/buildと主要packageのrace検査が成功した。一時的なoverlay試験で#44/#45を再現したため、テスト全体の成功を要件全充足と扱わない。
+
+| 段階 | 現在の状態 | 次の証拠 |
+| --- | --- | --- |
+| S | 未確認。生成schemaの存在とinitializeのみの証拠では不足 | Task_0 / AT-050で実tool往復・正常終了・別processの同一未完了thread再開 |
+| K | 未実装 | Task_1〜7/9〜10。汎用成果、2 Task並行、独立review/fix、親子message、通知、CLI、復旧と上限 |
+| P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
+| M | 未実装。実DB不存在は未確認 | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
+
+新しいAT-050〜059は[要件の受入表](../requirements.md#10-受入テスト)を原本とする。K/P/Mで適用/未実行/blocked/合格を別々に記録し、実装前の目標値を実測値として掲載しない。
+既知不具合: [#44 未評価指摘の解決](https://github.com/xpadev-net/codex-appserver-harness/issues/44)、[#45 merge後の要求更新復旧](https://github.com/xpadev-net/codex-appserver-harness/issues/45)。runtime修正と回帰確認までは未解消とする。
+
 ## 実環境で確認したもの
 
 - GitHub repository ID/default branchのmetadata取得。

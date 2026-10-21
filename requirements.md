@@ -3,13 +3,13 @@
 | 項目 | 内容 |
 | --- | --- |
 | 文書 ID | CIH-REQ |
-| 版 | 0.3 |
+| 版 | 0.4 |
 | 作成日 | 2026-10-20（Asia/Tokyo） |
 | 更新日 | 2026-10-22（Asia/Tokyo） |
-| 状態 | Wave中心への改訂案。実装着手の承認・実装完了とは区別する |
+| 状態 | レビュー反映の改訂案。段階別の受入と実行契約を定義。runtimeは未実装 |
 | 対象 | Codex app-server上のOrchestratorと担当セッションを、Wave・Task・イベントで管理するハーネス |
 | 関連文書 | [実装計画書](implementation-plan.md) |
-| 実装の調査基点 | `fd9f745`。現行実装との差分は[差分分析](docs/background-wave-gap-analysis.md)を参照 |
+| 実装の調査基点 | `7dfa964`（v0.3文書反映済み、runtimeは`fd9f745`と同一）。現行実装との差分は[差分分析](docs/background-wave-gap-analysis.md)を参照 |
 
 ## 1. 目的
 
@@ -40,7 +40,23 @@ Issue poolは依頼の入口の一つ、PRは追跡対象の成果物として�
 - FR は機能要件、NFR は非機能要件、AT はハーネスの受入テストを表す。
 - 各プロダクトの Issue に記載する受入条件 ID は、これらのハーネス要件 ID と区別する。
 
-### 2.2 依頼者から整理した要求
+### 2.2 受入段階と適用範囲
+
+MUSTは該当機能を完成とする条件であり、すべての外部連携をWave基盤の先行条件にする意味ではない。
+要件IDは維持し、次の段階を別々に判定する。全体完成にはK・P・Mすべてが必要である。
+
+| 段階 | 対象と完成の根拠 | 未成立の影響 |
+| --- | --- | --- |
+| S: 先行成立確認 | 実model・認証・隔離下のdynamic tool往復、正常turn終了、新processで同じ未完了threadの再開（AT-050） | 未確認なら依存するWave runtime実装へ進まない。DB設計の机上検討は可能 |
+| K: Wave kernel | Issue/WorkItem/PRを持たない直接依頼、汎用成果、Phase/Task、通知、親子message、並行性、ローカルレビュー、CLI | K単独で完成判定できる。GitHub操作は提供せず、Cloud能力を合格に数えない |
+| P: PRパイプライン接続 | Issue pool、WorkItem/Candidate、runner、PR自動購読、正式承認、merge、親最終受入 | 必要なCloud/CI/rulesがunknownならPと該当製品Waveだけを保留する |
+| M: 既存作業の移行 | FR-034、AT-039/049。履歴・unknown操作・予算を保持したDB/config移行 | 旧状態のある導入先では移行まで新runtimeへ切り替えない。Kは別rootの新DBで検証する |
+
+KにはFR-001のapp-server/model/実行環境設定、FR-003〜006/023〜028/030〜033/036〜040とNFRの共通契約、FR-029の汎用成果レビューを適用する。GitHub設定はPで追加する。
+製品コード・PRを扱う場合はFR-001〜022/029/035の該当gateを追加する。機能不使用と条件未確認を区別し、製品Waveがgateを省く目的でKへ自己分類することを認めない。
+採用機能・適用要件・必須profile・受入条件は開始時の信頼されたpolicyで固定する。
+
+### 2.3 依頼者から整理した要求
 
 - 大きな依頼からWaveオブジェクトを生成し、その下にPhase、さらにその下にTaskを置く。
 - メインセッションがOrchestratorとして全体を管理し、各Taskは独立した一つの使い捨てセッションで作業する。完了済みTask/sessionは再利用しない。
@@ -52,7 +68,7 @@ Issue poolは依頼の入口の一つ、PRは追跡対象の成果物として�
 
 添付画面は望ましい体験の参考資料であり、他製品の内部実装や画面中の作業指示を本ハーネスの契約とはみなさない。
 
-### 2.3 本書で採用する設計案
+### 2.4 本書で採用する設計案
 
 以下は要求を具体化するための設計案であり、外部製品が提供する標準機能とは区別する。
 
@@ -60,7 +76,7 @@ Issue poolは依頼の入口の一つ、PRは追跡対象の成果物として�
 - Orchestratorは分解・方向修正・例外判断を担うLLMセッション、controllerは永続化・実行枠・通知・外部操作を担う通常コードとする。
 - Wave→Phase→Taskと、PR単位の既存WorkItemを分ける。Taskは成果物・検証対象としてWorkItemを関連付ける。
 - Task 1対1の使い捨てsession/threadを持つ。実装・検証・レビュー・fixはTaskへの指示で表し、完了後の作業は別Taskを新しいsessionで始める。
-- 初期のPhaseは順次進行し、各Phase内のTaskを上限内で並行実行する。実装→レビュー→fix等のPhaseを親が結果に応じて構成する。
+- 初期のPhaseは順次進行し、各Phase内のTaskを上限内で並行実行する。定型のreview/fix反復は親が保存した有界templateをcontrollerが展開し、例外だけ親が再計画する（FR-038）。
 - Task専用の縮小runtimeは作らず、Wave呼び出しをtool公開とcontroller認可の両方で禁止する。既存のscope・権限・検証policyは親子共通で適用する。
 - 同時turn、runner、進行中PRの上限を設定可能にし、上限2以上で独立Taskの並行進行を初期完成条件に含める。
 - 購読・通知・起動意図をDBへ保存し、イベントを通常経路、timerによる再照合を欠落回復・外部通知非対応時の補助手段とする。
@@ -71,7 +87,7 @@ Cloud review が正式な APPROVED を返せることや、GitHub App の bot �
 
 ## 3. 対象範囲
 
-### 3.1 初期完成版に含むもの
+### 3.1 段階的に完成させるもの（K・P・M）
 
 - リポジトリ単位の設定、直接依頼の受付とIssue pool。
 - Wave→Phase→Task、Phaseの進行条件とTask依存、メインOrchestrator、Taskごとの使い捨てセッションの管理。
@@ -92,6 +108,7 @@ Cloud review が正式な APPROVED を返せることや、GitHub App の bot �
 
 - 複数ホスト、分散scheduler。
 - 外部チャット製品をホストとする会話連携。
+- Phase間pipeline、quorum/any-success、任意の動的fan-out。初期の条件schemaでは拒否する。
 - stacked PR、merge queue。
 - 外部 runner、特定の実行環境を必要とする検証 profile。
 - Web UI、追加の Issue provider / Review provider。
@@ -110,9 +127,11 @@ Cloud review が正式な APPROVED を返せることや、GitHub App の bot �
 | --- | --- |
 | Orchestrator session | メインの継続会話。依頼を分解し、Waveを作成・補正し、必要な例外判断を行う |
 | Wave | 元要求、要求の版、Phase群、予算、進捗、完了条件を束ねる永続単位 |
-| Phase | Wave内の実装・レビュー・fix等のまとまり。Task群、順序、開始・完了条件を持つ |
+| Phase | Wave内でTaskを束ねる進行単位。既存WorkItemの`phase`とは別の型・ID。Task群、順序、開始・完了条件を持つ |
 | Task | 一つのPhaseに所属する作業。1対1の使い捨てセッションを持ち、完了後は再開せず、Wave呼び出しを禁止する |
-| Attempt / Run | 未完了Task内の一回の起動とその結果。完了後の修正は同じTaskの追加Attemptにはしない |
+| Attempt / Run | 未完了Task内の一回の起動とその結果。turnの失敗とTaskの終端を区別する。完了後の修正は同じTaskの追加Attemptにはしない |
+| Artifact | controller管理の不変な汎用成果。ID・digest・サイズ・出所・要求版を持ち、Task間では参照を渡す |
+| Plan revision | 要求のscope revisionと別の実行プラン版。Phase/Task構成とtemplate展開の条件・履歴を固定する |
 | Parent / Task message | 親Orchestratorと直属Task間の永続メッセージ。質問・回答・指示・blocker等を運び、必要に応じて受信側を再開する |
 | Subscription | 対象・イベント種別・購読者・有効な要求の版・再開条件を保持する購読 |
 | Notification | 購読に対応する保存済み通知。配送確認とモデルturnの開始は別に追跡する |
@@ -134,6 +153,7 @@ Cloud review が正式な APPROVED を返せることや、GitHub App の bot �
 | Reconcile | 外部サービスとローカル状態を通常コードで再照合する処理 |
 
 管理関係は、Orchestrator session 1対N Wave、Wave 1対N Phase、Phase 1対N Task、Task 1対1 session/thread、WorkItem 1対1 主PRとする。
+TaskはWorkItemを0件以上参照できる。調査・分析・報告だけのTask/WaveにIssue・Git commit・PRを要求しない。
 TaskとWorkItemは成果物・検証対象の関連として結び付ける。同じWorkItemを実装Task・独立検証Task・レビューTaskが参照でき、一つのTaskも部分PRの複数WorkItemを扱える。
 部分PRの後続は別WorkItem、完了済みTaskのfixは同じWorkItemを対象とする新Task・新sessionとする。Task内へ隠れたsessionを追加しない。
 新Taskは元要求・対象範囲・候補SHA・前Taskの成果と指摘を引き継ぎ、過去の会話やcacheが利用できることを必須にしない。
@@ -158,16 +178,18 @@ PR の close / 再作成等が必要な例外では、過去の PR を履歴と�
 
 ### 5.2 通常フロー
 
+以下は製品変更を含むPの例である。Kでは固定候補を汎用Artifactへ置き換えて独立評価し、PR/merge工程を適用しない（§11.1）。
+
 1. 直接依頼またはIssueを受け取り、Orchestratorの分解案を検証してWave・Phase群・Task・要求の版を保存する。
 2. 実行中Phaseの開始条件・Task依存・実行枠を満たすTaskごとに新しいsession/threadを作成する。
 3. 実装Taskが対象WorkItemの候補・成果・残作業を構造化出力し、Taskを終了する。
 4. Phaseの必要Taskと完了条件を満たしてから、独立検証・テスト・レビュー等の次Phaseへ進む。
 5. 独立検証Taskが元要求・候補を確認し、テストと検証計画を作る。runnerが固定候補を検証する。
 6. レビューPhaseの新Taskが固定候補を評価し、結果・指摘を返して終了する。
-7. 修正が必要なら親がfix Phaseに新Taskを作る。元要求・指摘・候補・実行証拠を渡し、新sessionで修正する。
+7. 修正が必要なら、保存済みtemplateに一致する指摘はcontrollerがfix Phaseの新Taskへ渡す。分類不能・範囲変更は親の再計画へ戻す。新Taskは元要求・指摘・成果参照・候補・実行証拠を受け取る。
 8. 必要に応じて検証・レビューのPhaseを追加し、新Taskで更新候補を確認する。
 9. PR操作toolと自動購読を使い、CI・Cloud review・外部更新を待つ。未完了Taskは親とメッセージを送り、通知から同じthreadの次turnを開始できる。
-10. 最新候補の全gateと正式承認からmergeし、実際の結果とWave全体の最終受入を確認して完了する。
+10. PRを持つWaveは最新候補の全gateと正式承認からmergeし、実際の結果と親最終受入を確認する。汎用Waveは成果とcriterionの対応・独立評価・残作業を照合して完了する。
 
 Phase内では独立Taskを並行実行する。次Phaseへの遷移は保存した完了条件に従い、失敗・中止・終了した数だけで成功としない。
 待機条件と親子メッセージは保存してturnを終了し、未完了Taskだけを通知で再開する。
@@ -215,7 +237,9 @@ Task完了後の追加作業は新Taskへ引き渡し、親Orchestratorの継続
 ### FR-006 構造化された引き渡し — MUST
 
 - 実装・検証担当の最終結果を、版付きの schema で検証すること。
-- 結果には WorkItem、Scope revision、outcome、今回の成果、残作業、必要な検証、blocker を含めること。
+- 共通結果にはschema版、Wave/Phase/Task、scope/plan版、outcome、今回の成果参照、残作業、必要な検証、blockerを含めること。
+- WorkItem参照は0件以上とし、製品変更の結果ではWorkItem・Candidateを追加で必須にすること。汎用成果の自己申告を製品gateへ代用しないこと。
+- 汎用成果にはartifact ID・digest・サイズ・形式・出所・要求版を付け、controllerが内容と参照権限を検証すること。大きな成果は参照渡しとし、上限・保持・失効時の扱いを固定すること（実装計画§2.2）。
 - candidate、分割案、途中検証要求、保留を区別すること。
 - 自然文の「完了」、自己申告の SHA / テスト成功 / review 成功だけで外部操作を決めないこと。
 
@@ -268,10 +292,10 @@ Task完了後の追加作業は新Taskへ引き渡し、親Orchestratorの継続
 
 ### FR-013 新Taskへの修正引き渡し — MUST
 
-- 有効な指摘・失敗と必要な情報をまとめ、親が新しい修正Taskへ渡すこと。
+- 有効な指摘・失敗と必要な情報をまとめ、親の保存済みplan/templateまたは新たな構造化判断から、新しい修正Taskへ渡すこと。
 - 完了済みの実装・検証・レビューTaskを再開せず、新Taskと新sessionを作成すること。
-- 元要求、対象WorkItem、候補SHA、scope/policy版、前Taskとreview round、実行証拠、残作業を関連付けること。
-- 指摘IDで重複したfix Taskの生成を抑止し、inline comment一件ごとにTaskを増やさないこと。
+- 元要求、scope/policy版、前Task、成果参照・指摘・実行証拠・残作業を関連付けること。製品変更では対象WorkItem・候補SHA・review roundも必須とすること。
+- 指摘IDで重複したfix Taskの生成を抑止し、inline comment一件ごとにTaskを増やさないこと。評価済みIDと解決済みIDを対応させ、部分的なno_actionで未評価の指摘を解決済みにしないこと。
 - 有効な検証計画は再利用し、Task・Phaseをまたいでも修正予算をリセットしないこと。
 - 成功したテストの不要なLLM再承認を追加しないこと。
 
@@ -359,6 +383,7 @@ Task完了後の追加作業は新Taskへ引き渡し、親Orchestratorの継続
 - pause / cancel 後に、既に送信済みの外部操作が完了する場合も追跡すること。
 - app-server の承認・入力要求は設定済み policy に従って応答し、未対応要求は理由付きで保留すること。
 - 完成していない作業を停止した場合も、差分と再開情報を保持すること。
+- pause、通常message、版付き方向修正、cancel、明示interruptの優先・送信前照合・安全境界を定義すること。初期は実行中への自動steerを行わないこと（実装計画§4.5）。
 
 ### FR-024 予算、上限、再試行 — MUST
 
@@ -389,24 +414,24 @@ Task完了後の追加作業は新Taskへ引き渡し、親Orchestratorの継続
 - GitHub Issueの事前作成を要求せず、元要求・受入条件を登録してWaveを作れること。
 - Wave、Phaseの順序・開始/完了条件・所属Task、Task依存、要求の版、成果物、残作業、予算、完了条件を永続化すること。
 - 分解案のcoverage・Phase/Task所属・変更範囲・上限を検証すること。Phase順序とTask/成果依存を合わせて循環や後続Phaseへの不可能な待機を拒否すること。
-- Phase内のTaskを並行進行し、次Phaseへの遷移は明示した完了条件に基づくこと。親が結果から次のレビュー/fix Phaseを追加できること。
+- Phase内のTaskを並行進行し、次Phaseへの遷移はFR-038の明示条件に基づくこと。親のplanには結果に応じた次のレビュー/fix Phaseの有界templateを保存できること。
 - 方向修正では要求の版を更新し、旧版の通知・成果・承認を現行版へ無条件に流用しないこと。
 - Wave完了はTaskの自己申告数で決めず、全対象範囲の検証、必要なmerge、最終受入を照合すること。
 
 ### FR-028 メインOrchestrator — MUST
 
 - メインthreadで依頼の分解、方向修正、Task横断の例外判断、結果の説明を行えること。
-- 同じOrchestrator threadを保持し、待機中はturnを終了して実行枠を解放すること。
+- 通常は同じOrchestrator threadを保持し、待機中はturnを終了して実行枠を解放すること。履歴利用不能や文脈容量の保守ではFR-040の監査付きbinding更新を行い、論理Orchestrator sessionを保持すること。
 - 新規入力、意味のあるblocker、再計画の必要、Wave終了などの起動理由を保存すること。
 - 定型工程の成功や状態確認だけで不要なOrchestrator turnを開始しないこと。
 - Orchestratorの提案もcontrollerによる構造・権限・予算・版の検証を経て適用すること。
 
 ### FR-029 独立した検証・レビューTask — MUST
 
-- 実装・独立検証・ローカルレビューを担当するTaskとそのthread/run、対象WorkItem・候補SHAを追跡すること。
+- 独立検証・ローカルレビューのTask/thread/runと、対象artifactまたはWorkItem・候補SHAを追跡すること。汎用成果も独立したTaskで評価できること。
 - 独立した検証・レビューは親が作成する別Taskで行い、Task内で役割別sessionを自動生成しないこと。
-- Reviewerは固定候補を読み取り専用で評価し、構造化された指摘・根拠・対象SHA・判定を返すこと。
-- 指摘修正は新しい実装fix Task、テスト不具合は新しい検証fix Taskへ渡し、再レビューも新Taskで更新候補に対して行うこと。
+- Reviewerは不変のartifactまたは固定候補を読み取り専用で評価し、構造化された指摘・根拠・対象digest/SHA・判定を返すこと。
+- 成果修正は新fix Taskへ渡すこと。製品不具合は実装fix、テスト不具合は検証fixとして指示し、再レビューも新Taskで更新成果/候補に対して行うこと。
 - ローカルレビューを正式なGitHub承認へ変換しないこと。
 
 ### FR-030 永続購読と通知 — MUST
@@ -476,6 +501,29 @@ Task完了後の追加作業は新Taskへ引き渡し、親Orchestratorの継続
 - 重複・再配送・再起動でもメッセージを失わず、同じメッセージから二重turnを開始しないこと。配送ackを処理済みや回答済みと同一視しないこと。
 - pause中は未処理メッセージを保持して自動再開せず、cancel/終端Taskには保存・通知しても作業を再開しないこと。完了後の追加指示は親が新Taskへ引き渡すこと。
 - メッセージ本文だけでscope・policy・完了判定を変更せず、方向修正は別の版付き操作として適用すること。Taskからの再分割依頼は親の判断を経て処理すること。
+- 外部commentを経由した情報も出所resource・候補・要求版とともに記録すること。親へ中継しても操作権限は増えず、親の構造変更を元要求・policy・上限で再検証すること。
+
+### FR-038 Phase条件・失敗・定型反復 — MUST
+
+- 初期のPhase完了条件は`all_success`と明示した必須Task ID集合（当該Phase所属の全Task）とし、空集合、quorum、any-success、暗黙skipを拒否すること。
+- Taskの非終端状態とcompleted/failed/canceled、run失敗とTask失敗、許可する再試行、Phaseが保留される条件を定義すること（実装計画§2.1）。
+- 親が検証済みplanへ保存したreview/fix templateを、controllerが候補・指摘ID・予算に基づき新Phase/Taskへ有界展開できること。通常の成功・定型反復では親turnを追加しないこと。
+- 分類不能、仕様変更、template外の分岐は親へ戻し、起動理由と再計画回数を保存すること。任意fan-outは初期非対応として拒否すること。
+- plan採用・展開とscope/plan版・coverage・Task生成・予算予約・通知intentを同じtransactionで保存し、再実行やcrashで二重展開しないこと。
+
+### FR-039 Wave上限とprocessライフサイクル — MUST
+
+- Phase/Task総数、親turn・再計画・fix反復・Attempt数、同時Wave、壁時計期限、成果容量に設定上限を持つこと。分割・方向修正・再起動でも累積値を保持すること。
+- 待機時は履歴・購読を保存してturnを終了し、app-serverと子processの停止確認後に実行枠を解放すること。待機のためだけにprocessを常駐させないこと。
+- 上限・期限到達時は理由付き保留とし、実行中の明示中断・送信済み操作の追跡を区別すること。未知processの枠を停止確認なしに再利用しないこと。
+- 新設定の既定値と旧設定からの変換を明示すること（実装計画§5.1）。token観測の遅延を、構造・時間上限を省く理由にしないこと。
+
+### FR-040 Orchestratorの文脈と復旧 — MUST
+
+- main入力に対象Wave・scope/plan版・有効な成果参照・未処理通知を付け、複数Waveの入力境界とサイズ上限を持つこと。
+- DBと不変成果から入力snapshotを再構成でき、cache・過去会話全体を正しさの必須条件にしないこと。mainのthread当たりturn数を制限し、容量保守は安全境界での監査付きthread更新とし、Wave予算・通知適用履歴を保持すること。
+- thread履歴が欠落した場合は旧run・未知起動・通知の適用状態を照合し、旧process停止とbinding履歴を保持して新main threadへ復旧できること。未照合なら保留すること。
+- mainの復旧でTaskの1対1 session制約を緩めず、Task threadが復旧不能なら旧Taskを終端化して新Taskへ引き渡すこと。
 
 ## 7. 状態と共通の不変条件
 
@@ -529,6 +577,8 @@ WorkItemの状態はPR処理の契約として維持する。
 | NFR-009 | 購読・通知・再開の永続性を保ち、通知の重複から同じthreadの並行turnを開始しない | crash・順序・競合の障害注入 |
 | NFR-010 | 上限2以上の設定で独立Taskを並行進行し、待機中も別Taskを進める | 決定的schedulerテストとrace検査 |
 | NFR-011 | 閲覧・通知配送・再接続はモデルを呼ばずに行い、cache情報が取得不能でも正しく動作する | 呼び出し理由・cache有無の比較 |
+| NFR-012 | **SHOULD**: 単一ホスト・独立Task 2件・空き枠あり・外部I/Oをstubにした参照試験で、通知保存から再開intent予約までp95 1秒以内を目標とする。100件以上を測定し、cold start/model応答/外部待ちを別に報告する | 時刻・環境・件数・p95、未達理由と代替を記録 |
+| NFR-013 | **MUST**: controller管理app-server数を同時turn上限以下に保ち、待機時の停止を確認する。processのRSS・起動時間・終了時間を観測し、負荷試験の環境と設定を保存する | process数・子process残存・設定上限・実測値の照合 |
 
 ## 9. 保存・公開・更新する情報
 
@@ -596,22 +646,41 @@ WorkItemの状態はPR処理の契約として維持する。
 | AT-047 | 親子が質問・回答・指示を送る | 双方向に保存・通知し、返信と発行元を追跡する。別Wave/Taskへの宛先偽装を拒否する | FR-037 |
 | AT-048 | 実行中・待機中・pause/cancel後にメッセージが届く | 実行中は受信箱へ保持し、待機中は同じthreadを一度だけ再開する。pause/cancel/終端・旧版から禁止された再開や範囲更新をしない | FR-031, FR-037 |
 | AT-049 | 既存の実装・検証threadを移行する | 履歴を保持し、実行中のthreadは対応するPhase/Taskに結び付ける。終了済みthreadを新Taskへ再利用せず、親子受信箱と返信も復旧できる | FR-034, FR-036, FR-037 |
+| AT-050 | dynamic tool成立確認と未対応環境 | 実tool往復・正常終了・同一未完了threadの再開を先行確認し、未対応/認証不足は依存工程を保留。outputSchema方式へ黙って置換しない | FR-001/005, NFR-005 |
+| AT-051 | 汎用TaskだけのWaveと大きな成果 | Issue/WorkItem/PRなしで調査→独立レビュー→報告を完了し、成果参照のdigest/容量/権限/失効を検証する | FR-006/027/029 |
+| AT-052 | Phase条件とTaskの各終了結果 | all_successの必要成果だけで進み、失敗/cancel/blocked/unknownでは進まない。復旧可能Attemptと終端Taskを区別する | FR-038 |
+| AT-053 | 定型fix/reviewと親判断の境界 | 保存済みtemplateを新Task/sessionへ展開し、定型反復の親turnはゼロ。分類不能だけ理由付きで親を再開する | FR-013/028/038 |
+| AT-054 | plan採用・展開の途中でcrash | scope/plan版・Task・coverage・予算・通知が一緒に確定し、再実行で二重展開しない | FR-022/038 |
+| AT-055 | Phase/Task/再計画/Attempt/期限/容量の超過 | 同時追加・再起動・方向修正でも累積上限と期限を保持し、理由付き保留と送信済み追跡を行う | FR-024/032/039 |
+| AT-056 | 同一repoの複数Waveと同じファイルのPR | Git操作を排他し、先行mergeによる競合を新fix Taskへ返す。検証/承認を失効し、期待SHAでmergeする | FR-009/017/032/036 |
+| AT-057 | 外部commentを親messageへ中継 | 出所を追跡し、sender/宛先偽装、scope/policy緩和、子Wave生成を拒否する | FR-026/035/036/037 |
+| AT-058 | main文脈上限・履歴欠落と旧run | 入力を上限内で再構成し、旧run停止確認と通知照合後にmainを復旧する。未照合なら新turnを作らない | FR-028/031/040 |
+| AT-059 | 待機process・優先操作・通知遅延 | 待機processを停止し、pause/cancel/steer競合で禁止dispatchを行わない。上限・p95・cold startを測定する | FR-023/039, NFR-012/013 |
 
 単体・component テストで再現できる状態遷移を毎回実サービスで検証する必要はない。外部の成立条件は限定した接続テスト、通常の制御ロジックは再生可能な fixture と障害注入で確認する。
 
-## 11. 初期完成版の完了条件
+## 11. 段階別の完了条件
 
-- FR-001〜FR-037とNFR-001〜NFR-011に実装・検証の対応がある。
-- AT-001〜AT-049が、適切な単体、component、接続、受入テストで確認されている。
-- 直接依頼からWave→Phase→Taskを作り、Task 1対1の使い捨てsession、Phase内の並行実行、レビュー/fixの新Task引き渡し、未完了Taskとmainの通知再開、Wave呼び出し禁止を確認できる。
-- 親子の双方向メッセージを実行中・待機中・再起動後も配送し、既存のpause/cancel/要求版の制約を保って再開できる。
-- PR作成tool callに伴う自動購読と、コメント・リアクション・レビューの通知、再起動後の配送回復を確認できる。
-- 小さな Issue について、実装、独立検証、テスト追加、修正、Cloud review、明示承認、merge を通せる。
-- 一つの Issue を複数の部分 PR に分け、残作業を追跡して最後まで完了できる。
-- Issue 分割を再起動や一部失敗を挟んでも継続できる。
-- 通常待機中のモデル呼び出しがゼロである。
-- 対象 repository、認証主体、model / Codex version、検証 profile、保留からの復帰手順が設定されている。
-- 未成立の承認経路を、自動 merge が可能であるかのように表示しない。
+### 11.1 K: Wave kernel
+
+- S（AT-050）の実接続が成立し、Kで使用する共通要件に実装・証拠の対応がある。
+- AT-031〜038/040/041/045〜048/051〜055/057〜059のK適用部分を確認する。AT-056の共有Git排他はローカルGitで確認し、実PR経路はPで確認する。
+- Issue/PRなしの調査→独立レビュー→報告、Task 2件の並行実行、親子message、待機後の再開、crash回復、定型fix/reviewを実演する。
+- 必須criterionと成果の対応、独立評価、未解決指摘・残作業の不存在から完了する。LLMの完了主張数で判定しない。
+- 通常待機・閲覧・定型遷移による親turnはゼロ。CLIから状態と理由・使用量・成果へ辿れる。
+
+### 11.2 P: PRパイプライン接続
+
+- Kを満たし、製品変更のFR-001〜029/035とAT-001〜030/042〜044/056の全経路を確認する。
+- 小さなIssueを実装→独立検証→修正→Cloud正式承認→merge→親最終受入まで通し、部分PR・分割・失敗復旧も確認する。
+- 必要なCloud/CI/rulesがunknownなら、Pと該当する製品Waveの完了は保留する。Kの独立した合格は維持できる。
+
+### 11.3 M: 既存作業の移行と全体完成
+
+- FR-034、AT-039/049を確認し、旧CLI・thread履歴・unknown操作・予算・親最終受入を保持して移行する。
+- 実DBがなくてもfixtureでMを検証する。実DB不存在を理由に履歴保持要件を削除しない。
+- K・P・Mが揃い、FR-001〜040、NFR-001〜013、AT-001〜059の適用と証拠を説明できた時に全体完成とする。
+- 導入先のrepository・model・認証主体・profile・上限・保留復帰を設定し、未成立の承認経路を自動merge可能と表示しない。
 
 ## 12. 未確定事項と解消方法
 
@@ -624,9 +693,10 @@ WorkItemの状態はPR処理の契約として維持する。
 | OQ-005 | 採用する Codex バイナリ、モデル、履歴保存先、sandbox | app-server 接続・停止・再開の検証で決定 | 実行環境未設定 |
 | OQ-006 | 必須検証 profile と、その成功が意味する範囲 | プロダクトの受入条件と既存 CI から定義 | 必須検証を完了としない |
 | OQ-007 | GitHub の rules / CI と、採用 token の連携 | 実際の PR 作成・更新による起動と gate を検証 | PR 処理または merge を保留 |
-| OQ-008 | 予算、ログ保存期間、再照合周期、運用通知先 | 初期運用値を設定し、計測に基づき調整 | 必須設定が不足する機能を保留 |
+| OQ-008 | 導入先に適した予算・性能・運用通知先 | 実装計画§5.1の提案既定値を基点に明示設定・計測 | 未設定の機能を保留。値の妥当性を実測前に保証しない |
+| OQ-009 | 採用環境のdynamic tool往復と再開 | S / Task_0で実model・認証・隔離下の限定spike | 依存runtimeを保留。outputSchema要求配列は別契約として再計画 |
 
-OQ-001〜OQ-003が未解消でも、Wave、担当セッション、購読・通知、runner、状態管理、分割など独立した実装は進められる。ただし、厳密な承認条件を満たす end-to-end の完成とは報告しない。
+OQ-001〜OQ-003が未解消でも、Wave、担当セッション、購読・通知、runner、状態管理、分割など独立した実装は進められる。Kの合格とPの未確認を別に報告し、厳密な承認条件を満たす製品E2Eや全体完成とは報告しない。
 
 ## 13. 外部仕様の根拠
 

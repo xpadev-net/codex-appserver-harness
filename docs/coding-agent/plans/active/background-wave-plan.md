@@ -1,6 +1,7 @@
 # Plan: Background Waveの実装
 
 - status: draft
+- document_version: 0.4
 - generated: 2026-10-22
 - last_updated: 2026-10-22
 - work_type: mixed
@@ -9,21 +10,21 @@
 
 大きな依頼をWave→Phase→Taskへ分解し、各Taskに使い捨てsessionを割り当てる。Taskは親と共通runtimeを使ってWave呼び出しだけを禁止し、実行中は親子メッセージと通知で再開する。完了後のfix・再レビューは新Task/sessionへ引き渡す。
 本計画を含むPRの範囲は要件・差分・設計・計画の改訂までとする。
-Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公開を実装着手の承認とはみなさない。
+Task_0〜13はpending。本PRは文書改訂と公開の依頼に基づく。runtime実装・実接続試験は後続Taskとして管理する。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
 
 ## Definition of Done
 
-- [要件定義書](../../../../requirements.md)のFR-001〜037、NFR-001〜011に実装・証拠の対応がある。
-- AT-001〜030の品質・外部操作を回帰検証する。AT-009は新fix Taskへの引き渡しへ改訂し、AT-031〜049でPhase/Task階層、使い捨てsession、直接依頼、並行性、通知再開、自動購読、移行を確認する。
-- 直接依頼からWaveとPhase群を作り、Phase内の独立Task二つを並行実行して、レビューPhase・fix Phaseの新Task・PR tool・外部通知からの再開を実演できる。
-- Task 1対1の使い捨てsessionと実行中だけのthread継続、Wave呼び出し禁止、親子の質問・回答・指示、実行中/待機中/crash後の受信を確認する。完了Taskを再利用せず、通常待機・閲覧・通知配送だけのLLM呼び出しがゼロである。
-- 未確認の外部能力はunknownのまま表示し、正式承認・mergeを成立したことにしない。
-- 全Taskの必須検証と独立レビューが揃い、残る運用上の制約をREADMEと受入検証記録に反映する。
+- S: Task_0で無害なdynamic toolの実往復と同一未完了threadの再開を確認し、未成立なら依存runtimeへ進まない。
+- K: Task_1〜7/9〜10でIssue/WorkItem/PRを持たないWaveを新DBで実行し、汎用成果・独立レビュー・有界fix反復・Task 2件の並行性・通知/親子message・CLI・復旧を確認する。
+- P: Task_8/11/13で既存PR工程を接続し、正式承認・merge・親最終受入・自動購読・base競合を確認する。Cloud未成立はPと該当製品Waveをblockedとし、Kの合格と分ける。
+- M: Task_12で既存ID/thread/予算/unknown操作/旧CLIを保持する移行を確認する。Kは別rootの空DBで検証し、M前に旧作業を新runtimeへ切り替えない。
+- 全体完成は[要件§11](../../../../requirements.md#11-段階別の完了条件)のK/P/M全部、FR-001〜040、NFR-001〜013、AT-001〜059の適用と証拠が揃った時だけとする。
+- 未確認能力・未実行・既知不具合を受入表へ記録し、文書の更新やfake成功をruntime完成の証拠にしない。
 
 ## Planner-added requirements
 
 - ローカルUnix domain socketによるwake hintとcursor付き状態streamを設ける。理由: CLI・Webhook・runnerが別processであり、in-memory通知だけでは要求されたイベント再開を接続できないため。分散brokerは加えない。
-- versioned migrationと停止・backup・復旧手順を設ける。理由: 既存WorkItemと会話・予算・送信済み操作を保持してWaveへ移行するため。利用中DBの不存在は確認できない。
+- schema基盤とlegacy移行を分ける。Task_2でversion検査/新DBを、Task_12で旧作業・停止/backup/復旧を扱う。既存DBの不存在は仮定せず、Kをlegacy移行完了へ依存させない。
 - 同じバイナリの実験的dynamic tool schemaを固定し、許可済みtool requestを処理する。理由: モデルからの実tool callを実現し、GitHub資格情報をworkerへ渡さず既存controllerで実行するため。
 - 同一thread/worktreeと共有Git操作の排他、通知とrunの関連付けを原子的に保存する。理由: 並行Taskと再配送が通常動作になり、二重起動・競合書き込みを防ぐ必要があるため。
 - 最初の操作面をローカルCLIと構造化tool契約に限定する。理由: 本リポジトリにhost UIがなく、外部チャットへの自動入力機能を仮定せずWaveの実行・観測を完成させるため。
@@ -45,7 +46,7 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
 ## Compatibility stance
 
 - surface: WorkItem/records/outboxの永続形式、version 1 trusted config、既存CLI、Codex wire schema。
-- stance: migrate
+- stance: staged migration（Kは新DB、Mで既存作業移行）
 - justification: 永続consumerは`internal/storage/store.go`、`internal/service/cli.go`、`internal/worker/worker.go`とREADMEにあるCLI契約。DBはrepository外で保持されるため、探索で利用中DBを否定できない。既存ID・系譜・証拠・unknown操作は保持し、既存role threadは履歴として保持し、実行中のものだけを移行Phase/Taskへ関連付ける。終了済みthreadは新Taskで再利用しない。旧CLIのWorkItem操作は維持する。追加tool schemaは同一Codex版の実験的生成物へ明示移行し、旧schemaを静かに再解釈しない。
 - 外部チャットhostとの接続契約は未定義であり、本計画は外部製品がこのmain threadを自動表示・再開できると約束しない。
 
@@ -64,9 +65,9 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
 
 ## Open Questions (max 3)
 
-- Q1: 採用model・認証・隔離環境でdynamic tool往復と同じthread再開が成立するか。schemaの存在は確認済み、実推論は未確認。Task_10で限定検証し、不成立なら該当能力をblockedとして契約を再計画する。
-- Q2: 導入先GitHub主体でreaction等の購読・差分取得がどこまで可能か。Task_8でadapter契約と不足範囲を実装し、Task_10で権限・代表経路を観測する。通知非対応は通常コードの差分照合で補い、取得不能は明示する。
-- Q3: Cloud正式APPROVED・候補SHA対応・非bypass rulesという既存接続条件が成立するか。既存capability reportを維持し、未成立なら自動mergeとWave全体の完了を保留する。Wave基盤の実装は進められる。
+- Q1: 実model/認証/隔離下のdynamic tool往復と同一未完了thread再開は未確認。Task_0で先行確認し、未成立なら依存runtimeをblockedとする。outputSchema要求配列への自動fallbackは採らず、契約版とATを再計画する。
+- Q2: 導入先GitHub主体でreaction等の購読・差分取得がどこまで可能か。Task_8でadapter契約と不足範囲を実装し、Task_13で権限・代表経路を観測する。通知非対応は通常コードの差分照合で補い、取得不能は明示する。
+- Q3: Cloud正式APPROVED・候補SHA対応・非bypass rulesという既存接続条件が成立するか。既存capability reportを維持し、未成立ならP・製品Wave・全体完成を保留する。Sが成立すればKの実装・独立受入は進められる。
 
 ## Assumptions
 
@@ -78,8 +79,27 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
 
 ## Tasks
 
-全Taskのstatusはpending。各Taskを担当するWorkerは指定owns内で作業し、共有Git変更はOrchestratorが行う。
+全Taskのstatusはpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。検証コマンドは後続実装の完了条件であり、この文書PRで存在しないpackageの試験を実行したとは扱わない。
 下記の`rtk`はこのrepositoryでのコマンド実行prefixである。
+
+### Task_0: 先行成立確認（S）
+
+- type: test
+- owns:
+  - internal/contract/session_live_test.go
+  - docs/connection-contracts.md
+  - evidence/background-wave/spike/**
+- depends_on: []
+- description: 本体runtimeから分離した小さなopt-in probeで実model・専用認証・隔離launcherのdynamic tool一往復と同一未完了threadの再開を確認する。GitHub書き込みは使わない。
+- acceptance:
+  - 採用バイナリ/生成schemaのopt-in、無害なtoolのcall/thread/turn、応答、正常終了、新processでのthread再開を観測する。cache hitは成立条件にしない。
+  - 未対応、認証不足、unknown-start、未完了requestを成功にしない。未成立ならTask_1以降の依存runtimeを保留し、必要操作を記録する。
+  - outputSchema要求配列は意味の異なる代案と記録し、自動fallbackとして有効にしない。
+- validation:
+  - kind: manual
+    required: true
+    owner: worker
+    detail: "AT-050をopt-in実接続で確認し、model/主体/launcher/版、request-responseの識別子、未skip件数を秘匿値なしで保存する。schema存在だけを実往復成功としない。"
 
 ### Task_1: Sessionとtoolの契約・driver
 
@@ -90,13 +110,17 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - internal/codex/**
   - internal/worker/**
   - internal/contract/json.go
-- depends_on: []
+  - internal/contract/session_tools.go
+  - internal/contract/session_tools_test.go
+- depends_on: [Task_0]
 - description: 採用版のexperimental tool schemaを固定し、親とTaskに共通のsession driverを用意する。Task 1対1の使い捨てthreadとWave呼び出し禁止、分解案・通知入力・親子メッセージ・tool操作・レビュー出力の版付き契約を定める。
 - acceptance:
   - 実験的APIの明示opt-inと許可済みserver requestのhandlerを持ち、未対応承認/入力要求は既存どおり保留する。
   - RPC応答・通知・tool requestを取りこぼさず、tool handlerの応答待ちがreaderをdeadlockさせない。
   - Task 1対1 sessionを新規作成し、未完了Taskの待機・復旧でだけ同じthreadを継続する。完了後の再開を拒否し、次Taskには新threadと構造化引き渡しを使う。unknown turn照合とstrictな構造化契約を維持する。
-  - Taskのtool公開からWave呼び出しを除き、親と同じruntime・共通toolを使えることをdriver契約として確認する。
+  - K用のWave/状態/待機/成果参照/messageのgateway契約・公開allowlist・認可portを定義し、TaskのWave呼び出しを拒否する。永続bindingを読む認可とhandler登録はTask_3で実装し、Pの外部handlerはTask_8で追加する。Task_2の型へ依存しないDTO/portにする。
+  - FR-038のTask終端/Attemptと§2.2の汎用成果schemaを固定し、WorkItem参照は0件以上にする。動的fan-out/未対応Phase条件を拒否する。
+  - 主入力64 KiB・inline16 KiBの上限、同一thread継続とmainの監査付き再bindingをdriver境界へ反映する。
 - validation:
   - kind: command
     required: true
@@ -107,7 +131,7 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
     owner: reviewer
     detail: "生成manifestとschema、toolのallowlist、既存の入力要求・権限境界、実観測とfake証拠の区別を確認する。"
 
-### Task_2: Wave/Phase/Taskと既存DB・設定の移行
+### Task_2: Wave/Phase/Task・成果と新DBのschema基盤
 
 - type: impl
 - owns:
@@ -118,24 +142,24 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - internal/storage/migrations.go
   - internal/storage/migrations_test.go
   - internal/storage/store.go
-  - internal/storage/testdata/**
-  - internal/service/config_migration.go
-  - internal/service/config_migration_test.go
-- depends_on: []
-- description: 直接依頼、Wave→Phase→Task所属、Phase順序・進行条件、Task依存、coverageと既存WorkItemのbindingを保存する。versioned migration、version 1設定の変換、既存系譜とIDを保持する移行を実装する。
+  - internal/storage/artifacts.go
+  - internal/storage/artifacts_test.go
+- depends_on: [Task_0]
+- description: K用の新DBへWave/Phase/Task、scope/plan版、coverage、任意WorkItem binding、汎用Artifactを保存する。version検査とmigration登録基盤を作り、v1作業の変換本体はTask_12へ分ける。
 - acceptance:
-  - Issueなしの元要求、Wave→Phase→Task、Task 1対1 session、WorkItemとの成果参照を保持する。Taskの一意なPhase所属、Phase進行条件、coverage欠落・旧版bindingを検証する。Phase順序とTask/成果依存を合わせて循環・後続Phaseへの不可能な待機を拒否する。レビュー用の候補依存と、製品後続のmerge・最終受入依存を区別する。
-  - v1 fixtureのsplit/continuation/repair、thread履歴、outbox unknown、予算、親最終受入を保持する。実行中threadだけを移行Phase/Taskへbindingし、終了済みthreadは後続へ再利用しない。再実行が二重登録を生まない。
-  - migration前の整合backup、途中失敗の復旧、未対応versionの拒否、config変換とpolicy snapshot保持を提供する。後続schemaは各所有fileから登録できる共通migration登録関数を提供し、集約fileへの追記を不要にする。
+  - WorkItemなしの直接依頼と不変Artifactを保存し、digest/サイズ/出所/権限/保持を検証する。製品Candidateの契約を汎用成果で置換しない。
+  - all_successの必須集合、Task終端/復旧、drain_and_block、有界fix_review templateを型で表し、後続Phase待ち/循環/coverage欠落/任意fan-outを拒否する。
+  - plan採用/展開key、版・Task・coverage・予算・通知のtransaction境界を提供する。crash後の再適用で二重生成しない。
+  - 空の新DBだけを初期化し、v1/未知versionの既存DBを暗黙変換しない。Task_12が使うmigration登録関数を提供し、version/key重複を拒否する。
 - validation:
   - kind: command
     required: true
     owner: worker
-    detail: "rtk go test ./internal/domain ./internal/storage ./internal/service; AT-031/039/045/049、移行再実行・中途失敗・旧設定fixtureを検証する。"
+    detail: "rtk go test ./internal/domain ./internal/storage ./internal/service; AT-031/045/051/052/054/055、成果の参照・容量・権限・失効と新DB/version拒否を検証する。"
   - kind: review
     required: true
     owner: reviewer
-    detail: "実DBがないとの仮定を置かず、既存ID/系譜・unknown操作・証拠・予算とbackupの対応を確認する。"
+    detail: "K用DBが既存状態を上書きしないこと、Task_12へ渡す版・登録契約と不変成果/coverageを確認する。"
 
 ### Task_3: 永続購読・親子受信箱・再開intent
 
@@ -149,13 +173,17 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - internal/storage/messages_test.go
   - internal/service/messages.go
   - internal/service/messages_test.go
+  - internal/service/kernel_tools.go
+  - internal/service/kernel_tools_test.go
 - depends_on: [Task_1, Task_2]
-- description: 保存済みイベントとterminal stateから購読を成立させ、通知ID集合・要求の版・再開理由をrunへ結び付ける。親子メッセージの保存・受信箱・返信参照・通知を同じ基盤へ載せる。schema適用は所有範囲の`notifications.go`/`messages.go`からTask_2の共通登録関数へ登録する。Task_4の`reservations.go`とTask_8の`resource_bindings.go`も同じ登録契約を使い、migration version/keyの重複は起動時に拒否する。
+- description: 保存済みイベントとterminal stateから購読を成立させ、通知ID集合・要求の版・再開理由をrunへ結び付ける。親子メッセージの保存・受信箱・返信参照・通知を同じ基盤へ載せる。schema適用は所有範囲の`notifications.go`/`messages.go`からTask_2の共通登録関数へ登録する。Task_4の`reservations.go`と後続Task_8の`resource_bindings.go`も同じ登録契約を使い、migration version/keyの重複は起動時に拒否する。
 - acceptance:
   - subscribe前/同時/後の完了から通知を失わず、重複・逆順を同じ論理イベントへ関連付ける。
   - 通知intentを状態更新と同じtransactionで保存し、配送ack・run関連付け・結果適用を分ける。
   - クラッシュ後は未完了Taskの既存wake/runへ関連付け、完了/pause/cancel/方向修正後の旧通知で新turnを起こさない。
   - 親子双方の受信購読、message ID・sender/recipient・返信先を保存する。実行中は受信箱へ保持し、待機中は同じthreadを再開する。配送・run関連付け・処理/返信を分け、pause/cancel/終端や再配送で禁止された再開をしない。
+  - Task_1のportへ永続bindingによるkernel tool認可・登録を実装する。Wave操作の適用はTask_6、枠/予算はTask_4のportへ接続でき、KがTask_8のPR handlerへ依存しない。
+  - Artifact参照と出所、scope/plan bindingを通知入力へ付ける。親への中継で権限を増やさず、別Wave/兄弟宛先を拒否する。
 - validation:
   - kind: command
     required: true
@@ -183,11 +211,13 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - 実行中Phase内の独立A/Bを同時選択し、次Phaseは保存した完了条件まで開始しない。失敗/cancelを成功にしない。Task依存・候補・要求版も照合し、候補が必要なレビューPhaseとmergeが必要な製品後続を区別する。
   - turn/runner/PR上限、同一thread/worktree/共有Git排他を原子的に予約し、unknown実行の枠を停止確認前に再利用しない。
   - Wave/Taskの累積使用量をrun単位で一度だけ計上し、分割・修正・再起動でも上限を保つ。旧設定は直列値へ変換できる。
+  - 実装計画§5.1のPhase/Task総数・親turn/再計画・Attempt・fix反復・壁時計期限を原子的に計数する。token観測が遅延/不明でも構造・時間上限を適用する。
+  - 同一repoの複数Waveの共有Git操作を排他し、process停止確認まで予約を解放しない。RSS/起動/停止所要時間を観測可能にする。
 - validation:
   - kind: command
     required: true
     owner: worker
-    detail: "rtk go test -race ./internal/service ./internal/storage ./internal/workspace; AT-032/040とAT-026/028の枠・予算・排他をfake clock/processで検証する。"
+    detail: "rtk go test -race ./internal/service ./internal/storage ./internal/workspace; AT-032/040/055/056/059とAT-026/028の枠・予算・排他をfake clock/processで検証する。"
   - kind: review
     required: true
     owner: reviewer
@@ -213,6 +243,8 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - DB/file保存後のhint消失、daemon停止、再接続でも記録から回復する。モデル起動を伴わない状態stream境界を提供する。
   - 信頼された`_runner`ラッパーが結果保存後にjob IDだけのhintを送り、controllerが保存intent・結果で検証する。検証コマンドの子process/workerへsocket・通知設定・GitHub資格情報を公開しない。
   - 既存のunknown operation照合、送信直前gate、runner停止確認を維持する。親子を共通runtime設定で起動し、Taskであることだけを理由に共通toolやnative機能を一律無効化しない。
+  - 待機turnの正常終了後にapp-server/子processを停止し、再開時に永続threadへ接続する。process数は同時turn上限以下とし、unknown起動は照合まで枠を保持する。
+  - 通知100件以上の参照負荷試験で通知保存→予約のp95を測定し、cold start/model待ちを分ける。pause/cancel/方向修正/明示interruptの優先表を実装する。
 - validation:
   - kind: command
     required: true
@@ -236,11 +268,13 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - 元要求・Phase群・Task coverage・依存・要求の版を保存し、承認済みpolicyを緩める提案を拒否する。結果に応じてfix・再レビューPhaseと新Taskを追加し、過去Task/sessionを再利用しない。
   - メインthreadを保持し、意味のある通知batch/新規入力だけでrunを開始する。同一mainの複数Waveを直列化する。Taskからの質問・blocker・再分割依頼を受け、親の指示・回答を同じ親子間へ返す。
   - 待機条件を保存してturnを終了し、方向修正の旧通知・成果を失効させ、結果と残作業を説明できる。
+  - 保存済みfix_review templateの定型展開ではmainを起動せず、分類不能・仕様変更だけ理由付き再計画へ戻す。親turn/再計画数の上限を共有ledgerで計上する。
+  - 64 KiB以内のWave境界付き入力snapshotをDB/成果から再構成する。main一thread 8 turnの保守更新と履歴利用不能時の復旧では、旧run/通知/停止を照合し、論理session/予算を保ってbindingを監査付き更新する。
 - validation:
   - kind: command
     required: true
     owner: worker
-    detail: "rtk go test ./internal/service; AT-031/034/037/038/047/048と、定型成功・閲覧でmain起動ゼロをfake driverで確認する。"
+    detail: "rtk go test ./internal/service; AT-031/034/037/038/047/048/053/054/057/058と、定型成功・閲覧でmain起動ゼロをfake driverで確認する。"
   - kind: review
     required: true
     owner: reviewer
@@ -256,11 +290,12 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - internal/domain/workflow.go
   - internal/domain/workflow_test.go
 - depends_on: [Task_5]
-- description: 親が独立した検証・レビュー・fixのPhase/Taskを作る工程を定義し、固定候補の出力を検証する。各Taskは共通driverで新sessionを開始する。指摘の引き渡しは元要求・前Taskの構造化成果・候補・証拠を用い、完了済みsessionを再利用しない。
+- description: 親のplan/templateから独立した検証・レビュー・fixのPhase/Taskを作り、汎用Artifactと固定候補の出力を検証する。各Taskは共通driverで新sessionを開始する。指摘の引き渡しは元要求・前Taskの構造化成果・候補・証拠を用い、完了済みsessionを再利用しない。
 - acceptance:
-  - 元要求・契約・candidate SHA・証拠に結び付いた構造化指摘を別Taskの成果として保存し、読み取り専用scopeに反する変更を拒否する。レビューTaskは候補準備後、merge前に開始できる。
+  - 元要求・契約・Artifact digestまたはcandidate SHA・証拠に結び付いた構造化指摘を別Taskの成果として保存し、読み取り専用scopeに反する変更を拒否する。レビューTaskは候補準備後、merge前に開始できる。
   - 製品不具合は新しい実装fix Task、テスト不具合は新しい検証fix Taskへ渡す。更新候補の必須gateを再評価し、新しいレビューTaskへ引き渡す。前Taskへの循環依存や完了済みthreadの再開を作らない。
-  - ローカルreview成功をGitHub承認へ変換せず、Phaseの進行条件と個別Taskの結果を分ける。
+  - Kでは汎用成果の独立評価とtemplate内のfix/reviewを、Pでは製品検証/修正を扱う。clean/findings/inconclusiveをschemaで分ける。
+  - ローカルreview成功をGitHub承認へ変換せず、Phaseの実行完了と品質gateを分ける。部分的no_actionで未評価指摘を解決しない（#44）。
 - validation:
   - kind: command
     required: true
@@ -284,11 +319,11 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - internal/review/**
   - internal/storage/resource_bindings.go
   - internal/storage/resource_bindings_test.go
-- depends_on: [Task_5]
+- depends_on: [Task_10]
 - description: 既存の公開・review操作を共通gatewayへ接続し、tool operationと購読intent、外部資源binding、コメント/reaction/review等のイベント取り込みを実装する。
 - acceptance:
   - session/turn/callの識別子を検証し、外部送信前にoperationと購読intentを保存する。候補・scope・権限・pause/cancelを送信直前にも照合する。
-  - 親子message toolのsender・宛先・reply_toをbindingから認可する。TaskからのWave呼び出しを非公開tool名・別名・中継でも拒否し、scope内の共通PR/message toolは使える。
+  - Task_1/3で実装したkernel gatewayのsender/宛先/返信・Wave呼び出し認可を再利用し、外部comment由来の親messageでもscope/policy緩和を拒否する。Pで別の権限経路を作らない。
   - PR作成の成功/応答不明をmarkerで照合し、自動購読へ関連付け、登録境界のraw deliveryと最新資源状態から差分を回収する。
   - コメント/inline/reaction/review/取消/CI/close等を識別・重複排除し、非通知の更新は差分照合で補う。取得不能な履歴と権限不足は明示する。
   - 関連Taskへ通知を集約し、同じtool再送から重複PR・購読・turnを作らず、外部テキストやreactionから権限・承認を生成しない。
@@ -302,7 +337,7 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
     owner: reviewer
     detail: "副作用と購読のtransaction境界、同一call/再接続の照合、署名・権限、正式承認維持、mainへの不要wake抑制を確認する。"
 
-### Task_9: Wave操作・観測とruntime統合
+### Task_9: Wave kernelの操作・観測とruntime統合（K）
 
 - type: impl
 - owns:
@@ -314,24 +349,24 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - internal/service/config.go
   - internal/service/wave_integration_test.go
   - README.md
-- depends_on: [Task_6, Task_7, Task_8]
-- description: 各境界をruntimeとCLIへ結線し、Wave作成・方向修正・操作・watch、既存Issue pool/WorkItem CLIとの対応を提供する。
+- depends_on: [Task_6, Task_7]
+- description: kernel境界を新DBのruntime/CLIへ結線する。Issue pool/PR接続はTask_11、既存DB/config移行はTask_12へ分ける。
 - acceptance:
-  - direct依頼とIssue poolが同じWave実行へ入り、main tools、Reviewer、GitHub gatewayが実際のdispatchに接続される。
+  - Issue/WorkItem/PRを要求しない直接依頼から、main tools、Artifact、独立Reviewer、template、schedulerが実際のdispatchに接続される。
   - wave create/list/inspect/pause/resume/cancel/steer/watchを提供し、cursor再接続でWave→Phase→Task→session/run、Phase条件、待機理由・成果・既知使用量・親子メッセージと返信を辿れる。
-  - Wave/Task操作と既存WorkItem操作の優先関係を守り、複数Task/PRのbase更新・失効・部分PR・親最終受入を維持する。
-  - READMEが実装済みコマンド・設定version・上限と移行方法を説明し、閲覧でモデルを起動しない。
+  - Wave/Taskのpause/cancel/方向修正/明示interruptを優先表どおりに扱い、出所・予算・成果失効・main復旧を表示する。
+  - READMEがKで実装済みのコマンド・設定version・上限とP/Mの未接続範囲を説明し、閲覧でモデルを起動しない。
 - validation:
   - kind: command
     required: true
     owner: worker
-    detail: "rtk go test -race ./internal/service; AT-023〜030/037/039/040/041/045〜049とdirect→並行Task→local review→tool→通知のfake統合を確認する。"
+    detail: "rtk go test -race ./internal/service; K適用ATとAT-051〜055/057〜059、direct→並行汎用Task→review/fix→通知のfake統合を確認する。"
   - kind: e2e
     required: true
     owner: reviewer
     detail: "ローカルCLIを実行して直接依頼、一覧、watch切断/再接続、方向修正、pause/cancelを確認する。fake外部adapter、実SQLite/temp Gitを使用し、command/outputを証拠とする。Web UIは対象外。"
 
-### Task_10: 総合受入・限定実接続と証拠
+### Task_10: Wave kernelの受入と実演（K）
 
 - type: test
 - owns:
@@ -342,12 +377,12 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - docs/background-wave-acceptance.md
   - evidence/background-wave/**
 - depends_on: [Task_9]
-- description: AT対応を完結させ、実Codexのtool往復・thread再開と、検証用PRの自動購読を限定観測する。runtime不具合は担当Taskへ返し、試験側で回避しない。
+- description: Task_0の成立証拠とKのATを照合し、新DBで汎用Waveを実演してKを独立判定する。PR/Cloud接続とMの総合証拠はTask_13へ分ける。
 - acceptance:
-  - AT-001〜049の実装/試験/証拠対応を作り、障害注入・migration・並行性の必須チェックを実行する。
-  - 採用model/認証/隔離下でmain tool呼出し、Wave→Phase→Task、Task 1対1の使い捨てthread、レビューPhase→新fix Task→新レビューTaskを観測する。未完了Taskのturn終了→同一thread再開、親子の質問・回答、TaskからのWave呼び出し拒否も確認する。
-  - 検証用repositoryのPR作成toolから購読し、コメント/reaction/review等の代表更新、再接続、重複通知を観測する。送信先・操作主体・検証の許可範囲を証拠に残す。
-  - Cloud正式承認等が未成立なら該当ATとWave完了をblockedとして記録し、fakeやローカルreviewで代替しない。秘密値・private pathを公開証拠へ含めない。
+  - 要件§11.1のK適用AT、任意WorkItem、Artifact参照/GC、Task 2件並行、template反復、親子message、process停止、main復旧を確認する。
+  - 実modelで直接依頼→汎用Task→独立review→新fix/review Task→報告を観測する。通常待機・定型反復・閲覧のmain起動は0である。
+  - Task_0のtool往復を初めてここで確認する順序に戻さず、未確認能力・未実行とK/P/Mの受入状態を別に記録する。
+  - CloudがunknownでもKの汎用Waveを完了でき、PRを必要とする製品Waveのgateは省略できない。
 - validation:
   - kind: command
     required: true
@@ -360,35 +395,133 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
   - kind: review
     required: true
     owner: reviewer
-    detail: "総合受入の証拠とAT追跡表を独立確認し、unknown能力、公開範囲、未解決blockerを確認する。"
+    detail: "Kの証拠とAT適用表を確認し、unknown能力、公開範囲、未解決blockerを確認する。"
+
+### Task_11: PRパイプラインとWaveの統合（P）
+
+- type: impl
+- owns:
+  - internal/service/cli.go
+  - internal/service/service.go
+  - internal/service/agents.go
+  - internal/service/reviews.go
+  - internal/service/validation.go
+  - internal/service/final.go
+  - internal/service/splits.go
+  - internal/service/wave_integration_test.go
+  - README.md
+- depends_on: [Task_8, Task_9]
+- description: kernelと既存Issue/WorkItem/Candidate/PR工程を接続する。Task_9と同じfileは依存順で引き継ぐ。
+- acceptance:
+  - Issue poolとdirect製品依頼が同じWaveへ入り、必要な検証/正式承認を保って公開・購読・mergeへ進む。
+  - 先行mergeによるbase更新を通常mergeし、競合は新fix Task/sessionへ渡す。複数Wave・同じファイルのPR・部分PR・分割でも失効と予算を維持する。
+  - 全範囲merge後の要求/policy変更も、古い履歴を保持する版付き後続作業として復旧できる（#45）。
+  - K/Pの完了とWorkItem操作優先を区別し、Cloud unknownを製品Waveの合格にしない。
+- validation:
+  - kind: command
+    required: true
+    owner: worker
+    detail: "rtk go test -race ./internal/service ./internal/workspace; AT-001〜030/042〜044/056、#44/#45の回帰、同一repo複数Waveとbase競合を確認する。"
+
+### Task_12: 既存DB/configとCLIの移行（M）
+
+- type: impl
+- owns:
+  - internal/storage/migrations.go
+  - internal/storage/migrations_test.go
+  - internal/storage/store.go
+  - internal/storage/testdata/**
+  - internal/service/config_migration.go
+  - internal/service/config_migration_test.go
+  - docs/connection-contracts.md
+  - README.md
+- depends_on: [Task_2, Task_11]
+- description: v1作業を新Waveへ変換し、未知process照合・整合backup・旧CLIを含む切替を提供する。実DBの不存在は仮定しない。
+- acceptance:
+  - split/continuation/repair、ID、thread履歴、unknown outbox、予算、親最終受入を保持する。実行中threadだけを移行Taskへbindingし、終了済みthreadは再利用しない。
+  - 途中失敗・再実行でも二重登録/再送せず、未知version拒否・backup復旧・trusted config変換でpolicy snapshotを保持する。
+  - 移行前に対象DBの有無/所有と未知処理を確認し、新規導入の実移行not_applicableとfixture合格を分ける。旧DBの削除や無断fresh-startを行わない。
+- validation:
+  - kind: command
+    required: true
+    owner: worker
+    detail: "rtk go test ./internal/storage ./internal/service; AT-039/049、v1 fixture・中途失敗・再実行・旧CLI/configと未知操作を検証する。"
+
+### Task_13: PR/移行の総合受入と限定実接続（P/M）
+
+- type: test
+- owns:
+  - internal/service/background_wave_acceptance_test.go
+  - internal/service/connection_live_test.go
+  - docs/acceptance.md
+  - docs/connection-contracts.md
+  - docs/background-wave-acceptance.md
+  - evidence/background-wave/**
+- depends_on: [Task_10, Task_11, Task_12]
+- description: P/Mを含むFR/NFR/ATの追跡を完成させ、PR自動購読と既存接続を限定観測する。Kの合格とPのunknownを混ぜない。
+- acceptance:
+  - FR-001〜040、NFR-001〜013、AT-001〜059の段階/実装/試験/証拠/未達を記録する。
+  - 検証用PRのtool作成→comment/reaction/review→再接続・重複通知を実観測し、正式承認・SHA・CI・非bypass rulesを#20の契約で確認する。
+  - Cloud未成立時はP/製品Wave/全体完成をblockedとし、fakeやローカルreviewで代用しない。秘密値/private pathを公開証拠へ含めない。
+- validation:
+  - kind: command
+    required: true
+    owner: worker
+    detail: "rtk go test ./...; rtk go vet ./...; rtk go test -race ./internal/control ./internal/storage ./internal/service ./internal/codex ./internal/worker ./internal/localreview ./internal/runner ./internal/workspace; rtk go build -o /tmp/harness-wave ./cmd/harness。"
+  - kind: manual
+    required: true
+    owner: worker
+    detail: "opt-in実接続の対象model・主体・repository・候補・未skip件数を記録し、資格情報や権限不足は必要操作付きblockedとする。"
 
 ## Task Waves (explicit parallel dispatch sets)
 
 ここでのTask Wavesは本計画を実装する担当のdispatch集合を指す。プロダクトのWave→Phase→Taskとは別の開発手順である。
 同じ集合のTaskは依存が満たされownsが分かれるため並行dispatchし、集合間は順次進める。
 
-- Wave 1 (parallel): [Task_1, Task_2]
-- Wave 2 (parallel): [Task_3, Task_4]
-- Wave 3 (parallel): [Task_5]
-- Wave 4 (parallel): [Task_6, Task_7, Task_8]
-- Wave 5 (parallel): [Task_9]
-- Wave 6 (parallel): [Task_10]
+- S: [Task_0]
+- K / Wave 1 (parallel): [Task_1, Task_2]
+- K / Wave 2 (parallel): [Task_3, Task_4]
+- K / Wave 3: [Task_5]
+- K / Wave 4 (parallel): [Task_6, Task_7]
+- K / Wave 5: [Task_9]
+- K / Wave 6: [Task_10] — Kの独立受入
+- P / Wave 7: [Task_8]
+- P / Wave 8: [Task_11]
+- M / Wave 9: [Task_12]
+- P/M / Wave 10: [Task_13] — 全体受入
+
+### 起票済みTaskと分割後の対応
+
+| Issue | v0.4の実装単位 |
+| --- | --- |
+| #34 | Task_1。先行成立確認は#46 / Task_0 |
+| #35 | Task_2のschema基盤とTask_12の既存作業移行 |
+| #36 / #37 / #38 / #39 / #40 | Task_3 / Task_4 / Task_5 / Task_6 / Task_7 |
+| #41 | Task_8のP接続。kernelの契約/認可/message gatewayはTask_1/3へ前倒し |
+| #42 | Task_9のK操作とTask_11のP統合 |
+| #43 | Task_10のK受入とTask_13のP/M総合受入 |
+| #44 / #45 | Task_7/11で修正しTask_13で回帰。文書変更では解消しない |
+| #46〜#50 | Task_0、FR-038、汎用Artifact、上限、main復旧の設計追跡 |
 
 ## 検証の追跡
 
 | 受入条件 | 主担当 | 重点 |
 | --- | --- | --- |
-| AT-001〜030 | Task_1〜9の該当領域、Task_10で統合 | 既存固定候補・正式承認・復旧・親最終受入を回帰させない |
+| AT-001〜030 | Task_1〜8/11の該当領域、Task_13で統合 | 既存固定候補・正式承認・復旧・親最終受入を回帰させない |
 | AT-031 | Task_2/6 | 直接依頼、Phase/Task所属、coverage、依存 |
 | AT-032/033 | Task_4/5/7 | 独立Taskの並行性とレビュー待機 |
 | AT-034/035/038 | Task_3/5/6 | 購読競合、crash、通知と入力 |
 | AT-036 | Task_1/7 | 新しいfix・再レビューTask/sessionへの引き渡し |
 | AT-037/040 | Task_3/4/9 | 版・操作・予算・排他 |
-| AT-039 | Task_2/9 | DB/config/既存CLI移行 |
+| AT-039 | Task_12 | DB/config/既存CLI移行 |
 | AT-041 | Task_5/9 | 状態streamと再接続 |
-| AT-042〜044 | Task_1/3/8、Task_10実接続 | tool自動購読、資源binding、外部更新 |
+| AT-042〜044 | Task_1/3/8、Task_13実接続 | tool自動購読、資源binding、外部更新 |
 | AT-045/046 | Task_1/2/4/6/7/8/9 | Phase進行、Task 1対1の使い捨てsession、Wave呼び出し禁止、新Taskへの引き渡し |
-| AT-047/048/049 | Task_2/3/6/8/9、Task_10実接続 | 親子message、sender/宛先認可、受信箱・返信・再開・移行 |
+| AT-047/048/049 | Task_1/3/6/9/12、Task_10/13実接続 | 親子message、sender/宛先認可、受信箱・返信・再開・移行 |
+| AT-050 | Task_0 | dynamic toolの先行成立・未対応時の保留 |
+| AT-051/052/053/054 | Task_1/2/6/7/10 | 汎用成果、Phase/Task意味論、有界反復、原子的展開 |
+| AT-055/056/057 | Task_3/4/6/8/11/13 | 構造・時間上限、複数WaveのPR競合、出所/権限 |
+| AT-058/059 | Task_1/5/6/9/10 | main文脈・復旧、process上限と優先操作、通知p95 |
 
 ## Rollback / Safety
 
@@ -399,12 +532,16 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
 
 ## Progress Log
 
+- 2026-10-22（v0.4）: 共有文書レビューと#44〜#50を照合し、S/K/P/M、汎用成果、Phase条件/Task終端/有界template、累積上限、process停止、main復旧、優先操作を具体化。Task_0/11/12/13を追加し、KとPR接続/移行の依存を分離した。以下のAPPROVED/validator記録はv0.3以前の履歴であり、今回の改訂の承認・試験結果へ流用しない。
+
 - 2026-10-22: 現行要件・実装・接続証拠を調査し、差分分析・要件改訂・設計・Task分解を作成。runtimeのTask_1〜10はpending。計画書PR作成の依頼に基づく作業であり、runtime着手の承認は未取得。
 - 2026-10-22: 独立Reviewerが文書・計画をAPPROVED。balanced plan validator、ローカル参照34件、FR/NFR/AT連番、privacy sweep、diff whitespaceの検査がpass。10 Taskの分解を独立確認し、validatorのTask数警告に未解決指摘なし。migration登録の所有境界を共通契約で明確化した。Go/runtime/実接続の試験は本PRでは未実行。
 - 2026-10-22: 上記APPROVEDはcommit `a5bd066`の初回案に対するbaselineであり、親子message・使い捨てsession・Phase階層の追加補正より前の証拠。追加補正の要件はFR-036/037、AT-045〜049として反映し、別途再レビューする。
 - 2026-10-22: 追加補正後のPhase階層・使い捨てsession・親子受信箱と、公式資料比較を独立Reviewerが再確認しAPPROVED。Phase/成果依存の不可能な待機も検証対象へ明記。balanced plan validator、ローカル参照/anchor36件、FR-001〜037・NFR-001〜011・AT-001〜049の連番/表、privacy sweep、diff whitespaceがpass。runtime・実接続試験は未実行。
 
 ## Decision Log
+
+- 2026-10-22（v0.4）: レビューを踏まえた文書改訂・PR作成の依頼に基づく。初期Phaseはall_success/drain_and_block、定型反復は親の有界templateをcontrollerが展開、任意fan-out/pipelineは後続とする。Sで前提確認後にKを独立受入し、P/Mと全体完成は保持する。実運用DB不存在は仮定せず、Mの実行をKの先行条件から外す。新たな毎回の手動承認は設けない。
 
 - 2026-10-22: Wave/TaskをWorkItemの上位へ追加し、既存PR契約を保持する案を採用。根拠は直接依頼・main session・通知再開という依頼。実装着手の承認: no。ADR: none。
 - 2026-10-22: PR作成等のtool callに連動する自動購読を要件へ追加。根拠は依頼者の追加説明。操作intentと購読intentを先に保存し、外部資源確定前後の更新を回収する。実装着手の承認: no。
@@ -416,4 +553,4 @@ Task_1〜10のruntime実装は未着手であり、計画のレビュー・PR公
 
 - リスク: 同じmainへの複数通知、tool requestとRPC応答の競合、移行時のunknown operation、並行PRのbase更新が主な重点。
 - cache hitは性能観測とし、DB・成果物・履歴復旧やTask間の引き渡しをcacheへ依存させない。
-- 文書PRの検証はplan validator、リンク/ID/参照の整合、git diff --check、独立レビュー。runtimeのATやGoテストの実行結果とは区別する。
+- 文書PRではリンク/ID/参照、Task依存DAG・所有範囲、段階別ATの整合、JSON例とgit diff --checkを確認する。過去の独立レビュー/validator合格を今回の結果として扱わず、runtimeのATや実接続と区別する。
