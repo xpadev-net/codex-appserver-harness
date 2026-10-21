@@ -88,7 +88,9 @@ func TestPrivateCheckDiagnosticsFetchesRedactedJobLogs(t *testing.T) {
 	script := `#!/bin/sh
 case "$*" in
  *"annotations?per_page=100"*) printf '%s' '[[]]' ;;
- *"actions/jobs/456/logs"*) printf 'assertion expected true, got false; credential=%s\n' "$GH_TOKEN" ;;
+ *"actions/jobs/456/logs"*)
+  case "$*" in *"--allow-escape-sequences"*) ;; *) exit 19 ;; esac
+  printf '\033[32massertion expected true, got false; credential=%s\033[0m\n' "$GH_TOKEN" ;;
  *) exit 12 ;;
 esac
 `
@@ -99,7 +101,7 @@ esac
 	t.Setenv("GH_TOKEN", "private-controller-test-token")
 	client := Client{Repository: "Owner/Repo", RepositoryID: 1}
 	text, err := client.CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
-	if err != nil || !strings.Contains(text, "expected true") || strings.Contains(text, "private-controller-test-token") || !strings.Contains(text, "[REDACTED]") {
+	if err != nil || !strings.Contains(text, "expected true") || strings.Contains(text, "private-controller-test-token") || !strings.Contains(text, "[REDACTED]") || strings.Contains(text, "\x1b") {
 		t.Fatal("missing or unredacted diagnostic", err)
 	}
 }
@@ -133,5 +135,12 @@ esac
 	text, err := (Client{Repository: "owner/repo", RepositoryID: 1}).CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
 	if err == nil || text != "" {
 		t.Fatal("failed HTTP response accepted as evidence", text, err)
+	}
+}
+
+func TestDiagnosticControlSequencesAreRemoved(t *testing.T) {
+	text := cleanDiagnosticText("\x1b]0;window title\x07\x1b[31massertion failed\x1b[0m\r\nline\x00\x08\rnext")
+	if text != "assertion failed\nline\nnext" {
+		t.Fatalf("unexpected diagnostic text: %q", text)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 )
@@ -38,7 +39,7 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 	if err == nil && u.Scheme == "https" && u.Host == "github.com" && u.User == nil {
 		pattern := regexp.MustCompile("(?i)^/" + regexp.QuoteMeta(c.Repository) + `/actions/runs/[0-9]+/job/([0-9]+)/?$`)
 		if match := pattern.FindStringSubmatch(u.Path); match != nil {
-			cmd := exec.CommandContext(ctx, "gh", "api", "repos/"+c.Repository+"/actions/jobs/"+match[1]+"/logs")
+			cmd := exec.CommandContext(ctx, "gh", "api", "--allow-escape-sequences", "repos/"+c.Repository+"/actions/jobs/"+match[1]+"/logs")
 			logTail := &diagnosticTail{limit: 65536}
 			logOutput := runner.NewRedactedWriter(logTail)
 			cmd.Stdout = logOutput
@@ -55,7 +56,7 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 	if err := output.Flush(); err != nil {
 		return "", err
 	}
-	text := strings.TrimSpace(string(tail.data))
+	text := cleanDiagnosticText(string(tail.data))
 	if text != "" {
 		return text, nil
 	}
@@ -81,4 +82,20 @@ func (b *diagnosticTail) Write(p []byte) (int, error) {
 	}
 	b.data = append(b.data, p...)
 	return n, nil
+}
+
+var terminalSequences = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+
+func cleanDiagnosticText(text string) string {
+	text = terminalSequences.ReplaceAllString(text, "")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == '\r' {
+			return '\n'
+		}
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, text))
 }
