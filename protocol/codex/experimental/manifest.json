@@ -1,0 +1,27 @@
+{
+  "binary_version": "codex-cli 0.163.0",
+  "command": [
+    "codex",
+    "app-server",
+    "generate-json-schema",
+    "--experimental",
+    "--out",
+    "DIR"
+  ],
+  "sha256": {
+    "v1/InitializeParams.json": "b55124e7c0f36a1789396daa5578217a92be67f053903696236686e59f6f212e",
+    "v1/InitializeResponse.json": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9",
+    "v2/ThreadStartParams.json": "80a40a7fac15b4bf70efb7f893fb353acc0a0d30c68f54aee4f01923deca85de",
+    "v2/ThreadStartResponse.json": "107fe36c99ebaeb750a371580beec807a28c6451e9c8a02cd7d451a0135f1c91",
+    "v2/ThreadResumeParams.json": "8152ea774ace4eb5623081abd64a1135f28cbff1e73ca641cfb80ac16f6eed32",
+    "v2/ThreadResumeResponse.json": "3ea7c6d06bab091cea98431c72b644ac026492217842335fcc2105a472be4aa2",
+    "v2/TurnStartParams.json": "abf0d6d29d223b38c650ff1155cb9c9f9b4211e6d0e20c57d750a9e1babfdb41",
+    "v2/TurnStartResponse.json": "20e837d07826b9c01578ff40b962ab08f58a355a9984e96226733498514e9bad",
+    "v2/TurnCompletedNotification.json": "69413578ec3ecd02691424bdeb9d640c7244b4ca4c5c3ef26f69a2efe7c37db8",
+    "v2/ThreadReadParams.json": "dfe040c6ac71d30795b8be3f3ff232e66f362a37f883b491e5d1ea367f470db4",
+    "v2/ThreadReadResponse.json": "cabb1ed2c63497037d66eb12fb6f143916ee7a615aa7398b0d90f221f1899954",
+    "DynamicToolCallParams.json": "401bba20cfbd95762bef0467d840430c46be53369093ad9f26425ba757e34efc",
+    "DynamicToolCallResponse.json": "abb082cad67f11fcc98ba75f2eff75d7d1723af0c657655329b83ff160451a02",
+    "ServerRequest.json": "3d7bc481f84dc042984a74420e65c5a8d3c423f37a91b7d5df2365c903a12ac6"
+  }
+}

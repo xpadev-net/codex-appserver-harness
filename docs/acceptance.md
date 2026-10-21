@@ -26,7 +26,7 @@ service統合テストはfake GitHub / model / job adapterと実際のローカ�
 | 段階 | 現在の状態 | 次の証拠 |
 | --- | --- | --- |
 | S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
-| K | 未実装 | Task_1〜7/9〜10。汎用成果、2 Task並行、独立review/fix、親子message、通知、CLI、復旧と上限 |
+| K | 共通session/tool契約・driver基盤を追加。DB/controller未接続、K未成立 | Task_2〜7/9〜10。汎用成果、2 Task並行、独立review/fix、親子message、通知、CLI、復旧と上限 |
 | P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
 | M | 未実装。実DB不存在は未確認 | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
