@@ -106,6 +106,13 @@ Issue本文・title・policyが変わると古い判定を保留します。新�
   --reason 'external reconciliation proved no effect' --evidence EVIDENCE_REFERENCE
 ```
 
+分割中の子Issue作成が不明な場合、既存markerを照合し、未作成を確認した子だけを指定します。`split_pending`と作成済みの子は維持し、対象の`creating`状態とoutboxの再試行を同じtransactionで更新します。
+
+```sh
+./harness retry --config CONFIG --id WORK_ITEM --operation SPLIT_OPERATION_ID \
+  --child CHILD_KEY --evidence ABSENCE_AUDIT_REFERENCE --reason 'confirmed child creation was not executed'
+```
+
 runnerはjobごとのleaseとプロセス識別情報から`not_started` / `running` / `completed` / `stopped` / `unknown`を照合します。`Launched=false`だけでは再起動しません。未起動または全子プロセスの停止を確認した運用者は、証拠参照と確認状態を指定します。不明な古いjobには外部で確認した完全な停止の証拠が必要です。既知の稼働プロセスがある場合は拒否します。解決したjob IDは遅れて到着する起動からも保護し、成功結果にはしません。続行は予算を維持した`retry`で行います。
 
 ```sh

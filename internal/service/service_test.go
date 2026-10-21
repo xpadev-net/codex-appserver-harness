@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -1298,5 +1299,103 @@ func TestEarlyJobResolutionWaitsForExplicitRetry(t *testing.T) {
 	w, _ = c.Store.Get(ctx, w.ID)
 	if w.Phase != domain.Merged {
 		t.Fatal(w)
+	}
+}
+
+type failedChildCreation struct {
+	*fakeGH
+	calls, failAt int
+	onFind        func()
+}
+
+func (f *failedChildCreation) FindChild(ctx context.Context, marker string) (int, error) {
+	if f.onFind != nil {
+		callback := f.onFind
+		f.onFind = nil
+		callback()
+	}
+	return f.fakeGH.FindChild(ctx, marker)
+}
+func (f *failedChildCreation) CreateChild(ctx context.Context, title, body, marker string) (int, error) {
+	f.calls++
+	if f.calls == f.failAt {
+		return 0, fmt.Errorf("creation response unknown; no external issue was created")
+	}
+	return f.fakeGH.CreateChild(ctx, title, body, marker)
+}
+func TestRetryOnlyConfirmedUncreatedSplitChild(t *testing.T) {
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
+			c, gh, agents, _ := setup(t)
+			ctx := context.Background()
+			var scope verification.Scope
+			c.Store.Record(ctx, "scope", "w", &scope)
+			scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+			scope.Included = []string{"AC1", "AC2"}
+			c.Store.Put(ctx, "scope", "w", "w", scope)
+			agents.autoSplit = true
+			api := &failedChildCreation{fakeGH: gh, failAt: failAt}
+			c.GitHub = api
+			failed := false
+			for range 15 {
+				if err := c.Tick(ctx); err != nil {
+					failed = true
+					break
+				}
+			}
+			if !failed {
+				t.Fatal("creation did not fail")
+			}
+			w, _ := c.Store.Get(ctx, "w")
+			ops, _ := c.Store.Operations(ctx)
+			var op domain.Operation
+			for _, candidate := range ops {
+				if candidate.Kind == "split" {
+					op = candidate
+				}
+			}
+			var before splitting.Progress
+			c.Store.Record(ctx, "split_progress", "w", &before)
+			target := before.Children[failAt-1].Key
+			if err := c.Store.RetrySplitChildBounded(ctx, op.ID, target, "audit:absent", 0); err == nil {
+				t.Fatal("disabled retry budget accepted")
+			}
+			var unchanged splitting.Progress
+			c.Store.Record(ctx, "split_progress", "w", &unchanged)
+			if unchanged.Children[failAt-1].State != "creating" {
+				t.Fatal("failed transaction reset child", unchanged)
+			}
+			api.onFind = func() {
+				if err := c.RetrySplitChild(ctx, w.ID, op.ID, target, "audit:absent", "concurrent retry"); !errors.Is(err, ErrSplitBusy) {
+					t.Fatal("retry raced active progress", err)
+				}
+			}
+			if err := c.Tick(ctx); err == nil {
+				t.Fatal("ambiguous creation unexpectedly progressed")
+			}
+			var count int
+			if err := c.Store.Record(ctx, "network_retry_count", w.ID, &count); err == nil && count != 0 {
+				t.Fatal("busy retry consumed budget", count)
+			}
+			if err := c.RetrySplitChild(ctx, w.ID, op.ID, target, "audit:external-absence-confirmed", "resume only this creation"); err != nil {
+				t.Fatal(err)
+			}
+			after, _ := c.Store.Get(ctx, "w")
+			if after.Phase != domain.Blocked || after.Reason != "split_pending" || after.RecoveryPhase != w.RecoveryPhase {
+				t.Fatal(after)
+			}
+			var reset splitting.Progress
+			c.Store.Record(ctx, "split_progress", "w", &reset)
+			if reset.Children[failAt-1].State != "pending" {
+				t.Fatal(reset)
+			}
+			if failAt == 2 && (reset.Children[0].Issue != before.Children[0].Issue || reset.Children[0].State != "created") {
+				t.Fatal("created child changed", reset)
+			}
+			drive(t, c, 60)
+			if len(gh.children) != 2 || api.calls != 3 || gh.merges != 2 || gh.issue.State != "closed" {
+				t.Fatal(gh.children, api.calls, gh.merges, gh.issue.State)
+			}
+		})
 	}
 }

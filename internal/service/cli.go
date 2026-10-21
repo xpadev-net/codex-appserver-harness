@@ -35,6 +35,7 @@ func CLI(ctx context.Context, args []string) error {
 	file := fs.String("file", "", "proposal or scope JSON")
 	operation := fs.String("operation", "", "operation/run ID")
 	evidence := fs.String("evidence", "", "reconciled absence evidence reference")
+	child := fs.String("child", "", "confirmed uncreated split child key")
 	jobState := fs.String("job-state", "", "externally confirmed not_started or stopped state")
 	turn := fs.String("turn", "", "saved external turn ID")
 	listen := fs.String("listen", "127.0.0.1:8080", "webhook bind address")
@@ -150,6 +151,9 @@ func CLI(ctx context.Context, args []string) error {
 		if *operation != "" {
 			if *evidence == "" {
 				return errors.New("--evidence proving unexecuted is required")
+			}
+			if *child != "" {
+				return controller.RetrySplitChild(ctx, w.ID, *operation, *child, *evidence, *reason)
 			}
 			return s.RetryUnexecutedBounded(ctx, *operation, *evidence+": "+*reason, cfg.Limits.NetworkRetries)
 		}
