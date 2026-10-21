@@ -149,3 +149,7 @@ PR の `MERGED` / 分割元の `SPLIT` と親全体の完了は別に保存し�
 実行前の hold / pause 等の保留を解除して再開する操作では、runner の再試行回数を消費しません。`runner_retries: 0` でも初回の最終受入を実行できます。修正の部分 PR とその後続も、累積の修正回数・検証 job 数・既知 token 使用量を共有します。
 
 修正の分割・部分 PR でも既存の分割深さを保持します。子の修正 scope を更新した場合、親と依存先は現在の Issue claim と保存した修正・後続の系譜を確認して、その完了証拠を参照します。Issue 番号や版の大小だけで異なる scope を同一視しません。
+
+### PR の検証証拠
+
+初回公開と候補更新の PR 本文に、正式検証計画の profile と版、現在候補の最新結果、tested SHA、job ID、`harness-journal:work-items/WORK_ITEM/validation/JOB_ID` を掲載します。参照は controller の journal の識別子です。権限のある運用者は `harness inspect --config CONFIG --id WORK_ITEM` の `validation` で同じ job ID を探し、`log_path` の完全ログを controller 上で確認できます。`evidence_retention` が `expired` の場合、保持期間を過ぎたログは取得できません。PR 本文に private path、ログ本文、実行環境や秘密値は出力しません。探索的な profile や旧候補の結果を正式検証の要約へ混ぜません。

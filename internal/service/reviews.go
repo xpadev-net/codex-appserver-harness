@@ -13,6 +13,8 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -67,7 +69,11 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 			return c.reject(ctx, w, op, err.Error())
 		}
 	}
-	body := publicationBody(w, scope, candidate)
+	profiles, err := plan.Profiles(c.Config.Verification)
+	if err != nil {
+		return err
+	}
+	body := publicationBody(w, scope, candidate, profiles, results)
 	var publicationIntent struct {
 		Candidate runner.Candidate `json:"candidate"`
 	}
@@ -144,8 +150,28 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 func publicationTarget(pr github.PR, w domain.WorkItem, base string) bool {
 	return pr.Number > 0 && pr.State == "open" && !pr.Draft && !pr.Merged && pr.Head.Ref == w.Branch && pr.Head.Repo.ID == w.RepositoryID && pr.Base.Ref == base && pr.Base.Repo.ID == w.RepositoryID
 }
-func publicationBody(w domain.WorkItem, scope verification.Scope, candidate runner.Candidate) string {
-	return fmt.Sprintf("Parent Issue #%d\n\nWorkItem: %s\nScope revision: %d; policy revision: %d\nCandidate: %s\nIncluded criteria: %s\nRemaining criteria: %s\n\nValidation evidence is stored in the controller job journal (private logs are not published).\n", w.Issue, w.ID, w.ScopeRevision, w.PolicyRevision, candidate.SHA, strings.Join(scope.Included, ", "), strings.Join(scope.Remaining, ", "))
+func publicationBody(w domain.WorkItem, scope verification.Scope, candidate runner.Candidate, profiles []string, results []runner.Result) string {
+	var body strings.Builder
+	fmt.Fprintf(&body, "Parent Issue #%d\n\nWorkItem: %s\nScope revision: %d; policy revision: %d\nCandidate: %s\nIncluded criteria: %s\nRemaining criteria: %s\n\n", w.Issue, w.ID, w.ScopeRevision, w.PolicyRevision, candidate.SHA, strings.Join(scope.Included, ", "), strings.Join(scope.Remaining, ", "))
+	body.WriteString("Validation for the current candidate:\n\n| Profile | Revision | Result | Tested SHA | Job ID | Evidence reference |\n| --- | --- | --- | --- | --- | --- |\n")
+	ordered := append([]string{}, profiles...)
+	sort.Strings(ordered)
+	for _, profile := range ordered {
+		var latest *runner.Result
+		for i := range results {
+			r := &results[i]
+			if r.Candidate == candidate && r.ProfileID == profile && (latest == nil || r.Started.After(latest.Started) || (r.Started.Equal(latest.Started) && r.JobID > latest.JobID)) {
+				latest = r
+			}
+		}
+		if latest == nil {
+			continue
+		} // Publication already requires the full validated set.
+		ref := "harness-journal:work-items/" + url.PathEscape(w.ID) + "/validation/" + url.PathEscape(latest.JobID)
+		fmt.Fprintf(&body, "| `%s` | %d | %s | `%s` | `%s` | `%s` |\n", profile, latest.ProfileRevision, latest.Status, latest.TestedSHA, latest.JobID, ref)
+	}
+	body.WriteString("\nEvidence references identify private controller journal records. Authorized operators can use `harness inspect --config CONFIG --id WORK_ITEM` to locate each validation record and its retained log; private paths and log contents are not published.\n")
+	return body.String()
 }
 
 func (c *Controller) reviewPolicy() review.Policy {
