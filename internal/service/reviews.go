@@ -9,6 +9,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/review"
+	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
@@ -47,6 +48,9 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 	if err != nil {
 		return err
 	}
+	if err = plan.ValidateCommit(ctx, w.Worktree, candidate.SHA); err != nil {
+		return c.reject(ctx, w, op, err.Error())
+	}
 	if !verification.PassedPlan(candidate, c.Config.Verification, plan, results) {
 		return c.reject(ctx, w, op, "validation gates changed before publication")
 	}
@@ -63,10 +67,17 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 			return c.reject(ctx, w, op, err.Error())
 		}
 	}
-	var publicationIntent map[string]any
+	body := publicationBody(w, scope, candidate)
+	var publicationIntent struct {
+		Candidate runner.Candidate `json:"candidate"`
+	}
+
 	prior := c.Store.Record(ctx, "publication_intent", op.ID, &publicationIntent)
 	if prior != nil && !missing(prior) {
 		return prior
+	}
+	if prior == nil && publicationIntent.Candidate != candidate {
+		return c.reject(ctx, w, op, "publication intent belongs to another candidate")
 	}
 	if op.State == "unknown" || prior == nil {
 		found, err := c.GitHub.FindPR(ctx, w.Branch, w.ID)
@@ -76,10 +87,22 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 		if found == nil {
 			return c.block(ctx, w, "PR creation outcome unknown; reconcile before retry")
 		}
-		if err = c.Store.Put(ctx, "pull_request", w.ID, w.ID, *found); err != nil {
-			return err
+		if !publicationTarget(*found, w, c.Config.BaseBranch) {
+			return c.reject(ctx, w, op, "existing PR repository, branch, base or state mismatched")
 		}
-		return c.done(ctx, op, found)
+		if found.Head.SHA == candidate.SHA && found.Body == github.Marker(w.ID)+"\n"+body && found.Title == "Harness implementation "+w.ID {
+			if err = c.Store.Put(ctx, "pull_request", w.ID, w.ID, *found); err != nil {
+				return err
+			}
+			return c.done(ctx, op, found)
+		}
+		if found.Head.SHA != candidate.SHA {
+			if _, err = workspace.Git(ctx, w.Worktree, "merge-base", "--is-ancestor", found.Head.SHA, candidate.SHA); err != nil {
+				return c.reject(ctx, w, op, "existing PR head is not an ancestor of current candidate; reconcile before publication")
+			}
+		}
+		// The identified PR is older than this publication. Ordinary push/PATCH
+		// are safe to retry; neither operation creates a second PR or rewrites history.
 	}
 	latest, err := c.Store.Get(ctx, w.ID)
 	if err != nil {
@@ -101,7 +124,7 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 	if !domain.CanDispatch(latest, op) {
 		return c.Store.FinishOperation(ctx, op.ID, "canceled", "branch uploaded; PR publication canceled before request")
 	}
-	body := fmt.Sprintf("Parent Issue #%d\n\nWorkItem: %s\nScope revision: %d; policy revision: %d\nCandidate: %s\nIncluded criteria: %s\nRemaining criteria: %s\n\nValidation evidence is stored in the controller job journal (private logs are not published).\n", w.Issue, w.ID, w.ScopeRevision, w.PolicyRevision, candidate.SHA, strings.Join(scope.Included, ", "), strings.Join(scope.Remaining, ", "))
+
 	pr, err := c.GitHub.Publish(ctx, c.Config.BaseBranch, w.Branch, w.ID, "Harness implementation "+w.ID, body)
 	if errors.Is(err, contract.ErrUnsent) {
 		return c.Store.ReturnUnsent(context.WithoutCancel(ctx), op.ID, err.Error())
@@ -110,7 +133,7 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 		_ = c.Store.FinishOperation(context.WithoutCancel(ctx), op.ID, "unknown", nil)
 		return err
 	}
-	if pr.Head.SHA != candidate.SHA || pr.Head.Repo.ID != w.RepositoryID {
+	if pr.Head.SHA != candidate.SHA || !publicationTarget(pr, w, c.Config.BaseBranch) || pr.Body != github.Marker(w.ID)+"\n"+body || pr.Title != "Harness implementation "+w.ID {
 		return c.reject(ctx, w, op, "published PR head or repository mismatched")
 	}
 	if err = c.Store.Put(ctx, "pull_request", w.ID, w.ID, pr); err != nil {
@@ -118,6 +141,13 @@ func (c *Controller) publish(ctx context.Context, w domain.WorkItem, op domain.O
 	}
 	return c.done(ctx, op, pr)
 }
+func publicationTarget(pr github.PR, w domain.WorkItem, base string) bool {
+	return pr.Number > 0 && pr.State == "open" && !pr.Draft && !pr.Merged && pr.Head.Ref == w.Branch && pr.Head.Repo.ID == w.RepositoryID && pr.Base.Ref == base && pr.Base.Repo.ID == w.RepositoryID
+}
+func publicationBody(w domain.WorkItem, scope verification.Scope, candidate runner.Candidate) string {
+	return fmt.Sprintf("Parent Issue #%d\n\nWorkItem: %s\nScope revision: %d; policy revision: %d\nCandidate: %s\nIncluded criteria: %s\nRemaining criteria: %s\n\nValidation evidence is stored in the controller job journal (private logs are not published).\n", w.Issue, w.ID, w.ScopeRevision, w.PolicyRevision, candidate.SHA, strings.Join(scope.Included, ", "), strings.Join(scope.Remaining, ", "))
+}
+
 func (c *Controller) reviewPolicy() review.Policy {
 	p := c.Config.Review
 	verified := func(key string) bool {
