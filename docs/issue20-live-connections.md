@@ -62,3 +62,14 @@ Git の `include` / `includeIf` も有効にして設定を辿る。[include 経
 API コマンドが動かない、DNS/TLS/proxy 等で結果を確認できない場合を、401 と同一視しない。[読み取り失敗](../evidence/issue20/isolation-api-negative-observation.json) と [PATCH 失敗](../evidence/issue20/isolation-write-negative-observation.json) は、制御した一時 clone 内の gh wrapper が exit 42 を返すケースで検証した。実 credential や外部 service の障害を使わず、どちらも probe を失敗させ、`probe_completed: false` / `credential_isolation: unknown` を保存した。
 
 `probe_completed: true` は指定した測定が完了したという意味で、認証済み worker の capability が verified になったという意味ではない。現在環境では測定が完了しているが、その認証済み deployment と E2E は未確認のままである。
+
+worktree 固有の `config.worktree` も含め、worker 内で有効な Git 設定全体を照合する。remote / push URL と URL rewrite の基底 URL は値を非公開のまま解析し、userinfo 等を検出する。header/helper の名前だけで credential がないと断定しない。
+
+追加の制御した否定試験:
+
+- [worktree 設定](../evidence/issue20/isolation-worktree-negative-observation.json)
+- [remote URL](../evidence/issue20/isolation-remote-negative-observation.json) / [push URL](../evidence/issue20/isolation-pushurl-negative-observation.json)
+- [insteadOf](../evidence/issue20/isolation-rewrite-negative-observation.json) / [pushInsteadOf](../evidence/issue20/isolation-pushrewrite-negative-observation.json)
+- [Git proxy 設定](../evidence/issue20/isolation-proxy-negative-observation.json) / [cookie source](../evidence/issue20/isolation-cookie-negative-observation.json) / [HTTP 設定 key の URL userinfo](../evidence/issue20/isolation-url-key-negative-observation.json)
+
+全 12 ケースの否定試験は一時 clone と無効な公開 canary 値で実行し、元 checkout の設定を変更していない。どの fixture にも URL、認証値、private path の実値は保存していない。現在の checkout では改めて測定完了を確認したが、実認証済み worker / model deployment の未確認状態は維持する。

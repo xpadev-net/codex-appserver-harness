@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,7 +121,7 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	// Query names only, without logging configuration keys or values. The real
 	// common Git directory is mounted as in production; no synthetic clone is used.
 	_, gitStatus := run(env, "git", "rev-parse", "--is-inside-work-tree")
-	authNames, authStatus := run(env, "git", "config", "--local", "--includes", "--name-only", "--get-regexp", `(extraheader|^credential\.)`)
+	authNames, authStatus := run(env, "git", "config", "--includes", "--name-only", "--get-regexp", `(extraheader|^credential\.|^core\.(sshcommand|askpass|gitproxy)$|^http\..*(proxy|proxyauthmethod|cookiefile|sslkey|sslcert)$|^remote\..*\.proxy$|https?://[^/]*@)`)
 	obs["git_repository_probe_status"] = gitStatus
 	obs["git_auth_config_query_status"] = authStatus
 	gitAuth := authStatus == "success" && authNames != ""
@@ -129,6 +131,16 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		obs["model_turn_reason"] = "mounted Git metadata could not be inspected"
 		t.Fatal("Git credential reachability is unresolved; sanitized evidence saved")
 	}
+	remoteConfig, remoteStatus := run(env, "git", "config", "--includes", "--null", "--get-regexp", `^(remote\..*\.(url|pushurl)|url\..*\.(insteadof|pushinsteadof))$`)
+	obs["git_remote_config_query_status"] = remoteStatus
+	remoteAuth, parseErr := gitURLCredentials(remoteConfig)
+	if (remoteStatus != "success" && remoteStatus != "exit_1") || parseErr != nil {
+		obs["model_turn_reason"] = "effective Git URL metadata could not be inspected"
+		t.Fatal("Git URL credential reachability is unresolved; sanitized evidence saved")
+	}
+	obs["git_remote_credentials_present"] = remoteAuth
+	gitAuth = gitAuth || remoteAuth
+	obs["git_auth_configuration_present"] = gitAuth
 	version, status := run(env, binary, "--version")
 	obs["codex_launch_status"] = status
 	obs["codex_version"] = version
@@ -192,4 +204,85 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		t.Fatal("isolated pinned app-server was not established; sanitized evidence saved")
 	}
 	obs["probe_completed"] = true
+}
+
+// git config --null --get-regexp separates each key/value with a newline and
+// terminates each record with NUL. Values (and URL-bearing keys) remain private.
+func gitURLCredentials(data string) (bool, error) {
+	for _, record := range strings.Split(data, "\x00") {
+		if record == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(record, "\n")
+		if !ok {
+			return false, errors.New("invalid Git URL record")
+		}
+		lower := strings.ToLower(key)
+		values := []string{value}
+		if strings.HasPrefix(lower, "url.") {
+			suffix := ".insteadof"
+			if strings.HasSuffix(lower, ".pushinsteadof") {
+				suffix = ".pushinsteadof"
+			}
+			if !strings.HasSuffix(lower, suffix) {
+				return false, errors.New("invalid Git rewrite record")
+			}
+			values = append(values, key[len("url."):len(key)-len(suffix)])
+		} else if !strings.HasPrefix(lower, "remote.") || !(strings.HasSuffix(lower, ".url") || strings.HasSuffix(lower, ".pushurl")) {
+			return false, errors.New("invalid Git remote record")
+		}
+		for _, raw := range values {
+			raw = strings.TrimSpace(raw)
+			if !strings.Contains(raw, "://") {
+				if strings.Contains(raw, "::") {
+					return false, errors.New("unsupported Git URL helper")
+				}
+				if at := strings.LastIndexByte(raw, '@'); at >= 0 && !strings.HasPrefix(raw, "/") && raw[:at] != "git" {
+					return true, nil
+				}
+				continue
+			}
+			parsed, err := url.Parse(raw)
+			if err != nil {
+				return false, errors.New("unparseable Git URL")
+			}
+			if parsed.RawQuery != "" || parsed.Fragment != "" {
+				return true, nil
+			}
+			if parsed.User != nil {
+				_, password := parsed.User.Password()
+				if parsed.Scheme != "ssh" || parsed.User.Username() != "git" || password {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func TestGitURLCredentialDetection(t *testing.T) {
+	cases := []struct {
+		name, data          string
+		credential, invalid bool
+	}{
+		{"https public", "remote.origin.url\nhttps://github.com/owner/repo.git\x00", false, false},
+		{"local path", "remote.origin.url\n/private/probe/repo\x00", false, false},
+		{"ssh identity", "remote.origin.url\ngit@github.com:owner/repo.git\x00", false, false},
+		{"ssh URI identity", "remote.origin.url\nssh://git@github.com/owner/repo.git\x00", false, false},
+		{"remote userinfo", "remote.origin.url\nhttps://inert-canary@github.com/owner/repo.git\x00", true, false},
+		{"push userinfo", "remote.origin.pushurl\nhttps://user:inert-canary@github.com/owner/repo.git\x00", true, false},
+		{"rewrite key", "url.https://inert-canary@github.com/.insteadof\nhttps://github.com/\x00", true, false},
+		{"push rewrite key", "url.https://inert-canary@github.com/.pushinsteadof\nhttps://github.com/\x00", true, false},
+		{"query", "remote.origin.url\nhttps://github.com/owner/repo.git?token=inert-canary\x00", true, false},
+		{"malformed", "remote.origin.url", false, true},
+		{"custom helper", "remote.origin.url\next::opaque-helper\x00", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := gitURLCredentials(tc.data)
+			if got != tc.credential || (err != nil) != tc.invalid {
+				t.Fatal("credential classification mismatch")
+			}
+		})
+	}
 }
