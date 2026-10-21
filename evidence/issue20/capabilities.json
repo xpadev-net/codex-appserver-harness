@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "observed_at": "2026-10-21T05:13:15.299996+00:00",
+  "observed_at": "2026-10-21T05:21:15.610219+00:00",
   "repository": "xpadev-net/codex-appserver-harness",
   "repository_id": 1426858504,
   "default_branch": "master",
@@ -18,13 +18,13 @@
     },
     "cloud_native_approval": {
       "state": "unknown",
-      "reason": "Actual Cloud provider acceptance, native APPROVED and SHA/round binding have not been observed.",
-      "evidence": "docs/issue20-live-connections.md"
+      "reason": "Provider returned an account/GitHub-connection prerequisite. No native review or APPROVED for a SHA/round was observed.",
+      "evidence": "evidence/issue20/cloud-observation.json"
     },
     "cloud_request": {
       "state": "unknown",
-      "reason": "Actual Cloud provider acceptance, native APPROVED and SHA/round binding have not been observed.",
-      "evidence": "docs/issue20-live-connections.md"
+      "reason": "A request from actor 96982836 received a provider prerequisite response asking for Codex account/GitHub connection; no accepted review was observed.",
+      "evidence": "evidence/issue20/cloud-observation.json"
     },
     "github_read": {
       "state": "verified",
@@ -38,8 +38,8 @@
     },
     "review_sha": {
       "state": "unknown",
-      "reason": "Actual Cloud provider acceptance, native APPROVED and SHA/round binding have not been observed.",
-      "evidence": "docs/issue20-live-connections.md"
+      "reason": "Provider returned an account/GitHub-connection prerequisite. No native review or APPROVED for a SHA/round was observed.",
+      "evidence": "evidence/issue20/cloud-observation.json"
     },
     "rules_enforced": {
       "state": "unknown",
@@ -63,7 +63,7 @@
     },
     "credential_isolation": {
       "state": "unknown",
-      "reason": "Known controller paths were hidden and unauthenticated read probes returned 401. A real authenticated worker deployment and write-path contract have not been attested.",
+      "reason": "Real repository/common Git directory was mounted; known controller paths were hidden, no direct GitHub auth variables or local auth configuration was observed, and unauthenticated read plus identical-title PATCH probes returned 401. The real authenticated worker deployment remains unconfigured.",
       "evidence": "evidence/issue20/isolation-observation.json"
     },
     "ci_execution": {

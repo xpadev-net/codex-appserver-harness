@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,22 +29,22 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	if !filepath.IsAbs(binary) || !filepath.IsAbs(output) {
 		t.Fatal("absolute binary and evidence paths are required")
 	}
-	c, _, _, _ := setup(t)
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Config.Launcher = []string{filepath.Clean(filepath.Join(cwd, "../../scripts/isolate-linux"))}
-	c.Config.CodexBinary = binary
-	c.Config.WorkerCodexHome = t.TempDir() // No controller Codex home is mounted.
+	cfg := Config{Root: t.TempDir(), RepositoryPath: filepath.Clean(filepath.Join(cwd, "../..")), Launcher: []string{filepath.Clean(filepath.Join(cwd, "../../scripts/isolate-linux"))}, CodexBinary: binary, WorkerCodexHome: t.TempDir()}
+	if err = os.WriteFile(filepath.Join(cfg.Root, "state.db"), []byte("private controller probe sentinel"), 0600); err != nil {
+		t.Fatal("create controller sentinel")
+	} // No controller Codex home is mounted.
 	home := t.TempDir()
-	w := domain.WorkItem{Worktree: c.Config.RepositoryPath}
+	w := domain.WorkItem{Worktree: cfg.RepositoryPath}
 	gitdir, err := workspace.Git(context.Background(), w.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := (LiveAgents{Config: c.Config}).environment(w, home, strings.TrimSpace(gitdir))
-	obs := map[string]any{"observed_at": time.Now().UTC(), "launcher": "scripts/isolate-linux", "model_turn": "not_attempted", "thread_resume": "not_attempted", "dedicated_codex_home": "empty probe home", "credential_values_recorded": false}
+	env := (LiveAgents{Config: cfg}).environment(w, home, strings.TrimSpace(gitdir))
+	obs := map[string]any{"observed_at": time.Now().UTC(), "launcher": "scripts/isolate-linux", "model_turn": "not_attempted", "thread_resume": "not_attempted", "dedicated_codex_home": "empty probe home", "credential_values_recorded": false, "workspace": "current repository checkout"}
 	defer func() {
 		data, err := json.MarshalIndent(obs, "", "  ")
 		if err != nil {
@@ -82,7 +83,7 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	run := func(environment []string, args ...string) (string, string) {
-		command := exec.CommandContext(ctx, c.Config.Launcher[0], append(c.Config.Launcher[1:], args...)...)
+		command := exec.CommandContext(ctx, cfg.Launcher[0], append(cfg.Launcher[1:], args...)...)
 		command.Env = environment
 		command.Dir = w.Worktree
 		var stderr strings.Builder
@@ -98,12 +99,18 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		return "", status // Never publish raw HTTP bodies, diagnostics or credential values.
 	}
 	hidden := true
-	for _, path := range forbiddenPaths(c.Config) {
+	for _, path := range forbiddenPaths(cfg) {
 		if _, status := run(env, "sh", "-c", `test ! -e "$1"`, "probe", path); status != "success" {
 			hidden = false
 		}
 	}
 	obs["controller_paths_hidden"] = hidden
+	// Query names only, without logging configuration keys or values. The real
+	// common Git directory is mounted as in production; no synthetic clone is used.
+	_, gitStatus := run(env, "git", "rev-parse", "--is-inside-work-tree")
+	authNames, authStatus := run(env, "git", "config", "--local", "--name-only", "--get-regexp", `(extraheader|^credential\.)`)
+	obs["git_repository_probe_status"] = gitStatus
+	obs["git_auth_configuration_present"] = authStatus == "success" && authNames != ""
 	version, status := run(env, binary, "--version")
 	obs["codex_launch_status"] = status
 	obs["codex_version"] = version
@@ -119,21 +126,43 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	obs["user_api_authenticated"] = authenticated
 	obs["repository_api_status"] = repoStatus
 	obs["repository_permissions_exposed"] = permissions
-	args := append(append([]string{}, c.Config.Launcher[1:]...), binary, "app-server", "--listen", "stdio://", "--disable", "goals", "--disable", "multi_agent", "--disable", "multi_agent_v2")
-	client, err := codex.StartCommand(ctx, c.Config.Launcher[0], args, env)
+	writeExposed := false
+	obs["write_api_status"] = "not_attempted"
+	if canary := os.Getenv("HARNESS_LIVE_WRITE_CANARY"); canary != "" {
+		number, err := strconv.Atoi(canary)
+		if err != nil || number < 1 {
+			t.Fatal("positive canary issue/PR number required")
+		}
+		title := os.Getenv("HARNESS_LIVE_CANARY_TITLE")
+		if title == "" {
+			t.Fatal("existing canary title required")
+		}
+		endpoint := "repos/xpadev-net/codex-appserver-harness/issues/" + strconv.Itoa(number)
+		current, err := exec.CommandContext(ctx, "gh", "api", endpoint, "--jq", ".title").Output()
+		if err != nil || strings.TrimSpace(string(current)) != title {
+			t.Fatal("canary title must match existing title; no request sent")
+		}
+		_, status := run(ghEnv, "gh", "api", endpoint, "--method", "PATCH", "-H", "Authorization:", "-f", "title="+title, "--jq", "true")
+		writeExposed = status == "success"
+		obs["write_api_status"] = status
+		obs["write_access_exposed"] = writeExposed
+		obs["write_canary_number"] = number
+	}
+	args := append(append([]string{}, cfg.Launcher[1:]...), binary, "app-server", "--listen", "stdio://", "--disable", "goals", "--disable", "multi_agent", "--disable", "multi_agent_v2")
+	client, err := codex.StartCommand(ctx, cfg.Launcher[0], args, env)
 	initialized := false
 	if err == nil {
 		initialized = client.Initialize(ctx) == nil
 		client.Close()
 	}
 	obs["isolated_app_server_initialized"] = initialized
-	if !hidden || directAuth || authenticated || permissions {
+	if !hidden || directAuth || authenticated || permissions || writeExposed {
 		obs["credential_isolation"] = "unsupported"
 		obs["model_turn_reason"] = "worker has controller paths or authenticated GitHub authority; no untrusted turn started"
 		t.Fatal("worker credential isolation failed; sanitized evidence saved")
 	}
 	obs["credential_isolation"] = "unknown"
-	obs["model_turn_reason"] = "read-only negative probes alone do not attest write-path isolation or dedicated model authentication"
+	obs["model_turn_reason"] = "negative probes do not attest the unconfigured authenticated worker/model deployment"
 	if !initialized || version != "codex-cli 0.163.0" {
 		t.Fatal("isolated pinned app-server was not established; sanitized evidence saved")
 	}

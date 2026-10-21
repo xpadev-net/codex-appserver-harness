@@ -17,3 +17,5 @@ Source: https://learn.chatgpt.com/docs/app-server (accessed 2026-10-21).
 The generated schema from the pinned executable is the adapter contract.
 
 Current-environment observations (2026-10-21): see [live connection evidence](issue20-live-connections.md). Actual CI execution and isolated app-server initialization were observed; checkout-SHA semantics, native Cloud approval, dedicated model turns/resume and non-bypass rules remain unverified. The capability report keeps automatic merge disabled.
+
+The live Cloud request received an account/GitHub-connection prerequisite from the provider, not an accepted review or approval. Requester ID, provider candidate ID, marker and request head are retained in [the Cloud observation](../evidence/issue20/cloud-observation.json). No trusted-reviewer policy was inferred from the display name.
