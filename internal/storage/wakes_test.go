@@ -576,7 +576,7 @@ func TestSingleMaximumInlineMessageAlwaysFitsWakeTransport(t *testing.T) {
 		t.Run(fmt.Sprintf("%x", []byte(character)), func(t *testing.T) {
 			ctx := context.Background()
 			k, wave, tasks := mailboxFixture(t)
-			body := strings.Repeat(character, contract.MaxInline/len(character))
+			body := "x" + strings.Repeat(character, (contract.MaxInline-1)/len(character))
 			m, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: "main", Target: wave.Target(), Key: "full-body", Recipient: tasks[0].ID, Body: body})
 			if err != nil {
 				t.Fatal(err)
