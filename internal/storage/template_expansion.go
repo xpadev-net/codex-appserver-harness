@@ -538,6 +538,13 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	// fixes cannot race or produce competing replacements for one candidate.
 	origins := map[string][]string{}
 	peerOutputs := map[string]bool{}
+	sourcePositions := map[string]int{}
+	for position, phase := range current.Phases {
+		for _, spec := range phase.Tasks {
+			sourcePositions[spec.ID] = position
+		}
+	}
+	reviewPositions := map[string]int{}
 	for _, local := range sourceLocals {
 		source, err := loadTask(ctx, tx, structureID("task-", wave.ID, local))
 		if err != nil {
@@ -579,6 +586,9 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		seen := map[string]bool{previousFix: true}
 		explicitInputs := map[string]bool{}
 		for _, local := range origins[review.ID] {
+			if sourcePositions[local] > reviewPositions[review.ID] {
+				reviewPositions[review.ID] = sourcePositions[local]
+			}
 			source, err := loadTask(ctx, tx, structureID("task-", wave.ID, local))
 			if err != nil {
 				return plan, reviewRoots, err
@@ -614,7 +624,25 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			return plan, reviewRoots, err
 		}
 	}
-	plan.Phases = append(plan.Phases, reviewPhase)
+	// Separate original phase barriers remain separate even if no explicit data
+	// dependency was needed. Ordering must not introduce an extra artifact grant.
+	groups := map[int][]contract.TaskSpec{}
+	positions := []int{}
+	for _, review := range reviewPhase.Tasks {
+		position := reviewPositions[review.ID]
+		if _, ok := groups[position]; !ok {
+			positions = append(positions, position)
+		}
+		groups[position] = append(groups[position], review)
+	}
+	sort.Ints(positions)
+	for _, position := range positions {
+		phase := contract.PhaseSpec{ID: structureID("review-phase-", wave.ID, fmt.Sprintf("%s:%d", key, position)), Tasks: groups[position], Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{}}, FailurePolicy: "drain_and_block"}
+		for _, task := range phase.Tasks {
+			phase.Completion.RequiredTaskIDs = append(phase.Completion.RequiredTaskIDs, task.ID)
+		}
+		plan.Phases = append(plan.Phases, phase)
+	}
 	cloneIDs := map[string]string{}
 	for _, phase := range current.Phases[position+1:] {
 		for _, task := range phase.Tasks {
@@ -653,7 +681,7 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 					needsFixedSubject = true
 					if dep.ArtifactID == "" {
 						for _, id := range outputs {
-							if !subjectArtifacts[id] {
+							if !subjectArtifacts[id] && replacements[dep.TaskID] == nil {
 								inputIDs[id] = true
 							}
 						}
@@ -720,6 +748,24 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 						if dep.ArtifactID != "" && !subjectArtifacts[dep.ArtifactID] {
 							return plan, reviewRoots, fmt.Errorf("%w: downstream review subject selector is unaffected", ErrTemplateNeedsMain)
 						}
+						if dep.ArtifactID == "" && replacements[dep.TaskID] == nil {
+							producer, err := loadTask(ctx, tx, structureID("task-", wave.ID, dep.TaskID))
+							if err != nil {
+								return plan, reviewRoots, err
+							}
+							if !producer.State.Terminal() {
+								return plan, reviewRoots, fmt.Errorf("%w: downstream review has an unknown future subject", ErrTemplateNeedsMain)
+							}
+							produced, err := k.completedTaskResultTx(ctx, tx, wave, producer)
+							if err != nil {
+								return plan, reviewRoots, err
+							}
+							for _, id := range resultArtifactReferences(produced) {
+								if !subjectArtifacts[id] {
+									return plan, reviewRoots, fmt.Errorf("%w: downstream review has alternative dependency outputs", ErrTemplateNeedsMain)
+								}
+							}
+						}
 					}
 				}
 				if err := pinClonedReviewSubjectTx(ctx, tx, wave, task.ID, key, inputDigest, previousFix, cloneIDs); err != nil {
@@ -730,7 +776,7 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		plan.Phases = append(plan.Phases, phase)
 	}
 	if err := domain.ValidateWavePlan(wave, plan); err != nil {
-		return plan, reviewRoots, err
+		return plan, reviewRoots, fmt.Errorf("%w: %v", ErrTemplateNeedsMain, err)
 	}
 	return plan, reviewRoots, nil
 }

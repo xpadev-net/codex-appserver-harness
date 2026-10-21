@@ -70,10 +70,12 @@ func (k *KernelStore) recordTemplateSubjectTx(ctx context.Context, tx *sql.Tx, t
 		}
 		owned := a.TaskID == task.ID
 		forwarded := previous.State == "bound" && previous.ArtifactID == a.ID
-		if (!owned && !forwarded) || a.Digest == input.InputDigest {
+		if !owned && !forwarded {
 			continue
 		}
-		candidates[a.ID] = a
+		if a.Digest != input.InputDigest {
+			candidates[a.ID] = a
+		}
 		if a.Kind == "subject" {
 			explicit[a.ID] = a
 		}
@@ -83,7 +85,11 @@ func (k *KernelStore) recordTemplateSubjectTx(ctx context.Context, tx *sql.Tx, t
 	}
 	if len(candidates) == 1 {
 		for _, a := range candidates {
-			subject.State, subject.ArtifactID, subject.Digest = "bound", a.ID, a.Digest
+			if a.Digest == input.InputDigest {
+				subject.State = "unchanged"
+			} else {
+				subject.State, subject.ArtifactID, subject.Digest = "bound", a.ID, a.Digest
+			}
 		}
 	}
 	if len(candidates) == 0 {
