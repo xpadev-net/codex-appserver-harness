@@ -98,6 +98,7 @@ type Ref struct {
 	} `json:"repo"`
 }
 type PR struct {
+	Title          string `json:"title"`
 	MergeCommitSHA string `json:"merge_commit_sha"`
 	Number         int    `json:"number"`
 	State          string `json:"state"`

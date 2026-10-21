@@ -64,7 +64,14 @@ func (f *fakeGH) Publish(ctx context.Context, base, branch, id, title, body stri
 	w, _ := f.controller.Store.Get(ctx, id)
 	c, _ := f.controller.candidate(ctx, w)
 	f.posts++
-	f.pr = github.PR{Number: 9 + f.posts, State: "open", Body: body}
+	number := 0
+	if f.pr.Head.Ref == branch {
+		number = f.pr.Number
+	}
+	if number == 0 {
+		number = 9 + f.posts
+	}
+	f.pr = github.PR{Title: title, Number: number, State: "open", Body: github.Marker(id) + "\n" + body}
 	f.pr.Head.SHA = c.SHA
 	f.pr.Head.Ref = branch
 	f.pr.Head.Repo.ID = 1
@@ -1097,5 +1104,101 @@ func TestStaleDiagnosticHoldCannotBlockAdoptedScope(t *testing.T) {
 	after, _ := c.Store.Get(ctx, w.ID)
 	if err != nil || !handled || after.Phase != domain.Ready || after.ScopeRevision != 2 {
 		t.Fatal(after, handled, err)
+	}
+}
+
+func pendingPRUpdate(t *testing.T) (*Controller, *fakeGH, domain.WorkItem, domain.Operation) {
+	t.Helper()
+	c, gh, _, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	if err := c.emit(ctx, w, "repair_implementation", "address new feedback"); err != nil {
+		t.Fatal(err)
+	}
+	for range 15 {
+		ops, _ := c.Store.Operations(ctx)
+		for _, op := range ops {
+			if op.Kind == "publish" && op.State == "pending" {
+				w, _ = c.Store.Get(ctx, "w")
+				return c, gh, w, op
+			}
+		}
+		drive(t, c, 1)
+	}
+	t.Fatal("no update publication generated")
+	return nil, nil, domain.WorkItem{}, domain.Operation{}
+}
+func TestExistingPRUpdateRecoveryAcrossPublicationBoundaries(t *testing.T) {
+	for _, boundary := range []string{"before push", "after push", "after PATCH"} {
+		t.Run(boundary, func(t *testing.T) {
+			c, gh, w, op := pendingPRUpdate(t)
+			ctx := context.Background()
+			candidate, _ := c.candidate(ctx, w)
+			oldNumber, oldHead := gh.pr.Number, gh.pr.Head.SHA
+			c.Store.Put(ctx, "publication_intent", op.ID, w.ID, map[string]any{"candidate": candidate})
+			if boundary != "before push" {
+				if err := workspace.Push(ctx, w.Worktree, w.Branch, candidate.SHA); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if boundary == "after PATCH" {
+				var scope verification.Scope
+				c.Store.Record(ctx, "scope", w.ID, &scope)
+				if _, err := gh.Publish(ctx, c.Config.BaseBranch, w.Branch, w.ID, "Harness implementation "+w.ID, publicationBody(w, scope, candidate)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if oldHead == candidate.SHA {
+				t.Fatal("update fixture did not change candidate")
+			}
+			drive(t, c, 2)
+			after, _ := c.Store.Get(ctx, w.ID)
+			if after.Phase != domain.Reviewing || gh.pr.Number != oldNumber || gh.pr.Head.SHA != candidate.SHA || gh.posts != 2 {
+				t.Fatal(after, gh.pr, gh.posts)
+			}
+		})
+	}
+}
+func TestPRUpdateRecoveryRejectsWrongBase(t *testing.T) {
+	c, gh, w, op := pendingPRUpdate(t)
+	ctx := context.Background()
+	candidate, _ := c.candidate(ctx, w)
+	c.Store.Put(ctx, "publication_intent", op.ID, w.ID, map[string]any{"candidate": candidate})
+	gh.pr.Base.Ref = "unrelated"
+	drive(t, c, 1)
+	after, _ := c.Store.Get(ctx, w.ID)
+	if after.Phase != domain.Blocked || gh.posts != 1 {
+		t.Fatal(after, gh.posts)
+	}
+}
+func TestBaseRefreshCannotValidateMissingTestReferences(t *testing.T) {
+	c, gh, _, jobs := setup(t)
+	ctx := context.Background()
+	repo := c.Config.RepositoryPath
+	os.MkdirAll(filepath.Join(repo, "tests"), 0700)
+	os.WriteFile(filepath.Join(repo, "tests/test.txt"), []byte("expected behavior"), 0600)
+	if _, err := workspace.Freeze(ctx, repo, "existing tests"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Git(ctx, repo, "push", "origin", "trunk"); err != nil {
+		t.Fatal(err)
+	}
+	gh.approved = false
+	drive(t, c, 8)
+	os.Remove(filepath.Join(repo, "tests/test.txt"))
+	if _, err := workspace.Freeze(ctx, repo, "remove upstream test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Git(ctx, repo, "push", "origin", "trunk"); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := workspace.Resolve(ctx, repo, "HEAD")
+	gh.pr.Base.SHA = base
+	drive(t, c, 3)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Blocked || !strings.Contains(w.Reason, "not a tracked regular file") || jobs.calls != 1 || gh.merges != 0 {
+		t.Fatal(w, jobs.calls, gh.merges)
 	}
 }

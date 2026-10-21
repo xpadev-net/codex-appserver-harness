@@ -32,6 +32,9 @@ func (c *Controller) validation(ctx context.Context, w domain.WorkItem, op domai
 		if err = c.Store.Record(ctx, "plan", w.ID, &plan); err != nil {
 			return err
 		}
+		if err = plan.ValidateCommit(ctx, w.Worktree, candidate.SHA); err != nil {
+			return c.reject(ctx, w, op, err.Error())
+		}
 		profiles, err = plan.Profiles(c.Config.Verification)
 	}
 	if err != nil {
