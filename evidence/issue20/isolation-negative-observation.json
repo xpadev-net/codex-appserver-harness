@@ -14,7 +14,8 @@
   "model_turn": "not_attempted",
   "model_turn_reason": "worker has controller paths, Git authentication configuration or authenticated GitHub authority; no untrusted turn started",
   "network_policy_snapshot_present": false,
-  "observed_at": "2026-10-21T05:28:08.152454789Z",
+  "observed_at": "2026-10-21T05:38:05.329431513Z",
+  "probe_completed": true,
   "proxy_variables_present": false,
   "repository_api_status": "http_401",
   "repository_permissions_exposed": false,
@@ -25,5 +26,5 @@
   "write_access_exposed": false,
   "write_api_status": "http_401",
   "write_canary_number": 32,
-  "purpose": "controlled negative fixture: reject mounted Git authentication configuration even when gh API calls return 401"
+  "purpose": "controlled negative fixture: reject mounted direct Git authentication configuration even when gh API calls return 401"
 }

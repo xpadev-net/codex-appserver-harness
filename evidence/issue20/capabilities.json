@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "observed_at": "2026-10-21T05:29:42.611404+00:00",
+  "observed_at": "2026-10-21T05:40:20.819346+00:00",
   "repository": "xpadev-net/codex-appserver-harness",
   "repository_id": 1426858504,
   "default_branch": "master",
@@ -64,7 +64,7 @@
     "credential_isolation": {
       "state": "unknown",
       "reason": "Real repository/common Git directory was mounted; known controller paths were hidden, no direct GitHub auth variables or local auth configuration was observed, and unauthenticated read plus identical-title PATCH probes returned 401. The real authenticated worker deployment remains unconfigured.",
-      "evidence": "evidence/issue20/isolation-observation.json; evidence/issue20/isolation-negative-observation.json"
+      "evidence": "evidence/issue20/isolation-observation.json; docs/issue20-live-connections.md"
     },
     "ci_execution": {
       "state": "verified",

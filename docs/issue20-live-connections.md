@@ -56,3 +56,9 @@ worker は common Git directory を読み取れるため、その local Git 設�
 制御した一時 clone に無効な公開 canary header を設定し、`HARNESS_LIVE_CHECKOUT` にその絶対 path を渡して実行した。API read / PATCH は 401 だったが、Git 認証設定を検出して probe は拒否した。[否定試験の証拠](../evidence/issue20/isolation-negative-observation.json) の unsupported は、この意図的に設定した一時 clone の結果であり、現 checkout で本物の credential 漏えいを観測したという意味ではない。実 credential は使用せず、元の repository の Git 設定は変更していない。
 
 現在の checkout では、認証設定が検出されないことと 401 を再確認した。[現在環境の証拠](../evidence/issue20/isolation-observation.json) の能力は引き続き unknown。これらの probe を、未設定の認証済み worker / 実 model turn の実証に置き換えない。
+
+Git の `include` / `includeIf` も有効にして設定を辿る。[include 経由の否定試験](../evidence/issue20/isolation-include-negative-observation.json) でも、無効な公開 header を検出して拒否した。
+
+API コマンドが動かない、DNS/TLS/proxy 等で結果を確認できない場合を、401 と同一視しない。[読み取り失敗](../evidence/issue20/isolation-api-negative-observation.json) と [PATCH 失敗](../evidence/issue20/isolation-write-negative-observation.json) は、制御した一時 clone 内の gh wrapper が exit 42 を返すケースで検証した。実 credential や外部 service の障害を使わず、どちらも probe を失敗させ、`probe_completed: false` / `credential_isolation: unknown` を保存した。
+
+`probe_completed: true` は指定した測定が完了したという意味で、認証済み worker の capability が verified になったという意味ではない。現在環境では測定が完了しているが、その認証済み deployment と E2E は未確認のままである。

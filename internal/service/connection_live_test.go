@@ -52,7 +52,7 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := (LiveAgents{Config: cfg}).environment(w, home, strings.TrimSpace(gitdir))
-	obs := map[string]any{"observed_at": time.Now().UTC(), "launcher": "scripts/isolate-linux", "model_turn": "not_attempted", "thread_resume": "not_attempted", "dedicated_codex_home": "empty probe home", "credential_values_recorded": false, "workspace": workspaceKind}
+	obs := map[string]any{"observed_at": time.Now().UTC(), "launcher": "scripts/isolate-linux", "model_turn": "not_attempted", "thread_resume": "not_attempted", "dedicated_codex_home": "empty probe home", "credential_values_recorded": false, "workspace": workspaceKind, "credential_isolation": "unknown", "probe_completed": false, "model_turn_reason": "probe incomplete"}
 	defer func() {
 		data, err := json.MarshalIndent(obs, "", "  ")
 		if err != nil {
@@ -119,7 +119,7 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	// Query names only, without logging configuration keys or values. The real
 	// common Git directory is mounted as in production; no synthetic clone is used.
 	_, gitStatus := run(env, "git", "rev-parse", "--is-inside-work-tree")
-	authNames, authStatus := run(env, "git", "config", "--local", "--name-only", "--get-regexp", `(extraheader|^credential\.)`)
+	authNames, authStatus := run(env, "git", "config", "--local", "--includes", "--name-only", "--get-regexp", `(extraheader|^credential\.)`)
 	obs["git_repository_probe_status"] = gitStatus
 	obs["git_auth_config_query_status"] = authStatus
 	gitAuth := authStatus == "success" && authNames != ""
@@ -145,7 +145,8 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	obs["repository_api_status"] = repoStatus
 	obs["repository_permissions_exposed"] = permissions
 	writeExposed := false
-	obs["write_api_status"] = "not_attempted"
+	writeStatus := "not_attempted"
+	obs["write_api_status"] = writeStatus
 	if canary := os.Getenv("HARNESS_LIVE_WRITE_CANARY"); canary != "" {
 		number, err := strconv.Atoi(canary)
 		if err != nil || number < 1 {
@@ -160,9 +161,9 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 		if err != nil || strings.TrimSpace(string(current)) != title {
 			t.Fatal("canary title must match existing title; no request sent")
 		}
-		_, status := run(ghEnv, "gh", "api", endpoint, "--method", "PATCH", "-H", "Authorization:", "-f", "title="+title, "--jq", "true")
-		writeExposed = status == "success"
-		obs["write_api_status"] = status
+		_, writeStatus = run(ghEnv, "gh", "api", endpoint, "--method", "PATCH", "-H", "Authorization:", "-f", "title="+title, "--jq", "true")
+		writeExposed = writeStatus == "success"
+		obs["write_api_status"] = writeStatus
 		obs["write_access_exposed"] = writeExposed
 		obs["write_canary_number"] = number
 	}
@@ -176,12 +177,19 @@ func TestLiveWorkerConnectionBoundary(t *testing.T) {
 	obs["isolated_app_server_initialized"] = initialized
 	if !hidden || directAuth || gitAuth || authenticated || permissions || writeExposed {
 		obs["credential_isolation"] = "unsupported"
+		obs["probe_completed"] = true
 		obs["model_turn_reason"] = "worker has controller paths, Git authentication configuration or authenticated GitHub authority; no untrusted turn started"
 		t.Fatal("worker credential isolation failed; sanitized evidence saved")
+	}
+	repoDenied := repoStatus == "http_401" || (repoStatus == "success" && repo == "false")
+	if userStatus != "http_401" || !repoDenied || (writeStatus != "not_attempted" && writeStatus != "http_401") {
+		obs["model_turn_reason"] = "GitHub API boundary probes incomplete; command or transport failure is not absence of authority"
+		t.Fatal("GitHub API boundary probes are inconclusive; sanitized evidence saved")
 	}
 	obs["credential_isolation"] = "unknown"
 	obs["model_turn_reason"] = "negative probes do not attest the unconfigured authenticated worker/model deployment"
 	if !initialized || version != "codex-cli 0.163.0" {
 		t.Fatal("isolated pinned app-server was not established; sanitized evidence saved")
 	}
+	obs["probe_completed"] = true
 }
