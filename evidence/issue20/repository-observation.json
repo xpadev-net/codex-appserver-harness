@@ -1,0 +1,29 @@
+{
+  "observed_at": "2026-10-21T05:10:41.930301+00:00",
+  "repository": "xpadev-net/codex-appserver-harness",
+  "repository_id": 1426858504,
+  "default_branch": "master",
+  "actor": {
+    "id": 96982836,
+    "login": "xpadev-net",
+    "type": "User"
+  },
+  "permissions": {
+    "admin": true,
+    "maintain": true,
+    "push": true,
+    "triage": true,
+    "pull": true
+  },
+  "branch_protected": false,
+  "branch_protection": {
+    "enabled": false,
+    "required_status_checks": {
+      "enforcement_level": "off",
+      "contexts": [],
+      "checks": []
+    }
+  },
+  "effective_rules": [],
+  "administrative_bypass_requested": false
+}

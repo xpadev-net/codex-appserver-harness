@@ -1,0 +1,21 @@
+{
+  "controller_paths_hidden": true,
+  "credential_isolation": "unknown",
+  "credential_values_recorded": false,
+  "dedicated_codex_home": "empty probe home",
+  "git_auth_config_query_status": "exit_1",
+  "git_auth_configuration_present": false,
+  "git_remote_config_query_status": "success",
+  "git_repository_probe_status": "success",
+  "github_credential_environment_present": false,
+  "launcher": "scripts/isolate-linux",
+  "model_turn": "not_attempted",
+  "model_turn_reason": "effective Git URL metadata could not be inspected",
+  "network_policy_snapshot_present": false,
+  "observed_at": "2026-10-21T06:07:21.032347085Z",
+  "probe_completed": false,
+  "proxy_variables_present": false,
+  "thread_resume": "not_attempted",
+  "workspace": "operator-selected probe checkout",
+  "purpose": "controlled negative fixture: explicit Git helper syntax is rejected before URI parsing; no credential value is recorded"
+}

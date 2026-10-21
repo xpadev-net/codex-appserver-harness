@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "observed_at": "2026-10-21T06:08:10.523076+00:00",
+  "repository": "xpadev-net/codex-appserver-harness",
+  "repository_id": 1426858504,
+  "default_branch": "master",
+  "codex_version": "codex-cli 0.163.0",
+  "capabilities": {
+    "app_server": {
+      "state": "verified",
+      "reason": "Pinned executable completed initialize/initialized; no model turn or resume is implied.",
+      "evidence": "evidence/issue20/doctor.json; evidence/issue20/isolation-observation.json"
+    },
+    "ci_mapping": {
+      "state": "unknown",
+      "reason": "Observed check head_sha is the head for both jobs, while PR checkout is the test merge and push checkout is the head. A configured execution-SHA contract is still required.",
+      "evidence": "evidence/issue20/ci-observation.json"
+    },
+    "cloud_native_approval": {
+      "state": "unknown",
+      "reason": "Provider returned an account/GitHub-connection prerequisite. No native review or APPROVED for a SHA/round was observed.",
+      "evidence": "evidence/issue20/cloud-observation.json"
+    },
+    "cloud_request": {
+      "state": "unknown",
+      "reason": "A request from actor 96982836 received a provider prerequisite response asking for Codex account/GitHub connection; no accepted review was observed.",
+      "evidence": "evidence/issue20/cloud-observation.json"
+    },
+    "github_read": {
+      "state": "verified",
+      "reason": "repository metadata retrieved",
+      "evidence": "gh api repos/xpadev-net/codex-appserver-harness"
+    },
+    "github_write": {
+      "state": "verified",
+      "reason": "Development PR creation, update and squash merge observed for actor 96982836; this is the current personal administrator identity.",
+      "evidence": "https://github.com/xpadev-net/codex-appserver-harness/pull/31"
+    },
+    "review_sha": {
+      "state": "unknown",
+      "reason": "Provider returned an account/GitHub-connection prerequisite. No native review or APPROVED for a SHA/round was observed.",
+      "evidence": "evidence/issue20/cloud-observation.json"
+    },
+    "rules_enforced": {
+      "state": "unknown",
+      "reason": "Default branch is unprotected with no effective rules; current actor has admin permission. Non-bypass enforcement cannot be established in this configuration.",
+      "evidence": "evidence/issue20/repository-observation.json"
+    },
+    "thread_resume": {
+      "state": "unknown",
+      "reason": "No actual model turn or persistent role-thread resumption was exercised with dedicated worker authentication.",
+      "evidence": "docs/issue20-live-connections.md"
+    },
+    "worker_launcher": {
+      "state": "verified",
+      "reason": "Native pinned app-server initialized through scripts/isolate-linux with an empty dedicated home.",
+      "evidence": "evidence/issue20/isolation-observation.json"
+    },
+    "worker_model": {
+      "state": "unknown",
+      "reason": "No dedicated worker authentication/model deployment was supplied; no untrusted model turn was started.",
+      "evidence": "evidence/issue20/isolation-observation.json"
+    },
+    "credential_isolation": {
+      "state": "unknown",
+      "reason": "Real repository/common Git directory was mounted; known controller paths were hidden, no direct GitHub auth variables or local auth configuration was observed, and unauthenticated read plus identical-title PATCH probes returned 401. The real authenticated worker deployment remains unconfigured.",
+      "evidence": "evidence/issue20/isolation-observation.json; docs/issue20-live-connections.md"
+    },
+    "ci_execution": {
+      "state": "verified",
+      "reason": "Both push and pull_request Go jobs executed go test and go vet and completed successfully.",
+      "evidence": "evidence/issue20/ci-observation.json"
+    }
+  },
+  "auto_merge_ready": false
+}

@@ -1,0 +1,40 @@
+{
+  "observed_at": "2026-10-21T05:19:06.548681+00:00",
+  "repository": "xpadev-net/codex-appserver-harness",
+  "repository_id": 1426858504,
+  "pull_request": 32,
+  "head_at_request": "15f807fffa068c94cadd32d21d738eff91130557",
+  "head_at_observation": "15f807fffa068c94cadd32d21d738eff91130557",
+  "request_comment": {
+    "id": 6308650350,
+    "created_at": "2026-10-21T05:16:49Z",
+    "url": "https://github.com/xpadev-net/codex-appserver-harness/pull/32#issuecomment-6308650350",
+    "actor": {
+      "id": 96982836,
+      "login": "xpadev-net",
+      "type": "User"
+    },
+    "marker": "harness-connection-probe:issue-20:round-1:head:15f807fffa068c94cadd32d21d738eff91130557"
+  },
+  "trusted_provider_identity_configured": false,
+  "provider_reaction_candidates": [],
+  "provider_comment_candidates": [
+    {
+      "id": 6308650890,
+      "created_at": "2026-10-21T05:16:52Z",
+      "url": "https://github.com/xpadev-net/codex-appserver-harness/pull/32#issuecomment-6308650890",
+      "actor": {
+        "id": 199175422,
+        "login": "chatgpt-codex-connector[bot]",
+        "type": "Bot"
+      },
+      "usage_limit_observed": false,
+      "response_class": "account_github_connection_required"
+    }
+  ],
+  "native_review_candidates": [],
+  "native_approval_observed": false,
+  "re_push_provider_fixture": "not_exercised",
+  "stale_provider_result_fixture": "not_exercised",
+  "outcome": "account_github_connection_required"
+}

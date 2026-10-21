@@ -25,8 +25,9 @@ service統合テストはfake GitHub / model / job adapterと実際のローカ�
 - `scripts/isolate-linux`を用いたmount namespace内から、既知のcontroller GitHub資格情報パスが見えないこと。
 - 開発PRごとの`codex exec review --base <既定ブランチ>`とローカルGo tests/vet。
 
-GitHub Actionsはアカウントのbilling/spending limitによりjobが開始されなかった。
-必須チェックや保護ルールを迂回していない。ローカル検証と外部CIの未実行を区別する。
+2026-10-21 の追加観測では GitHub Actions の push / pull_request job が実起動し、Go tests/vet が成功した。check の head SHA と実 checkout SHA の違いを保存した。現在の branch は保護されておらず、管理者主体での開発 merge は rules / bypass 契約の証明にはしない。
+
+現在の接続証拠と未確認事項は [#20 実接続記録](issue20-live-connections.md) と [能力 report](../evidence/issue20/capabilities.json) を参照する。#20 の E2E 完成条件は未達。
 
 ## 導入先で残る接続検証
 
