@@ -1,0 +1,236 @@
+package storage
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/worker"
+)
+
+var _ worker.SessionPersistence = (*KernelStore)(nil)
+
+func sessionSnapshot() contract.InputSnapshot {
+	data := []byte(`{"schema_version":1,"wave":"bound by controller"}`)
+	return contract.InputSnapshot{ID: "snapshot", Digest: fmt.Sprintf("%x", sha256.Sum256(data)), Input: data}
+}
+func boundTaskFixture(t *testing.T) (*KernelStore, contract.SessionBinding) {
+	t.Helper()
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := store.AdoptPlan(ctx, wave.Target(), "initial", storagePlanFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.Task(ctx, receipt.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := store.SessionBinding(ctx, task.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReserveSessionThread(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.BindSessionThread(ctx, binding, "thread"); err != nil {
+		t.Fatal(err)
+	}
+	binding, err = store.SessionBinding(ctx, binding.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, binding
+}
+func TestKernelSessionReservesSnapshotsRunsAndPreservesUnknownStarts(t *testing.T) {
+	ctx := context.Background()
+	store, binding := boundTaskFixture(t)
+	run := contract.SessionRun{ID: "run", ThreadID: binding.ThreadID, State: "starting", Started: time.Now().UTC(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	snapshot := sessionSnapshot()
+	if err := store.ReserveSessionRun(ctx, binding, snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	run.State = "unknown"
+	if err := store.Put(ctx, "agent_run", run.ID, binding.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ArchiveSessionRun(ctx, binding.ID, run.ID, "must read existing history"); err == nil {
+		t.Fatal("unknown start discarded")
+	}
+	current, err := store.SessionBinding(ctx, binding.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	another := run
+	another.ID = "new-run"
+	another.State = "starting"
+	if err = store.ReserveSessionRun(ctx, current, snapshot, another); err == nil {
+		t.Fatal("active run duplicated")
+	}
+	run.State = "completed"
+	run.TurnID = "turn"
+	run.Final = `{"observed":"completed"}`
+	if err = store.Put(ctx, "agent_run", run.ID, binding.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ArchiveSessionRun(ctx, binding.ID, run.ID, "not stopped yet"); err == nil {
+		t.Fatal("completion released live process")
+	}
+	if err = store.MarkSessionStopped(ctx, binding.ID, "wrong-run"); err == nil {
+		t.Fatal("wrong stopping proof accepted")
+	}
+	if err = store.MarkSessionStopped(ctx, binding.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ArchiveSessionRun(ctx, binding.ID, run.ID, "controller applied structured result"); err != nil {
+		t.Fatal(err)
+	}
+	// A late retry of an old disposition must not block a newer Task attempt.
+	current, err = store.SessionBinding(ctx, binding.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	another = run
+	another.ID, another.State, another.TurnID, another.Final = "retry", "starting", "", ""
+	if err = store.ReserveSessionRun(ctx, current, snapshot, another); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ArchiveSessionRun(ctx, binding.ID, run.ID, "controller applied structured result"); err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.Task(ctx, binding.TaskID)
+	if err != nil || task.State != contract.TaskRunning || task.Attempts != 2 {
+		t.Fatal("old disposition changed new attempt", task, err)
+	}
+	if err = store.ArchiveSessionRun(ctx, binding.ID, run.ID, "different disposition"); err == nil {
+		t.Fatal("conflicting disposition accepted")
+	}
+	altered := run
+	altered.Final = "rewritten completion"
+	if err = store.Put(ctx, "agent_run", run.ID, binding.ID, altered); err == nil {
+		t.Fatal("confirmed result overwritten")
+	}
+	if err = store.MarkSessionStopped(ctx, binding.ID, run.ID); err == nil {
+		t.Fatal("late stopping proof accepted")
+	}
+	var taskAttempts int
+	if err = store.DB.QueryRow("SELECT sum(amount) FROM kernel_budget_ledger WHERE kind='task_attempt'").Scan(&taskAttempts); err != nil || taskAttempts != 2 {
+		t.Fatal(taskAttempts, err)
+	}
+}
+func TestKernelThreadCreationAndIdentityAreExclusive(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	first, err := store.SessionBinding(ctx, request.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReserveSessionThread(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReserveSessionThread(ctx, first); err == nil {
+		t.Fatal("unknown thread creation repeated")
+	}
+	if err = store.BindSessionThread(ctx, first, "thread"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.SessionBinding(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.BindSessionThread(ctx, current, "replacement"); err == nil {
+		t.Fatal("normal binding changed thread")
+	}
+	second, err := store.CreateOrchestrator(ctx, "other", first.Model, first.CWD, first.Sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReserveSessionThread(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.BindSessionThread(ctx, second, "thread"); err == nil {
+		t.Fatal("thread assigned to two sessions")
+	}
+}
+func TestKernelMainRebindingRequiresQuiescentAppliedRunAndSavedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	binding, err := store.SessionBinding(ctx, request.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.ReserveSessionThread(ctx, binding)
+	if err = store.BindSessionThread(ctx, binding, "old-main"); err != nil {
+		t.Fatal(err)
+	}
+	binding, err = store.SessionBinding(ctx, binding.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RebindMainThread(ctx, binding, "new-main", "missing", "history unavailable"); err == nil {
+		t.Fatal("snapshotless recovery")
+	}
+	snapshot := sessionSnapshot()
+	run := contract.SessionRun{ID: "main-run", ThreadID: binding.ThreadID, State: "starting", Started: time.Now(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if err = store.ReserveSessionRun(ctx, binding, snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RebindMainThread(ctx, binding, "new-main", snapshot.ID, "maintenance"); err == nil {
+		t.Fatal("active main rebound")
+	}
+	run.State = "completed"
+	run.TurnID = "turn"
+	if err = store.Put(ctx, "agent_run", run.ID, binding.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.MarkSessionStopped(ctx, binding.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RebindMainThread(ctx, binding, "new-main", snapshot.ID, "maintenance"); err == nil {
+		t.Fatal("unapplied inputs abandoned")
+	}
+	if err = store.ArchiveSessionRun(ctx, binding.ID, run.ID, "plan applied"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RebindMainThread(ctx, binding, "new-main", snapshot.ID, "maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := store.SessionBinding(ctx, binding.ID)
+	if err != nil || fresh.ID != binding.ID || fresh.ThreadID != "new-main" || fresh.Generation != binding.Generation+1 {
+		t.Fatal(fresh, err)
+	}
+	if err = store.RebindMainThread(ctx, binding, "another-main", snapshot.ID, "stale request"); err == nil {
+		t.Fatal("stale binding reused")
+	}
+	var audits int
+	if err = store.DB.QueryRow("SELECT count(*) FROM kernel_rebindings").Scan(&audits); err != nil || audits != 1 {
+		t.Fatal(audits, err)
+	}
+}
+func TestKernelSnapshotMismatchRollsBackAttempt(t *testing.T) {
+	ctx := context.Background()
+	store, binding := boundTaskFixture(t)
+	run := contract.SessionRun{ID: "run", ThreadID: binding.ThreadID, State: "starting", Started: time.Now(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	snapshot := sessionSnapshot()
+	snapshot.Digest = "wrong"
+	if err := store.ReserveSessionRun(ctx, binding, snapshot, run); err == nil {
+		t.Fatal("false snapshot accepted")
+	}
+	var saved contract.SessionRun
+	if err := store.Record(ctx, "agent_run", run.ID, &saved); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("failed reservation recorded a run", err)
+	}
+	task, err := store.Task(ctx, binding.TaskID)
+	if err != nil || task.Attempts != 0 {
+		t.Fatal(task, err)
+	}
+}
