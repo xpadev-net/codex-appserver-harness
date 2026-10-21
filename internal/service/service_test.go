@@ -871,3 +871,33 @@ func TestCIFailureSelectionAndMechanicalHold(t *testing.T) {
 		})
 	}
 }
+
+type repairWithTests struct{ fake *fakeAgents }
+
+func (a repairWithTests) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	r, err := a.fake.Run(ctx, w, op, input, schema)
+	if err == nil && op.Kind == "implement" && a.fake.calls > 1 {
+		err = os.WriteFile(filepath.Join(w.Worktree, "tests", "test.txt"), []byte("updated test for implementation repair"), 0600)
+	}
+	return r, err
+}
+
+func TestCIRepairChangingTestsRetiresOldCorrection(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	if err := c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest()); err != nil {
+		t.Fatal(err)
+	}
+	gh.ciFailFirst = true
+	c.Agents = repairWithTests{agents}
+	drive(t, c, 32)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Merged || agents.calls != 5 {
+		t.Fatalf("phase=%s reason=%s agent_calls=%d", w.Phase, w.Reason, agents.calls)
+	}
+	history, err := c.Store.Records(ctx, "correction_history", "w")
+	if err != nil || len(history) != 1 {
+		t.Fatal("correction history lost", history, err)
+	}
+}

@@ -411,3 +411,25 @@ func TestEventRecordsRejectStaleCandidateAtomically(t *testing.T) {
 		t.Fatal("stale evidence marker committed", dispatched, err)
 	}
 }
+
+func TestAdoptionRetiresCorrectionsAndKeepsHistory(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	if err := s.Claim(ctx, work()); err != nil {
+		t.Fatal(err)
+	}
+	old := map[string]string{"candidate": "old", "evidence": "ci-attempt"}
+	if err := s.Put(ctx, "correction", "wi", "wi", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Adopt(ctx, "wi", 2, 1, map[string]any{"scope": "new explicit scope"}); err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]string
+	if err := s.Record(ctx, "correction", "wi", &saved); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("old correction still active", err)
+	}
+	if err := s.Record(ctx, "correction_history", "wi:scope1", &saved); err != nil || saved["evidence"] != "ci-attempt" {
+		t.Fatal(saved, err)
+	}
+}

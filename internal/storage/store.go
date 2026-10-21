@@ -751,6 +751,12 @@ func (s *Store) Adopt(ctx context.Context, id string, scopeRevision, policyRevis
 	if _, err = tx.ExecContext(ctx, "INSERT INTO records(kind,id,work_item_id,payload) SELECT 'scope_history',?,work_item_id,payload FROM records WHERE kind='scope' AND id=?", fmt.Sprintf("%s:%d", id, w.ScopeRevision), id); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO records SELECT 'correction_history',?,work_item_id,payload FROM records WHERE kind='correction' AND id=?", fmt.Sprintf("%s:scope%d", id, w.ScopeRevision), id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE kind='correction' AND id=?", id); err != nil {
+		return err
+	}
 	w.ScopeRevision = scopeRevision
 	w.PolicyRevision = policyRevision
 	previousPhase := w.Phase

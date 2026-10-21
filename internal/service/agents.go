@@ -336,6 +336,15 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			return err
 		}
 
+		if next.ID != candidate.ID && (len(correction.EvidenceIDs) > 0 || len(correction.FeedbackIDs) > 0) {
+			if err = c.Store.Put(ctx, "correction_history", op.ID, w.ID, correction); err != nil {
+				return err
+			}
+			correction = Correction{Consumed: true, EvidenceIDs: []string{}, FeedbackIDs: []string{}}
+			if err = c.Store.Put(ctx, "correction", w.ID, w.ID, correction); err != nil {
+				return err
+			}
+		}
 		if w.Candidate != "" {
 			var previous verification.Plan
 			if c.Store.Record(ctx, "plan", w.ID, &previous) == nil {
