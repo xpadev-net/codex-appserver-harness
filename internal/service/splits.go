@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -100,7 +101,38 @@ func (c *Controller) splitComplete(ctx context.Context, w domain.WorkItem, seen 
 	}
 	seen[w.ID] = true
 	if w.Phase == domain.Merged {
-		return true, nil
+		var scope verification.Scope
+		if err := c.Store.Record(ctx, "scope", w.ID, &scope); err != nil {
+			return false, err
+		}
+		if err := scope.Validate(); err != nil {
+			return false, err
+		}
+		if len(scope.Remaining) == 0 {
+			return true, nil
+		}
+		next, err := c.Store.Get(ctx, splittingResidual(w, scope).ID)
+		if missing(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		var nextScope verification.Scope
+		if err = c.Store.Record(ctx, "scope", next.ID, &nextScope); err != nil {
+			return false, err
+		}
+		expected, err := splitting.NextScope(scope)
+		if err != nil {
+			return false, err
+		}
+		// A newer or unrelated scope cannot prove the old residual complete.
+		a, _ := json.Marshal(expected)
+		b, _ := json.Marshal(nextScope)
+		if next.Issue != w.Issue || next.RepositoryID != w.RepositoryID || string(a) != string(b) {
+			return false, nil
+		}
+		return c.splitComplete(ctx, next, seen)
 	}
 	if w.Phase != domain.Split {
 		return false, nil
@@ -117,6 +149,20 @@ func (c *Controller) splitComplete(ctx context.Context, w domain.WorkItem, seen 
 		ok, err := c.splitComplete(ctx, nested, seen)
 		if err != nil || !ok {
 			return ok, err
+		}
+		var proof struct {
+			ScopeRevision int              `json:"scope_revision"`
+			Candidate     runner.Candidate `json:"candidate"`
+			Results       []runner.Result  `json:"results"`
+		}
+		key := fmt.Sprintf("r%d-i%d", nested.RepositoryID, nested.Issue)
+		if err = c.Store.Record(ctx, "parent_completion", key, &proof); missing(err) {
+			return false, nil
+		} else if err != nil {
+			return false, err
+		}
+		if proof.ScopeRevision != nested.ScopeRevision || proof.Candidate.ScopeRevision != nested.ScopeRevision || !runner.Passed(proof.Candidate, c.Config.Verification, proof.Results) {
+			return false, nil
 		}
 	}
 	return len(progress.Children) > 0, nil

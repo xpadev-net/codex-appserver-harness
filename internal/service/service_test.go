@@ -137,6 +137,7 @@ type fakeAgents struct {
 	calls          int
 	classification string
 	autoSplit      bool
+	partialChild   bool
 	interim        bool
 }
 
@@ -159,6 +160,14 @@ func (f *fakeAgents) Run(_ context.Context, w domain.WorkItem, op domain.Operati
 			}
 			childID := "child-" + criterion.ID
 			children = append(children, splitting.Child{Key: fmt.Sprint("part", i), Title: criterion.ID, Requirement: criterion.Requirement, Criteria: []verification.Criterion{{ID: childID, Requirement: criterion.Requirement}}, Coverage: []splitting.Coverage{{ParentCriterion: criterion.ID, ChildCriterion: childID}}, DependsOn: deps})
+			if f.partialChild && i == 0 {
+				child := &children[len(children)-1]
+				child.Criteria = append(child.Criteria, verification.Criterion{ID: childID + "-extra", Requirement: "second part of " + criterion.Requirement})
+				child.Coverage[0].PartID = "first"
+				child.Coverage[0].PartCount = 2
+				child.Coverage[0].Basis = "two required behaviors"
+				child.Coverage = append(child.Coverage, splitting.Coverage{ParentCriterion: criterion.ID, ChildCriterion: childID + "-extra", PartID: "second", PartCount: 2, Basis: "two required behaviors"})
+			}
 		}
 		output = splitting.Proposal{SchemaVersion: 1, WorkItemID: w.ID, ScopeRevision: w.ScopeRevision, Outcome: "split", Children: children}
 	} else if op.Kind == "implement" {
@@ -650,5 +659,60 @@ func TestIgnoredTestsCannotBecomeCandidateEvidence(t *testing.T) {
 	}
 	if gh.posts != 0 || gh.merges != 0 || jobs.calls != 0 {
 		t.Fatal("uncommitted test evidence escaped to validation/publication")
+	}
+}
+
+func TestSplitParentWaitsForChildResidualAndFinalAcceptance(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	agents.autoSplit, agents.partialChild = true, true
+	for range 15 {
+		drive(t, c, 1)
+		root, _ := c.Store.Get(ctx, "w")
+		if root.Phase == domain.Split {
+			break
+		}
+	}
+	child, err := c.Store.Get(ctx, "w-part0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var childScope verification.Scope
+	c.Store.Record(ctx, "scope", child.ID, &childScope)
+	childScope.Included = []string{childScope.Criteria[0].ID}
+	childScope.Remaining = []string{childScope.Criteria[1].ID}
+	c.Store.Put(ctx, "scope", child.ID, child.ID, childScope)
+	for range 25 {
+		drive(t, c, 1)
+		child, _ = c.Store.Get(ctx, child.ID)
+		if child.Phase == domain.Merged {
+			break
+		}
+	}
+	root, _ := c.Store.Get(ctx, "w")
+	if err = c.afterMerge(ctx, child); err != nil {
+		t.Fatal(err)
+	}
+	next, err := c.Store.Get(ctx, child.ID+"-remaining")
+	if err != nil || next.Phase != domain.Ready {
+		t.Fatal(next, err)
+	}
+	if err = c.finalAcceptance(ctx, root, scope); err != nil {
+		t.Fatal(err)
+	}
+	if gh.issue.State != "open" {
+		t.Fatal("parent closed before residual merge")
+	}
+	if ok, err := c.splitComplete(ctx, child, map[string]bool{}); err != nil || ok {
+		t.Fatal("partial child counted complete", ok, err)
+	}
+	drive(t, c, 70)
+	if gh.issue.State != "closed" || gh.merges != 3 || gh.closed != 3 {
+		t.Fatal(gh.issue.State, gh.merges, gh.closed)
 	}
 }
