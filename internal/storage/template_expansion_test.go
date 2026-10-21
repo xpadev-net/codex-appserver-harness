@@ -499,3 +499,112 @@ func TestTemplateClonedPendingReviewRetainsItsAuthorityAndNextRound(t *testing.T
 		t.Fatal(wave, err)
 	}
 }
+
+func TestTemplateDirectArtifactReviewRebindsOtherProducerGrant(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	request.Policy.Limits.Replans = 0
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := mustImport(t, store, ArtifactImport{SessionID: wave.OrchestratorSessionID, Target: wave.Target(), Key: "subject", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "external", Reference: "uploaded subject"}}, "old uploaded subject")
+	plan := storagePlanFixture()
+	plan.Templates = []contract.FixReviewTemplate{kernelTemplate()}
+	plan.Phases[0].Tasks[0].InputArtifactIDs = []string{subject.ID}
+	plan.Phases[1].Tasks[0].DependsOn = nil
+	plan.Phases[1].Tasks[0].InputArtifactIDs = []string{subject.ID}
+	plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "report", Tasks: []contract.TaskSpec{{ID: "report", Kind: "work", Instruction: "report corrected upload", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: "work"}, {TaskID: "review"}}}}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"report"}}, FailurePolicy: "drain_and_block"})
+	initial, err := store.AdoptPlan(ctx, wave.Target(), "initial", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := store.Task(ctx, initial.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	supporting := completeTemplateTask(t, store, work, "work observations", "", nil, subject)
+	source, err := store.Task(ctx, initial.CreatedTaskIDs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeTemplateTask(t, store, source, "reviewed direct input", subject.Digest, []string{"artifact_defect"})
+	expanded, err := store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: wave.Target(), ReviewTaskID: source.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corrected domain.Artifact
+	var report domain.Task
+	for _, id := range expanded.Admission.CreatedTaskIDs {
+		task, err := store.Task(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch task.Spec.Kind {
+		case "fix":
+			corrected = completeTemplateTask(t, store, task, "corrected upload", "", nil)
+		case "review":
+			completeTemplateTask(t, store, task, "clean upload review", corrected.Digest, nil)
+		case "work":
+			report = task
+		}
+	}
+	if _, _, err = store.ReadArtifact(ctx, report.SessionID, report.Target(), subject.ID, 0, 100); err == nil {
+		t.Fatal("old subject still granted through producer not used by reviewer")
+	}
+	if _, _, err = store.ReadArtifact(ctx, report.SessionID, report.Target(), corrected.ID, 0, 100); err != nil {
+		t.Fatal("corrected upload not granted", err)
+	}
+	if _, _, err = store.ReadArtifact(ctx, report.SessionID, report.Target(), supporting.ID, 0, 100); err != nil {
+		t.Fatal("unrelated producer output dropped", err)
+	}
+}
+
+func TestTemplateFutureClonePreservesArtifactSelector(t *testing.T) {
+	ctx := context.Background()
+	store, req := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := mustImport(t, store, ArtifactImport{SessionID: "main", Target: wave.Target(), Key: "shared", Kind: "reference", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "external", Reference: "reference"}}, "shared")
+	plan := storagePlanFixture()
+	plan.Templates = []contract.FixReviewTemplate{kernelTemplate()}
+	plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "future", Tasks: []contract.TaskSpec{
+		{ID: "future-A", Kind: "work", Instruction: "produce report and pass through reference", Criteria: []string{"AC"}, InputArtifactIDs: []string{shared.ID}},
+		{ID: "future-B", Kind: "work", Instruction: "consume only shared reference", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: "future-A", ArtifactID: shared.ID}}},
+	}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"future-A", "future-B"}}, FailurePolicy: "drain_and_block"})
+	initial, err := store.AdoptPlan(ctx, wave.Target(), "initial", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, _ := store.Task(ctx, initial.CreatedTaskIDs[0])
+	candidate := completeTemplateTask(t, store, work, "candidate", "", nil)
+	review, _ := store.Task(ctx, initial.CreatedTaskIDs[1])
+	completeTemplateTask(t, store, review, "review", candidate.Digest, []string{"artifact_defect"})
+	expanded, err := store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: wave.Target(), ReviewTaskID: review.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixed domain.Artifact
+	var unrelated domain.Artifact
+	var consumer domain.Task
+	for _, id := range expanded.Admission.CreatedTaskIDs {
+		task, _ := store.Task(ctx, id)
+		switch task.Spec.Kind {
+		case "fix":
+			fixed = completeTemplateTask(t, store, task, "fixed", "", nil)
+		case "review":
+			completeTemplateTask(t, store, task, "clean", fixed.Digest, nil)
+		case "work":
+			if task.Spec.Instruction == "produce report and pass through reference" {
+				unrelated = completeTemplateTask(t, store, task, "unrelated report", "", nil, shared)
+			} else {
+				consumer = task
+			}
+		}
+	}
+	if _, _, err := store.ReadArtifact(ctx, consumer.SessionID, consumer.Target(), unrelated.ID, 0, 100); err == nil {
+		t.Fatalf("cloned consumer gained unrelated output: deps=%+v", consumer.Spec.DependsOn)
+	}
+}

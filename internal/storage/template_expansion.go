@@ -397,6 +397,39 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			}
 		}
 	}
+	// The reviewer may receive the subject directly by Artifact ID rather than
+	// through a producer edge. Find every already completed producer whose result
+	// grants that same immutable subject, so later consumers cannot keep a stale
+	// grant through an edge the reviewer itself did not need.
+	for _, phase := range current.Phases[:position+1] {
+		for _, spec := range phase.Tasks {
+			task, err := loadTask(ctx, tx, structureID("task-", wave.ID, spec.ID))
+			if err != nil {
+				return plan, reviewRoots, err
+			}
+			result, err := k.completedTaskResultTx(ctx, tx, wave, task)
+			if err != nil {
+				return plan, reviewRoots, err
+			}
+			outputs := resultArtifactReferences(result)
+			matches := []string{}
+			for _, id := range outputs {
+				a, err := loadArtifact(ctx, tx, id)
+				if err != nil {
+					return plan, reviewRoots, err
+				}
+				if a.Digest == inputDigest {
+					matches = append(matches, id)
+				}
+			}
+			if len(matches) > 0 {
+				subjectProducers[spec.ID] = outputs
+				for _, id := range matches {
+					subjectArtifacts[id] = true
+				}
+			}
+		}
+	}
 	sort.Strings(sourceLocals)
 	sort.Strings(sourceResults)
 	criteria := []string{}
@@ -485,6 +518,13 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 				}
 			}
 			for _, dep := range old.DependsOn {
+				if dep.ArtifactID != "" && subjectArtifacts[dep.ArtifactID] {
+					if cloneIDs[dep.TaskID] != "" {
+						return plan, reviewRoots, fmt.Errorf("%w: explicit future subject selector needs parent remapping", ErrTemplateNeedsMain)
+					}
+					needsFixedSubject = true
+					continue
+				}
 				if outputs, affected := subjectProducers[dep.TaskID]; affected && (dep.ArtifactID == "" || subjectArtifacts[dep.ArtifactID]) {
 					needsFixedSubject = true
 					if dep.ArtifactID == "" {
@@ -502,11 +542,14 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 					}
 				}
 				if replacements[dep.TaskID] != nil {
+					if dep.ArtifactID != "" {
+						return plan, reviewRoots, fmt.Errorf("%w: explicit review-output selector needs parent remapping", ErrTemplateNeedsMain)
+					}
 					for _, id := range replacements[dep.TaskID] {
 						task.DependsOn = append(task.DependsOn, contract.TaskDependency{TaskID: id})
 					}
 				} else if next := cloneIDs[dep.TaskID]; next != "" {
-					task.DependsOn = append(task.DependsOn, contract.TaskDependency{TaskID: next})
+					task.DependsOn = append(task.DependsOn, contract.TaskDependency{TaskID: next, ArtifactID: dep.ArtifactID})
 				} else {
 					task.DependsOn = append(task.DependsOn, dep)
 				}
