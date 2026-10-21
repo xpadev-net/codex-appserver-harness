@@ -554,6 +554,34 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 		value := ""
 		if err == nil && prior.State == contract.TaskCompleted && prior.ScopeRevision == wave.ScopeRevision && prior.PolicyRevision == wave.Policy.Revision {
 			value = prior.ResultID
+			if dependency.ArtifactID != "" {
+				var result contract.TaskResult
+				if err = completionRecord(ctx, tx, "task_result", prior.ResultID, &result); err != nil {
+					return "", err
+				}
+				found := false
+				for _, id := range result.Artifacts {
+					found = found || id == dependency.ArtifactID
+				}
+				if !found || result.TaskID != prior.ID || result.PhaseID != prior.PhaseID || result.Target != prior.Target() || result.Outcome != "result" {
+					return "", errors.New("dependency artifact does not belong to the bound completed result")
+				}
+				var state, digest, owner string
+				var payload []byte
+				if err = tx.QueryRowContext(ctx, "SELECT state,digest,wave_id,payload FROM kernel_artifacts WHERE id=?", dependency.ArtifactID).Scan(&state, &digest, &owner, &payload); err != nil {
+					return "", err
+				}
+				var metadata struct {
+					ScopeRevision int `json:"scope_revision"`
+				}
+				if err = json.Unmarshal(payload, &metadata); err != nil {
+					return "", err
+				}
+				if state != "committed" || owner != wave.ID || metadata.ScopeRevision != wave.ScopeRevision {
+					return "", errors.New("dependency artifact is missing, expired or outside the current scope")
+				}
+				references["dependency_artifact:"+dependency.TaskID+":"+dependency.ArtifactID] = digest
+			}
 		}
 		references["dependency:"+dependency.TaskID] = value
 	}

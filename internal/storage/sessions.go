@@ -77,7 +77,7 @@ func (k *KernelStore) ReserveSessionThread(ctx context.Context, expected contrac
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(b, expected) || b.ThreadID != "" {
+	if !reflect.DeepEqual(b, expected) {
 		return errors.New("session changed before thread creation")
 	}
 	if err = sessionDispatchableTx(ctx, tx, b); err != nil {
@@ -92,7 +92,11 @@ func (k *KernelStore) ReserveSessionThread(ctx context.Context, expected contrac
 			return errors.New("Wave deadline exceeded")
 		}
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE kernel_sessions SET creating=1 WHERE id=? AND creating=0 AND active_run_id=''", b.ID)
+	creating := 0
+	if b.ThreadID == "" {
+		creating = 1
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE kernel_sessions SET creating=?,process_stopped=0 WHERE id=? AND creating=0 AND active_run_id='' AND process_stopped=1", creating, b.ID)
 	if err != nil {
 		return err
 	}
@@ -100,7 +104,23 @@ func (k *KernelStore) ReserveSessionThread(ctx context.Context, expected contrac
 	if count != 1 {
 		return errors.New("unknown thread creation or active run requires reconciliation")
 	}
-	if err = kernelRecordTx(ctx, tx, "thread_creation_intent", fmt.Sprintf("%s:g%d", b.ID, b.Generation), b.ID, b); err != nil {
+	b.PreparationID, err = opaqueID("prepare-")
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET payload=? WHERE id=?", raw, b.ID); err != nil {
+		return err
+	}
+	if b.ThreadID == "" {
+		if err = kernelRecordTx(ctx, tx, "thread_creation_intent", fmt.Sprintf("%s:g%d", b.ID, b.Generation), b.ID, b); err != nil {
+			return err
+		}
+	}
+	if err = kernelRecordTx(ctx, tx, "session_preparation", b.ID, b.ID, b); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -124,11 +144,12 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 	if err = sessionDispatchableTx(ctx, tx, b); err != nil {
 		return err
 	}
-	var creating int
-	if err = tx.QueryRowContext(ctx, "SELECT creating FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating); err != nil {
+	var creating, stopped int
+	var active string
+	if err = tx.QueryRowContext(ctx, "SELECT creating,process_stopped,active_run_id FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating, &stopped, &active); err != nil {
 		return err
 	}
-	if b.ThreadID == "" && creating != 1 {
+	if stopped != 0 || active != "" || (b.ThreadID == "" && creating != 1) {
 		return errors.New("thread creation was not reserved")
 	}
 	b.ThreadID = thread
@@ -163,7 +184,7 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(b, expected) || b.ThreadID == "" {
+	if !reflect.DeepEqual(b, expected) || b.ThreadID == "" || b.PreparationID == "" {
 		return errors.New("session changed before turn start")
 	}
 	if err = sessionDispatchableTx(ctx, tx, b); err != nil {
@@ -174,8 +195,8 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	if err = tx.QueryRowContext(ctx, "SELECT active_run_id,process_stopped,creating FROM kernel_sessions WHERE id=?", b.ID).Scan(&active, &stopped, &creating); err != nil {
 		return err
 	}
-	if active != "" || stopped != 1 || creating != 0 {
-		return errors.New("prior run/process must be reconciled and stopped")
+	if active != "" || stopped != 0 || creating != 0 {
+		return errors.New("exclusive prepared process required before turn start")
 	}
 	if b.Kind == "task" {
 		task, err := loadTask(ctx, tx, b.TaskID)
@@ -256,7 +277,8 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 	}
 	defer tx.Rollback()
 	var session, thread string
-	if err = tx.QueryRowContext(ctx, "SELECT session_id,thread_id FROM kernel_run_bindings WHERE run_id=?", id).Scan(&session, &thread); err != nil {
+	var applied int
+	if err = tx.QueryRowContext(ctx, "SELECT session_id,thread_id,applied FROM kernel_run_bindings WHERE run_id=?", id).Scan(&session, &thread, &applied); err != nil {
 		return err
 	}
 	if session != owner || thread != run.ThreadID {
@@ -269,7 +291,9 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 	if previous.TurnID != "" && run.TurnID != previous.TurnID {
 		return errors.New("run turn association changed")
 	}
-	if previous.State == "completed" && !reflect.DeepEqual(previous, run) {
+	priorDigest, _ := contentDigest(previous)
+	nextDigest, _ := contentDigest(run)
+	if (previous.State == "completed" || applied == 1) && priorDigest != nextDigest {
 		return errors.New("confirmed run completion cannot be overwritten")
 	}
 	if !previous.Started.Equal(run.Started) || previous.BaselineKnown != run.BaselineKnown || !reflect.DeepEqual(previous.BaselineTurnIDs, run.BaselineTurnIDs) {
@@ -286,7 +310,7 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 
 // MarkSessionStopped is called only after the trusted process owner confirms all
 // app-server children stopped. Normal turn completion alone never frees a slot.
-func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, runID string) error {
+func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID string) error {
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return err
@@ -296,11 +320,15 @@ func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, runID s
 	if err = tx.QueryRowContext(ctx, "SELECT active_run_id FROM kernel_sessions WHERE id=?", sessionID).Scan(&active); err != nil {
 		return err
 	}
-	if active != runID {
+	b, err := sessionBindingTx(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	if proofID == "" || (active != "" && active != proofID) || (active == "" && b.PreparationID != proofID) {
 		return errors.New("session stopping proof belongs to another run")
 	}
-	if runID != "" {
-		if _, err = tx.ExecContext(ctx, "UPDATE kernel_run_bindings SET process_stopped=1 WHERE run_id=? AND session_id=?", runID, sessionID); err != nil {
+	if active != "" {
+		if _, err = tx.ExecContext(ctx, "UPDATE kernel_run_bindings SET process_stopped=1 WHERE run_id=? AND session_id=?", active, sessionID); err != nil {
 			return err
 		}
 	}
@@ -424,6 +452,57 @@ func (k *KernelStore) ArchiveSessionRun(ctx context.Context, sessionID, runID, r
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET active_run_id='' WHERE id=? AND active_run_id=? AND process_stopped=1", sessionID, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RetireUnboundTaskSession abandons a lost thread/start response only after its
+// process is proven stopped. The old Task/session is terminal; a replacement
+// plan must allocate a fresh identity, never repeat this creation intent.
+func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, reason string) error {
+	if reason == "" {
+		return errors.New("thread loss reason required")
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	b, err := sessionBindingTx(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	if b.Kind != "task" || b.ThreadID != "" || b.Closed {
+		return errors.New("only an unfinished unbound Task may be retired")
+	}
+	var creating, stopped int
+	var active string
+	if err = tx.QueryRowContext(ctx, "SELECT creating,process_stopped,active_run_id FROM kernel_sessions WHERE id=?", sessionID).Scan(&creating, &stopped, &active); err != nil {
+		return err
+	}
+	if creating != 1 || stopped != 1 || active != "" {
+		return errors.New("unknown thread creation must be stopped before retirement")
+	}
+	task, err := loadTask(ctx, tx, b.TaskID)
+	if err != nil {
+		return err
+	}
+	task.State, task.Reason, task.CompletedAt = contract.TaskFailed, reason, k.clock()
+	if err = saveTask(ctx, tx, task); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET creating=0 WHERE id=?", sessionID); err != nil {
+		return err
+	}
+	if err = kernelRecordTx(ctx, tx, "thread_creation_disposition", sessionID, sessionID, map[string]string{"reason": reason, "state": "retired"}); err != nil {
+		return err
+	}
+	wave, err := loadWave(ctx, tx, task.WaveID)
+	if err != nil {
+		return err
+	}
+	if err = k.waveEventTx(ctx, tx, wave, "task_failed", task.ID, task.ID+":thread_lost", map[string]string{"reason": reason}); err != nil {
 		return err
 	}
 	return tx.Commit()

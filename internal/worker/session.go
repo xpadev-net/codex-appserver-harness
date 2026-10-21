@@ -16,7 +16,9 @@ import (
 type SessionBinding = contract.SessionBinding
 type InputSnapshot = contract.InputSnapshot
 
-// Persistence must compare bindings inside each write transaction. ReserveRun
+// Persistence must compare bindings inside each write transaction.
+// ReserveSessionThread reserves preparation for both new and bound threads and
+// saves a fresh PreparationID; the driver reloads it before any RPC. ReserveRun
 // atomically records the snapshot/start intent and exclusive active run; it must
 // not release a reservation for a process whose stopping is unconfirmed.
 type SessionPersistence interface {
@@ -74,6 +76,21 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 	}
 	method := "thread/start"
 	params := map[string]any{"cwd": b.CWD, "model": b.Model, "approvalPolicy": "never", "sandbox": b.Sandbox}
+	// Reserve preparation before either start or resume. A prepared app-server
+	// is live even before it has a turn, so replanning must await stopping proof.
+	if err = d.Store.ReserveSessionThread(ctx, b); err != nil {
+		return PreparedSession{}, err
+	}
+	prior := b
+	b, err = d.Store.SessionBinding(ctx, id)
+	if err != nil {
+		return PreparedSession{}, err
+	}
+	comparable := b
+	comparable.PreparationID = prior.PreparationID
+	if b.PreparationID == "" || !reflect.DeepEqual(comparable, prior) {
+		return PreparedSession{}, errors.New("session changed during preparation reservation")
+	}
 	if b.ThreadID != "" {
 		method = "thread/resume"
 		params["threadId"] = b.ThreadID
@@ -81,9 +98,6 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 		params["dynamicTools"] = contract.KernelTools(b.Kind)
 		// A lost thread/start response must hold the creation intent rather
 		// than silently allocate a second thread to this Task on retry.
-		if err = d.Store.ReserveSessionThread(ctx, b); err != nil {
-			return PreparedSession{}, err
-		}
 	}
 	var reply struct {
 		Thread Thread `json:"thread"`

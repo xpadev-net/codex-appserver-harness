@@ -30,6 +30,7 @@ func (s *sessionStoreFixture) ReserveSessionThread(_ context.Context, b SessionB
 		return errors.New("unknown thread creation pending")
 	}
 	s.creating = true
+	s.binding.PreparationID = "preparation"
 	return nil
 }
 

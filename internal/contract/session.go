@@ -22,6 +22,7 @@ type SessionBinding struct {
 	Target          Target    `json:"target"`
 	Closed          bool      `json:"closed"`
 	Generation      int       `json:"generation"`
+	PreparationID   string    `json:"preparation_id"`
 }
 type InputSnapshot struct {
 	ID     string `json:"id"`
