@@ -211,6 +211,12 @@ func (s scopedCreator) CreateChild(ctx context.Context, title, body, marker stri
 // AdoptContinuation preserves the merged PR and starts a separately versioned
 // successor. Old completion/approval evidence is not assigned to the new scope.
 func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, scope verification.Scope, reason string) error {
+	lock, err := c.splitLease("final:" + issueKey(w))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
 	if w.Phase != domain.Merged || scope.Revision != w.ScopeRevision+1 || strings.TrimSpace(reason) == "" || len(scope.PreviouslyMerged) != 0 || c.Config.Verification.Revision < w.PolicyRevision {
 		return errors.New("continuation adoption requires a new scope and fresh coverage")
 	}
@@ -221,8 +227,12 @@ func (c *Controller) AdoptContinuation(ctx context.Context, w domain.WorkItem, s
 	if err := c.Store.Record(ctx, "scope", w.ID, &previous); err != nil {
 		return err
 	}
-	if len(previous.Remaining) == 0 {
-		return errors.New("merged work item has no continuation")
+	var previousPolicy string
+	if err := c.Store.Record(ctx, "policy_snapshot", w.ID, &previousPolicy); err != nil {
+		return err
+	}
+	if previousPolicy != c.policyDigest() && c.Config.Verification.Revision <= w.PolicyRevision {
+		return errors.New("policy changes require an increased verification.revision")
 	}
 	issue, err := c.GitHub.GetIssue(ctx, w.Issue)
 	if err != nil {

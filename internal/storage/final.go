@@ -36,7 +36,16 @@ func transferFinal(ctx context.Context, tx *sql.Tx, previous, next domain.WorkIt
 	key := fmt.Sprintf("r%d-i%d", previous.RepositoryID, previous.Issue)
 	var state FinalAcceptanceState
 	if err := completionRecord(ctx, tx, "parent_final_state", key, &state); errors.Is(err, sql.ErrNoRows) {
-		return nil
+		if next.ScopeRevision == previous.ScopeRevision {
+			return nil
+		}
+		state = FinalAcceptanceState{WorkItemID: next.ID, ScopeRevision: next.ScopeRevision, State: "waiting", RecoveryID: next.ID, UpdatedAt: time.Now().UTC()}
+		data, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO records VALUES('parent_final_state',?,?,?)", key, next.ID, data)
+		return err
 	} else if err != nil {
 		return err
 	}
@@ -59,9 +68,7 @@ func transferFinal(ctx context.Context, tx *sql.Tx, previous, next domain.WorkIt
 		state.Reason = ""
 		state.RequiredAction = ""
 		state.State = "waiting"
-		if state.RecoveryID != "" {
-			state.RecoveryID = next.ID
-		}
+		state.RecoveryID = next.ID
 	}
 	state.WorkItemID = next.ID
 	state.UpdatedAt = time.Now().UTC()
@@ -98,7 +105,7 @@ func finalAcceptanceSubject(ctx context.Context, q queryer, original domain.Work
 	if err != nil {
 		return original, err
 	}
-	if subject.RepositoryID != original.RepositoryID || subject.Issue != original.Issue || subject.ScopeRevision != state.ScopeRevision || subject.PolicyRevision != original.PolicyRevision {
+	if subject.RepositoryID != original.RepositoryID || subject.Issue != original.Issue || subject.ScopeRevision != state.ScopeRevision || subject.PolicyRevision < original.PolicyRevision {
 		return original, nil
 	}
 	current := subject
@@ -158,7 +165,7 @@ func finalAcceptanceSubject(ctx context.Context, q queryer, original domain.Work
 		if err != nil {
 			return original, err
 		}
-		if parent.RepositoryID != original.RepositoryID || parent.Issue != original.Issue || parent.ScopeRevision > current.ScopeRevision || parent.PolicyRevision != original.PolicyRevision {
+		if parent.RepositoryID != original.RepositoryID || parent.Issue != original.Issue || parent.ScopeRevision > current.ScopeRevision || parent.PolicyRevision > current.PolicyRevision {
 			return original, nil
 		}
 		current = parent

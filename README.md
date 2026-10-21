@@ -71,6 +71,8 @@ Issue本文・title・policyが変わると古い判定を保留します。新�
 ./harness adopt --config CONFIG --id WORK_ITEM --file scope.json --reason 'updated acceptance criteria'
 ```
 
+全範囲の PR を merge した後でも、親の最終受入前に要求・policy が変わった場合は同じ `adopt` で新しい後続 WorkItem を登録できます。残作業が空でも受理し、新 revision の全条件を実装・独立検証・review・最終受入で確認します。旧 PR・scope・policy と最終受入の履歴、Issue claim、累積予算は保持します。`inspect` が示す最終受入 owner を指定してください。
+
 ## Reviewとmerge
 
 正式なGitHub `APPROVED`、信頼するreviewer ID、現在のcandidate SHA、scope/policy/roundの一致が必要です。COMMENTED・指摘なし・reaction・timeoutから承認を生成しません。必要なCIの名前・発行App ID・結論も固定できます。`ci_ref_mode: test_merge`ではtest merge commitのparentsと現在のhead/baseを照合します。

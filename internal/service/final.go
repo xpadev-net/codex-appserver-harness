@@ -142,7 +142,7 @@ func (c *Controller) finalAcceptance(ctx context.Context, w domain.WorkItem, s v
 		return err
 	}
 	if digest(issue) != source.Digest || savedPolicy != c.policyDigest() || w.PolicyRevision != c.Config.Verification.Revision {
-		return c.blockFinal(ctx, w, state, "scope_or_policy_conflict", "scope or policy changed before final acceptance", "adopt the changed requirements before resuming")
+		return c.blockFinal(ctx, w, state, "scope_or_policy_conflict", "scope or policy changed before final acceptance", fmt.Sprintf("adopt --config CONFIG --id %s --file NEW_SCOPE_JSON --reason REASON (increment scope revision; changed policy also requires a new verification.revision)", w.ID))
 	}
 	for _, label := range issue.Labels {
 		if label.Name == c.Config.HoldLabel && issue.State == "open" {
@@ -276,7 +276,7 @@ func (c *Controller) finalAcceptance(ctx context.Context, w domain.WorkItem, s v
 		return err
 	}
 	if digest(fresh) != source.Digest || savedPolicy != c.policyDigest() {
-		return c.blockFinal(ctx, w, state, "scope_or_policy_conflict", "scope or policy changed during final acceptance", "adopt changed requirements before resuming")
+		return c.blockFinal(ctx, w, state, "scope_or_policy_conflict", "scope or policy changed during final acceptance", fmt.Sprintf("adopt --config CONFIG --id %s --file NEW_SCOPE_JSON --reason REASON (increment scope revision; changed policy also requires a new verification.revision)", w.ID))
 	}
 	for _, label := range fresh.Labels {
 		if label.Name == c.Config.HoldLabel && fresh.State == "open" {
@@ -499,26 +499,19 @@ func (c *Controller) finalOrphans(ctx context.Context, w domain.WorkItem, state 
 	return false, nil
 }
 
-// A continuation of a final repair is part of the same recovery budget, even
-// though its PR and remaining criteria belong to a separate WorkItem.
+// Every continuation shares the predecessor's cumulative budget, including
+// newly adopted requirements after a full-scope merge.
 func (c *Controller) claimContinuation(ctx context.Context, previous, next domain.WorkItem, records map[string]any) error {
-	var state FinalAcceptanceState
-	if err := c.Store.Record(ctx, "parent_final_state", issueKey(previous), &state); err == nil {
-		if state.WorkItemID == previous.ID && state.RecoveryID != "" {
-			next.RepairRounds = previous.RepairRounds
-			jobs, err := c.jobAttempts(ctx, previous.ID)
-			if err != nil {
-				return err
-			}
-			metrics, err := c.Metrics(ctx, previous.ID)
-			if err != nil {
-				return err
-			}
-			records["budget_baseline"] = BudgetBaseline{ValidationJobs: jobs, ObservedTokens: metrics["observed_tokens"].(int64)}
-		}
-	} else if !missing(err) {
+	next.RepairRounds = previous.RepairRounds
+	jobs, err := c.jobAttempts(ctx, previous.ID)
+	if err != nil {
 		return err
 	}
+	metrics, err := c.Metrics(ctx, previous.ID)
+	if err != nil {
+		return err
+	}
+	records["budget_baseline"] = BudgetBaseline{ValidationJobs: jobs, ObservedTokens: metrics["observed_tokens"].(int64)}
 	records["continued_from"] = previous.ID
 	var depth int
 	if err := c.Store.Record(ctx, "split_depth", previous.ID, &depth); err != nil && !missing(err) {
