@@ -395,3 +395,41 @@ func TestSplitDepthIsAtomicWithChildRegistration(t *testing.T) {
 		t.Fatal(depth, err)
 	}
 }
+
+func TestEventRecordsRejectStaleCandidateAtomically(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	if err := s.Claim(ctx, work()); err != nil {
+		t.Fatal(err)
+	}
+	e := domain.Event{ID: "stale-ci", WorkItemID: "wi", Kind: "repair_tests", Candidate: "superseded", ScopeRevision: 1, PolicyRevision: 1}
+	if err := s.EventRecords(ctx, e, map[string]map[string]any{"ci_dispatched": {"attempt": true}}); err == nil {
+		t.Fatal("stale event accepted")
+	}
+	var dispatched bool
+	if err := s.Record(ctx, "ci_dispatched", "attempt", &dispatched); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("stale evidence marker committed", dispatched, err)
+	}
+}
+
+func TestAdoptionRetiresCorrectionsAndKeepsHistory(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	if err := s.Claim(ctx, work()); err != nil {
+		t.Fatal(err)
+	}
+	old := map[string]string{"candidate": "old", "evidence": "ci-attempt"}
+	if err := s.Put(ctx, "correction", "wi", "wi", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Adopt(ctx, "wi", 2, 1, map[string]any{"scope": "new explicit scope"}); err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]string
+	if err := s.Record(ctx, "correction", "wi", &saved); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("old correction still active", err)
+	}
+	if err := s.Record(ctx, "correction_history", "wi:scope1", &saved); err != nil || saved["evidence"] != "ci-attempt" {
+		t.Fatal(saved, err)
+	}
+}

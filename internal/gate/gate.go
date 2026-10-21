@@ -72,13 +72,7 @@ func Reasons(s Snapshot) []string {
 		target = s.CI.TestedSHA
 	}
 	for _, req := range s.RequiredChecks {
-		var latest *github.Check
-		for i := range s.Checks {
-			c := &s.Checks[i]
-			if c.Name == req.Name && c.App.ID == req.AppID && c.HeadSHA == target && (latest == nil || c.ID > latest.ID) {
-				latest = c
-			}
-		}
+		latest := LatestCheck(s.Checks, req, target)
 		ok := false
 		if latest != nil && latest.Status == "completed" {
 			for _, allowed := range req.AllowedConclusions {
@@ -90,4 +84,16 @@ func Reasons(s Snapshot) []string {
 		add(req.Name != "" && req.AppID > 0 && ok, "required CI check missing or unsuccessful: "+req.Name)
 	}
 	return reasons
+}
+
+// LatestCheck shares the exact issuer/name/SHA selection used for merge gates.
+func LatestCheck(checks []github.Check, req RequiredCheck, target string) *github.Check {
+	var latest *github.Check
+	for i := range checks {
+		c := &checks[i]
+		if c.Name == req.Name && c.App.ID == req.AppID && c.HeadSHA == target && (latest == nil || c.ID > latest.ID) {
+			latest = c
+		}
+	}
+	return latest
 }

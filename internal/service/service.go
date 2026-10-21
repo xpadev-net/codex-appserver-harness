@@ -39,6 +39,7 @@ type GitHub interface {
 	FindReviewRequest(context.Context, int, string, int64) (int64, error)
 	Merge(context.Context, int, string, string) error
 	Checks(context.Context, string) ([]github.Check, error)
+	CheckDiagnostics(context.Context, github.Check) (string, error)
 	CommitParents(context.Context, string) ([]string, error)
 	Conditions(context.Context, int) (string, error)
 	FindChild(context.Context, string) (int, error)
@@ -414,8 +415,8 @@ func (c *Controller) candidate(ctx context.Context, w domain.WorkItem) (runner.C
 	err := c.Store.Record(ctx, "candidate", w.Candidate, &candidate)
 	return candidate, err
 }
-func candidateID(w domain.WorkItem, sha string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%d", w.ID, sha, w.ScopeRevision, w.PolicyRevision)))
+func candidateID(w domain.WorkItem, sha, base string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s:%d:%d", w.ID, sha, base, w.ScopeRevision, w.PolicyRevision)))
 	return "c-" + hex.EncodeToString(sum[:16])
 }
 func (c *Controller) freeze(ctx context.Context, w domain.WorkItem, base string) (runner.Candidate, error) {
@@ -445,7 +446,19 @@ func (c *Controller) freeze(ctx context.Context, w domain.WorkItem, base string)
 	if err = c.Store.Put(ctx, "workspace_base", w.ID, w.ID, base); err != nil {
 		return runner.Candidate{}, err
 	}
-	candidate := runner.Candidate{ID: candidateID(w, sha), SHA: sha, BaseSHA: base, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision}
+	candidate := runner.Candidate{ID: candidateID(w, sha, base), SHA: sha, BaseSHA: base, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision}
+	// Every candidate-producing path, including interim work and base refresh,
+	// retires old feedback before publishing the new identity.
+	if candidate.ID != w.Candidate {
+		var correction Correction
+		if err = c.Store.Record(ctx, "correction", w.ID, &correction); err == nil {
+			if _, err = c.retireCorrection(ctx, w, domain.Operation{ID: candidate.ID + ":transition"}, correction); err != nil {
+				return runner.Candidate{}, err
+			}
+		} else if !missing(err) {
+			return runner.Candidate{}, err
+		}
+	}
 	return candidate, c.Store.Put(ctx, "candidate", candidate.ID, w.ID, candidate)
 }
 func (c *Controller) workspace(ctx context.Context, w domain.WorkItem) (domain.WorkItem, string, error) {

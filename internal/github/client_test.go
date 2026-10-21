@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,5 +80,86 @@ esac
 	posts, err := os.ReadFile(filepath.Join(dir, "posts"))
 	if err != nil || string(posts) != "post\n" {
 		t.Fatal("duplicate review request", string(posts), err)
+	}
+}
+
+func TestPrivateCheckDiagnosticsFetchesRedactedJobLogs(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+ *"annotations?per_page=100"*) printf '%s' '[[]]' ;;
+ *"actions/jobs/456/logs"*)
+  case "$*" in *"--allow-escape-sequences"*) ;; *) exit 19 ;; esac
+  printf '\033[32massertion expected true, got false; credential=private-controller-\033[0mtest-token\n' ;;
+ *) exit 12 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("GH_TOKEN", "private-controller-test-token")
+	client := Client{Repository: "Owner/Repo", RepositoryID: 1}
+	text, err := client.CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
+	if err != nil || !strings.Contains(text, "expected true") || strings.Contains(text, "private-controller-test-token") || !strings.Contains(text, "[REDACTED]") || strings.Contains(text, "\x1b") {
+		t.Fatal("missing or unredacted diagnostic", err)
+	}
+}
+
+func TestDiagnosticTailIsBounded(t *testing.T) {
+	tail := &diagnosticTail{limit: 5}
+	tail.Write([]byte("123"))
+	tail.Write([]byte("4567"))
+	if string(tail.data) != "34567" {
+		t.Fatal(string(tail.data))
+	}
+	tail.Write([]byte("abcdefgh"))
+	if string(tail.data) != "defgh" {
+		t.Fatal(string(tail.data))
+	}
+}
+
+func TestFailedLogResponseBodyIsNotDiagnosticEvidence(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+ *"annotations?per_page=100"*) printf '%s' '[[]]' ;;
+ *"actions/jobs/456/logs"*) printf '%s' '{"message":"Resource not accessible by integration","status":"403"}'; exit 1 ;;
+ *) exit 12 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	text, err := (Client{Repository: "owner/repo", RepositoryID: 1}).CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
+	if err == nil || text != "" {
+		t.Fatal("failed HTTP response accepted as evidence", text, err)
+	}
+}
+
+func TestDiagnosticControlSequencesAreRemoved(t *testing.T) {
+	text := cleanDiagnosticText("\x1b]0;window title\x07\x1b[31massertion failed\x1b[0m\r\nline\x00\x08\rnext")
+	if text != "assertion failed\nline\nnext" {
+		t.Fatalf("unexpected diagnostic text: %q", text)
+	}
+}
+
+func TestFailureAnnotationsSurviveLongJobLogs(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+ *"annotations?per_page=100"*) printf '%s' '[[{"path":"tests/behavior_test.go","start_line":17,"message":"unique acceptance failure"}]]' ;;
+ *"actions/jobs/456/logs"*) i=0; while test "$i" -lt 5000; do printf 'unrelated job output\n'; i=$((i+1)); done ;;
+ *) exit 12 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	text, err := (Client{Repository: "owner/repo", RepositoryID: 1}).CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
+	if err != nil || !strings.Contains(text, "unique acceptance failure") || !strings.Contains(text, "unrelated job output") || len(text) > 16384 {
+		t.Fatal("failure diagnostics were lost or unbounded", len(text), err)
 	}
 }

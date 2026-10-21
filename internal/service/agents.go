@@ -192,6 +192,28 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 		}
 		input["failure_log_excerpts"] = logs
 	}
+	ciEvidence := []CIEvidence{}
+	for _, id := range correction.EvidenceIDs {
+		var evidence CIEvidence
+		if err := c.Store.Record(ctx, "ci_evidence", id, &evidence); err == nil {
+			if evidence.Candidate != candidate {
+				return c.reject(ctx, w, op, "CI evidence belongs to a stale candidate")
+			}
+			if len(evidence.Check.Output.Summary) > 16384 {
+				evidence.Check.Output.Summary = evidence.Check.Output.Summary[:16384]
+			}
+			if len(evidence.Check.Output.Text) > 16384 {
+				evidence.Check.Output.Text = evidence.Check.Output.Text[:16384]
+			}
+			if len(evidence.Diagnostics) > 16384 {
+				evidence.Diagnostics = evidence.Diagnostics[len(evidence.Diagnostics)-16384:]
+			}
+			ciEvidence = append(ciEvidence, evidence)
+		} else if !missing(err) {
+			return err
+		}
+	}
+	input["ci_evidence"] = ciEvidence
 	var schema any
 	schema = implementationSchema()
 	if op.Kind == "verify" {
@@ -384,6 +406,9 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 	if err = plan.ValidateCommit(ctx, w.Worktree, next.SHA); err != nil {
 		return c.reject(ctx, w, op, err.Error())
 	}
+	if err = c.Store.Record(ctx, "correction", w.ID, &correction); err != nil && !missing(err) {
+		return err
+	}
 	plan, err = verification.Rebind(plan, w.ID, next, scope, c.Config.Verification)
 	if err != nil {
 		return err
@@ -428,7 +453,7 @@ func (c *Controller) assessment(ctx context.Context, w domain.WorkItem, op domai
 	if err = c.Store.Put(ctx, "correction", w.ID, w.ID, correction); err != nil {
 		return err
 	}
-	if role == "none" && len(correction.FeedbackIDs) > 0 {
+	if role == "none" && len(correction.FeedbackIDs) > 0 && len(correction.FeedbackIDs) == len(correction.EvidenceIDs) {
 		for _, id := range correction.FeedbackIDs {
 			if err = c.Store.Put(ctx, "resolved_feedback", id, w.ID, map[string]string{"assessment": op.ID}); err != nil {
 				return err
@@ -468,4 +493,15 @@ func (l LiveAgents) environment(w domain.WorkItem, home, gitdir string) []string
 		}
 	}
 	return env
+}
+
+func (c *Controller) retireCorrection(ctx context.Context, w domain.WorkItem, op domain.Operation, correction Correction) (Correction, error) {
+	if len(correction.EvidenceIDs) == 0 && len(correction.FeedbackIDs) == 0 {
+		return correction, nil
+	}
+	if err := c.Store.Put(ctx, "correction_history", op.ID, w.ID, correction); err != nil {
+		return correction, err
+	}
+	retired := Correction{Consumed: true, EvidenceIDs: []string{}, FeedbackIDs: []string{}}
+	return retired, c.Store.Put(ctx, "correction", w.ID, w.ID, retired)
 }

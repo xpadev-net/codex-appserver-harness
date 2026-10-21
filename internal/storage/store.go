@@ -751,6 +751,12 @@ func (s *Store) Adopt(ctx context.Context, id string, scopeRevision, policyRevis
 	if _, err = tx.ExecContext(ctx, "INSERT INTO records(kind,id,work_item_id,payload) SELECT 'scope_history',?,work_item_id,payload FROM records WHERE kind='scope' AND id=?", fmt.Sprintf("%s:%d", id, w.ScopeRevision), id); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO records SELECT 'correction_history',?,work_item_id,payload FROM records WHERE kind='correction' AND id=?", fmt.Sprintf("%s:scope%d", id, w.ScopeRevision), id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE kind='correction' AND id=?", id); err != nil {
+		return err
+	}
 	w.ScopeRevision = scopeRevision
 	w.PolicyRevision = policyRevision
 	previousPhase := w.Phase
@@ -784,12 +790,22 @@ func (s *Store) Adopt(ctx context.Context, id string, scopeRevision, policyRevis
 }
 
 // EventRecords commits operator intent and its associated state transition together.
+var ErrEventPreconditions = errors.New("event record preconditions changed")
+
 func (s *Store) EventRecords(ctx context.Context, e domain.Event, records map[string]map[string]any) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	w, err := read(ctx, tx, e.WorkItemID)
+	if err != nil {
+		return err
+	}
+	if e.Candidate != "" && (w.Candidate != e.Candidate || w.ScopeRevision != e.ScopeRevision || w.PolicyRevision != e.PolicyRevision || w.Attempt != e.Attempt) {
+		return ErrEventPreconditions
+	}
+
 	for kind, entries := range records {
 		for id, value := range entries {
 			data, err := json.Marshal(value)

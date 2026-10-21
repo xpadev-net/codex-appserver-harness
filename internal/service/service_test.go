@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/policy"
 	"github.com/xpadev-net/codex-appserver-harness/internal/review"
@@ -32,6 +33,12 @@ type fakeGH struct {
 	requests, merges, closed int
 	requestTime              time.Time
 	approved                 bool
+	checkResults             []github.Check
+	ciFailureSHA             string
+	ciFailFirst              bool
+	diagnosticsMissing       bool
+	onDiagnostics            func()
+	reviewFinding            bool
 }
 
 func (f *fakeGH) GetIssue(_ context.Context, n int) (github.Issue, error) {
@@ -67,6 +74,10 @@ func (f *fakeGH) Publish(ctx context.Context, base, branch, id, title, body stri
 	return f.pr, nil
 }
 func (f *fakeGH) Reviews(context.Context, int) ([]github.Review, error) {
+	if f.reviewFinding {
+		return []github.Review{{ID: 99, User: github.User{ID: 7}, State: "CHANGES_REQUESTED", CommitID: f.pr.Head.SHA, SubmittedAt: f.requestTime.Add(time.Second), Body: "Fix the implementation edge case"}}, nil
+	}
+
 	if !f.approved {
 		return nil, nil
 	}
@@ -100,8 +111,20 @@ func (f *fakeGH) Merge(ctx context.Context, _ int, head, method string) error {
 	f.pr.State = "closed"
 	return nil
 }
-func (f *fakeGH) Checks(context.Context, string) ([]github.Check, error) {
-	return []github.Check{}, nil
+func (f *fakeGH) Checks(_ context.Context, target string) ([]github.Check, error) {
+	if f.ciFailFirst {
+		if f.ciFailureSHA == "" {
+			f.ciFailureSHA = target
+		}
+		check := github.Check{ID: 100, Name: "required", HeadSHA: target, Status: "completed", Conclusion: "success", DetailsURL: "https://github.com/owner/repo/actions/runs/100"}
+		check.App.ID = 9
+		if target == f.ciFailureSHA {
+			check.Conclusion = "failure"
+			check.Output.Summary = "acceptance assertion failed"
+		}
+		return []github.Check{check}, nil
+	}
+	return f.checkResults, nil
 }
 func (f *fakeGH) Conditions(context.Context, int) (string, error) { return "CLEAN", nil }
 func (f *fakeGH) FindChild(_ context.Context, marker string) (int, error) {
@@ -135,6 +158,7 @@ func (f *fakeGH) CloseIssue(_ context.Context, n int) error {
 type fakeAgents struct {
 	totals         map[string]int
 	calls          int
+	prompts        []string
 	classification string
 	autoSplit      bool
 	partialChild   bool
@@ -143,6 +167,7 @@ type fakeAgents struct {
 
 func (f *fakeAgents) Run(_ context.Context, w domain.WorkItem, op domain.Operation, input string, _ any) (worker.Run, error) {
 	f.calls++
+	f.prompts = append(f.prompts, input)
 	var in struct {
 		Scope      verification.Scope `json:"scope"`
 		Correction Correction         `json:"correction"`
@@ -771,5 +796,306 @@ func TestEditedIssueBetweenMergeAndContinuationRequiresAdoption(t *testing.T) {
 	saved, _ := c.Store.Get(ctx, w.ID)
 	if saved.Phase != domain.Merged || saved.ScopeRevision != 1 || saved.Candidate != w.Candidate {
 		t.Fatal("merged history changed", saved)
+	}
+}
+
+func TestRequiredCIFailureRepairsSameRoleAndPreservesEvidence(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.ciFailFirst = true
+	drive(t, c, 32)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Merged || agents.calls != 4 || gh.merges != 1 {
+		t.Fatal(w, agents.calls, gh.merges)
+	}
+	raw, err := c.Store.Records(ctx, "ci_evidence", "w")
+	if err != nil || len(raw) != 1 {
+		t.Fatal(raw, err)
+	}
+	var evidence CIEvidence
+	json.Unmarshal(raw[0], &evidence)
+	if evidence.Check.Conclusion != "failure" || evidence.TestedSHA != gh.ciFailureSHA || evidence.Reference == "" {
+		t.Fatal(evidence)
+	}
+	var input struct {
+		CIEvidence []CIEvidence `json:"ci_evidence"`
+	}
+	json.Unmarshal([]byte(agents.prompts[2]), &input)
+	if len(input.CIEvidence) != 1 || input.CIEvidence[0].ID != evidence.ID || input.CIEvidence[0].Check.Output.Summary == "" || input.CIEvidence[0].Diagnostics == "" {
+		t.Fatal("CI evidence missing from existing verification thread input", agents.prompts[2])
+	}
+}
+
+func TestCIFailureSelectionAndMechanicalHold(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, conclusion string
+		stale                  bool
+		assess, hold           bool
+	}{
+		{"old SHA", "head", "failure", true, false, false},
+		{"failure", "head", "failure", false, true, false},
+		{"test merge failure", "test_merge", "failure", false, true, false},
+		{"timeout", "head", "timed_out", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, gh, agents, _ := setup(t)
+			ctx := context.Background()
+			gh.approved = false
+			drive(t, c, 8)
+			w, _ := c.Store.Get(ctx, "w")
+			candidate, _ := c.candidate(ctx, w)
+			target := candidate.SHA
+			mapping := gate.CIRevision{}
+			if tc.mode == "test_merge" {
+				target = strings.Repeat("b", 40)
+				mapping = gate.CIRevision{HeadSHA: candidate.SHA, BaseSHA: candidate.BaseSHA, TestedSHA: target, Verified: true}
+			}
+			check := github.Check{ID: 100, Name: "required", HeadSHA: target, Status: "completed", Conclusion: tc.conclusion}
+			check.App.ID = 9
+			if tc.stale {
+				check.HeadSHA = "old"
+			}
+			snapshot := gate.Snapshot{Candidate: candidate, CI: mapping, RequiredChecks: []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}, Checks: []github.Check{check}}
+			handled, err := c.routeCIFailures(ctx, w, snapshot)
+			if err != nil || handled != (tc.assess || tc.hold) {
+				t.Fatal(handled, err)
+			}
+			after, _ := c.Store.Get(ctx, w.ID)
+			if (after.Phase == domain.Verifying) != tc.assess || (after.Phase == domain.Blocked) != tc.hold || agents.calls != 2 {
+				t.Fatal(after, agents.calls)
+			}
+			if tc.assess {
+				var correction Correction
+				c.Store.Record(ctx, "correction", w.ID, &correction)
+				var evidence CIEvidence
+				c.Store.Record(ctx, "ci_evidence", correction.EvidenceIDs[0], &evidence)
+				if evidence.TestedSHA != target || evidence.Candidate.SHA != candidate.SHA {
+					t.Fatal(evidence)
+				}
+			}
+		})
+	}
+}
+
+type repairWithTests struct{ fake *fakeAgents }
+
+func (a repairWithTests) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	r, err := a.fake.Run(ctx, w, op, input, schema)
+	if err == nil && op.Kind == "implement" && a.fake.calls > 1 {
+		err = os.WriteFile(filepath.Join(w.Worktree, "tests", "test.txt"), []byte("updated test for implementation repair"), 0600)
+	}
+	return r, err
+}
+
+func TestCIRepairChangingTestsRetiresOldCorrection(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	if err := c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest()); err != nil {
+		t.Fatal(err)
+	}
+	gh.ciFailFirst = true
+	c.Agents = repairWithTests{agents}
+	drive(t, c, 32)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Merged || agents.calls != 5 {
+		t.Fatalf("phase=%s reason=%s agent_calls=%d", w.Phase, w.Reason, agents.calls)
+	}
+	history, err := c.Store.Records(ctx, "correction_history", "w")
+	if err != nil || len(history) != 1 {
+		t.Fatal("correction history lost", history, err)
+	}
+}
+
+func (f *fakeGH) CheckDiagnostics(context.Context, github.Check) (string, error) {
+	if f.onDiagnostics != nil {
+		callback := f.onDiagnostics
+		f.onDiagnostics = nil
+		callback()
+	}
+
+	if f.diagnosticsMissing {
+		return "", fmt.Errorf("private diagnostics access unavailable")
+	}
+	return "expected behavior assertion failed in CI", nil
+}
+
+type testRepair struct{ fake *fakeAgents }
+
+func (a testRepair) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	r, err := a.fake.Run(ctx, w, op, input, schema)
+	if err == nil && a.fake.calls == 4 {
+		err = os.WriteFile(filepath.Join(w.Worktree, "tests/test.txt"), []byte("corrected expected behavior"), 0600)
+	}
+	return r, err
+}
+func TestVerificationCIRepairRetiresCorrectionBeforeBaseConflict(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.ciFailFirst, gh.approved = true, false
+	agents.classification = "test_defect"
+	c.Agents = testRepair{agents}
+	var w domain.WorkItem
+	for range 25 {
+		drive(t, c, 1)
+		w, _ = c.Store.Get(ctx, "w")
+		candidate, _ := c.candidate(ctx, w)
+		if agents.calls == 4 && w.Phase == domain.Reviewing && gh.pr.Head.SHA == candidate.SHA {
+			break
+		}
+	}
+	if agents.calls != 4 || w.Phase != domain.Reviewing {
+		t.Fatal(w, agents.calls)
+	}
+	var correction Correction
+	c.Store.Record(ctx, "correction", "w", &correction)
+	if len(correction.EvidenceIDs) != 0 {
+		t.Fatal("old correction remains active", correction)
+	}
+	os.WriteFile(filepath.Join(c.Config.RepositoryPath, "app.txt"), []byte("upstream implementation"), 0600)
+	for _, args := range [][]string{{"add", "app.txt"}, {"commit", "-m", "upstream"}, {"push", "origin", "trunk"}} {
+		if _, err := workspace.Git(ctx, c.Config.RepositoryPath, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := workspace.Resolve(ctx, c.Config.RepositoryPath, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.pr.Base.SHA = base
+	drive(t, c, 2)
+	after, _ := c.Store.Get(ctx, "w")
+	if after.Phase == domain.Blocked || agents.calls != 5 {
+		t.Fatal(after, agents.calls)
+	}
+}
+
+func TestMissingCIDiagnosticsBlocksWithoutAssessment(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	candidate, _ := c.candidate(ctx, w)
+	check := github.Check{ID: 123, Name: "required", HeadSHA: candidate.SHA, Status: "completed", Conclusion: "failure"}
+	check.App.ID = 9
+	gh.diagnosticsMissing = true
+	handled, err := c.routeCIFailures(ctx, w, gate.Snapshot{Candidate: candidate, RequiredChecks: []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}, Checks: []github.Check{check}})
+	after, _ := c.Store.Get(ctx, "w")
+	if err != nil || !handled || after.Phase != domain.Blocked || !strings.Contains(after.Reason, "diagnostics unavailable") || agents.calls != 2 {
+		t.Fatal(after, handled, err, agents.calls)
+	}
+}
+
+func TestBaseRefreshRetiresConsumedCICorrection(t *testing.T) {
+	c, gh, _, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	candidate, _ := c.candidate(ctx, w)
+	evidence := CIEvidence{ID: "old-ci", Candidate: candidate}
+	c.Store.Put(ctx, "ci_evidence", evidence.ID, w.ID, evidence)
+	c.Store.Put(ctx, "correction", w.ID, w.ID, Correction{Mode: "repair", Consumed: true, EvidenceIDs: []string{evidence.ID}, FeedbackIDs: []string{}})
+	for _, args := range [][]string{{"commit", "--allow-empty", "-m", "base update"}, {"push", "origin", "trunk"}} {
+		if _, err := workspace.Git(ctx, c.Config.RepositoryPath, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := workspace.Resolve(ctx, c.Config.RepositoryPath, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.refreshBase(ctx, w, base); err != nil {
+		t.Fatal(err)
+	}
+	var correction Correction
+	c.Store.Record(ctx, "correction", w.ID, &correction)
+	if len(correction.EvidenceIDs) != 0 || !correction.Consumed {
+		t.Fatal(correction)
+	}
+	history, err := c.Store.Records(ctx, "correction_history", w.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatal(history, err)
+	}
+	if candidateID(w, candidate.SHA, base) == candidateID(w, candidate.SHA, candidate.BaseSHA) {
+		t.Fatal("base change reused candidate identity")
+	}
+}
+
+func TestReviewFeedbackAndCIFailureAreBatched(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.reviewFinding, gh.ciFailFirst = true, true
+	var w domain.WorkItem
+	for range 15 {
+		drive(t, c, 1)
+		w, _ = c.Store.Get(ctx, "w")
+		if w.Phase == domain.Verifying && agents.calls == 2 {
+			break
+		}
+	}
+	var correction Correction
+	if err := c.Store.Record(ctx, "correction", "w", &correction); err != nil {
+		t.Fatal(err)
+	}
+	if len(correction.EvidenceIDs) != 2 || len(correction.FeedbackIDs) != 1 || correction.Mode != "assessment" || agents.calls != 2 {
+		t.Fatal(w, correction, agents.calls)
+	}
+	evidence, err := c.Store.Records(ctx, "ci_evidence", "w")
+	if err != nil || len(evidence) != 1 {
+		t.Fatal(evidence, err)
+	}
+}
+
+type unchangedRepair struct{ fake *fakeAgents }
+
+func (a unchangedRepair) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	before, readErr := os.ReadFile(filepath.Join(w.Worktree, "app.txt"))
+	r, err := a.fake.Run(ctx, w, op, input, schema)
+	if err == nil && readErr == nil && op.Kind == "implement" {
+		err = os.WriteFile(filepath.Join(w.Worktree, "app.txt"), before, 0600)
+	}
+	return r, err
+}
+func TestUnchangedReviewRepairsReachBudgetInsteadOfStalling(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.Limits.RepairRounds = 2
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.reviewFinding = true
+	c.Agents = unchangedRepair{agents}
+	drive(t, c, 50)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Blocked || !strings.Contains(w.Reason, "budget") || agents.calls > 8 {
+		t.Fatal("unchanged batch stalled or bypassed budget", w, agents.calls)
+	}
+}
+
+func TestStaleDiagnosticHoldCannotBlockAdoptedScope(t *testing.T) {
+	c, gh, _, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	candidate, _ := c.candidate(ctx, w)
+	check := github.Check{ID: 101, Name: "required", HeadSHA: candidate.SHA, Status: "completed", Conclusion: "failure"}
+	check.App.ID = 9
+	gh.diagnosticsMissing = true
+	gh.onDiagnostics = func() {
+		if err := c.Store.Adopt(ctx, w.ID, 2, 1, map[string]any{"scope": "adopted new requirements"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handled, err := c.routeCIFailures(ctx, w, gate.Snapshot{Candidate: candidate, RequiredChecks: []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}, Checks: []github.Check{check}})
+	after, _ := c.Store.Get(ctx, w.ID)
+	if err != nil || !handled || after.Phase != domain.Ready || after.ScopeRevision != 2 {
+		t.Fatal(after, handled, err)
 	}
 }
