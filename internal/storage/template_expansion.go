@@ -336,6 +336,8 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 	sourceResults := []string{}
 	criteriaSet := map[string]bool{}
 	inputSet := map[string]bool{}
+	subjectArtifacts := map[string]bool{}
+	subjectProducers := map[string][]string{}
 	for _, spec := range current.Phases[position].Tasks {
 		if spec.Kind != "review" {
 			continue
@@ -358,6 +360,13 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		}
 		for _, id := range spec.InputArtifactIDs {
 			inputSet[id] = true
+			a, err := k.currentArtifactTx(ctx, tx, wave, id)
+			if err != nil {
+				return plan, reviewRoots, err
+			}
+			if a.Digest == inputDigest {
+				subjectArtifacts[id] = true
+			}
 		}
 		for _, dep := range spec.DependsOn {
 			prior, err := loadTask(ctx, tx, structureID("task-", wave.ID, dep.TaskID))
@@ -368,10 +377,23 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			if err != nil {
 				return plan, reviewRoots, err
 			}
-			for _, id := range resultArtifactReferences(produced) {
+			allOutputs := resultArtifactReferences(produced)
+			producerHasSubject := false
+			for _, id := range allOutputs {
 				if dep.ArtifactID == "" || dep.ArtifactID == id {
 					inputSet[id] = true
+					a, err := k.currentArtifactTx(ctx, tx, wave, id)
+					if err != nil {
+						return plan, reviewRoots, err
+					}
+					if a.Digest == inputDigest {
+						subjectArtifacts[id] = true
+						producerHasSubject = true
+					}
 				}
+			}
+			if producerHasSubject {
+				subjectProducers[dep.TaskID] = allOutputs
 			}
 		}
 	}
@@ -453,7 +475,32 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			task := old
 			task.ID = cloneIDs[old.ID]
 			task.DependsOn = []contract.TaskDependency{}
+			inputIDs := map[string]bool{}
+			needsFixedSubject := false
+			for _, id := range old.InputArtifactIDs {
+				if subjectArtifacts[id] {
+					needsFixedSubject = true
+				} else {
+					inputIDs[id] = true
+				}
+			}
 			for _, dep := range old.DependsOn {
+				if outputs, affected := subjectProducers[dep.TaskID]; affected && (dep.ArtifactID == "" || subjectArtifacts[dep.ArtifactID]) {
+					needsFixedSubject = true
+					if dep.ArtifactID == "" {
+						for _, id := range outputs {
+							if !subjectArtifacts[id] {
+								inputIDs[id] = true
+							}
+						}
+					}
+					// A producer edge granting all its old outputs would retain
+					// access to the defective subject. Preserve other immutable
+					// outputs explicitly and grant the replacement via final fix.
+					if replacements[dep.TaskID] == nil {
+						continue
+					}
+				}
 				if replacements[dep.TaskID] != nil {
 					for _, id := range replacements[dep.TaskID] {
 						task.DependsOn = append(task.DependsOn, contract.TaskDependency{TaskID: id})
@@ -464,6 +511,14 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 					task.DependsOn = append(task.DependsOn, dep)
 				}
 			}
+			if needsFixedSubject {
+				task.DependsOn = append(task.DependsOn, contract.TaskDependency{TaskID: previousFix})
+			}
+			task.InputArtifactIDs = []string{}
+			for id := range inputIDs {
+				task.InputArtifactIDs = append(task.InputArtifactIDs, id)
+			}
+			sort.Strings(task.InputArtifactIDs)
 			// Multiple old reviewer edges can converge on the same newly allocated set.
 			seen := map[string]bool{}
 			unique := []contract.TaskDependency{}
@@ -479,6 +534,9 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 			if err := kernelRecordTx(ctx, tx, "template_future_clone", structureID("task-", wave.ID, task.ID), wave.ID, map[string]any{"source_task_id": structureID("task-", wave.ID, old.ID), "expansion_key": key}); err != nil {
 				return plan, reviewRoots, err
 			}
+			if err := cloneTemplateMetadataTx(ctx, tx, wave, old.ID, task.ID, key, cloneIDs, plan.Templates); err != nil {
+				return plan, reviewRoots, err
+			}
 		}
 		plan.Phases = append(plan.Phases, phase)
 	}
@@ -486,4 +544,48 @@ func (k *KernelStore) buildKernelTemplatePlan(ctx context.Context, tx *sql.Tx, w
 		return plan, reviewRoots, err
 	}
 	return plan, reviewRoots, nil
+}
+
+func cloneTemplateMetadataTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, oldLocal, newLocal, key string, clones map[string]string, templates []contract.FixReviewTemplate) error {
+	oldID, newID := structureID("task-", wave.ID, oldLocal), structureID("task-", wave.ID, newLocal)
+	var lineage templateReviewLineage
+	err := completionRecord(ctx, tx, "template_review_lineage", oldID, &lineage)
+	if err == nil {
+		if next := clones[lineage.RootReviewLocalID]; next != "" {
+			lineage.RootReviewLocalID = next
+		}
+		definitions := []contract.FixReviewTemplate{}
+		for _, t := range templates {
+			if t.InputTaskID == lineage.RootReviewLocalID {
+				definitions = append(definitions, t)
+			}
+		}
+		// A clone is a fresh identity for the same authorized pending step,
+		// retaining its round and origin rather than resetting repeat limits.
+		lineage.TemplateDigest, err = contentDigest(definitions)
+		if err != nil {
+			return err
+		}
+		if err = kernelRecordTx(ctx, tx, "template_review_lineage", newID, wave.ID, lineage); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var input map[string]any
+	err = completionRecord(ctx, tx, "template_task_context", oldID, &input)
+	if err == nil {
+		for _, field := range []string{"previous_fix_local_id", "input_task_local_id"} {
+			if local, ok := input[field].(string); ok && clones[local] != "" {
+				input[field] = clones[local]
+			}
+		}
+		input["clone_expansion_key"] = key
+		if err = kernelRecordTx(ctx, tx, "template_task_context", newID, wave.ID, input); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return nil
 }
