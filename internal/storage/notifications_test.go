@@ -432,3 +432,111 @@ func TestWaveTerminalSubscriptionsAndForeignParent(t *testing.T) {
 		t.Fatal("event and snapshot observations have incorrect provenance", items)
 	}
 }
+
+func TestReplanCancellationNotifiesOutgoingSubscriptionsAtomically(t *testing.T) {
+	ctx := context.Background()
+	store, request := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := store.AdoptPlan(ctx, wave.Target(), "initial", storagePlanFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range initial.CreatedTaskIDs {
+		if _, err = store.Subscribe(ctx, SubscriptionRequest{SessionID: "main", Target: initial.Target, Key: id, Kind: "task_terminal", TaskID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := storagePlanFixture()
+	for i := range plan.Phases {
+		phase := &plan.Phases[i]
+		phase.ID += "-new"
+		phase.Tasks[0].ID += "-new"
+		phase.Completion.RequiredTaskIDs = []string{phase.Tasks[0].ID}
+		if i > 0 {
+			phase.Tasks[0].DependsOn[0].TaskID += "-new"
+		}
+	}
+	if _, err = store.DB.Exec("CREATE TRIGGER inject_cancel_notification BEFORE INSERT ON kernel_notifications BEGIN SELECT RAISE(ABORT,'cancellation notification failure'); END"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AdoptPlan(ctx, initial.Target, "replan", plan); err == nil {
+		t.Fatal("plan committed without outgoing terminal notification")
+	}
+	current, err := store.Wave(ctx, wave.ID)
+	if err != nil || current.PlanRevision != 1 || current.TasksCreated != 2 {
+		t.Fatal("partial replacement plan survived", current, err)
+	}
+	for _, id := range initial.CreatedTaskIDs {
+		task, err := store.Task(ctx, id)
+		if err != nil || task.State != contract.TaskReady {
+			t.Fatal("partial cancellation survived", task, err)
+		}
+	}
+	if _, err = store.DB.Exec("DROP TRIGGER inject_cancel_notification"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.AdoptPlan(ctx, initial.Target, "replan", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ReconcileNotifications(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.Notifications(ctx, "main", 0, 100)
+	if err != nil || len(items) != 2 {
+		t.Fatal(items, err)
+	}
+	for _, item := range items {
+		if item.TaskState != contract.TaskCanceled || item.Target != initial.Target || item.Target == next.Target || item.ObservedVia != "event" || item.SourceEventID != item.TaskID+":canceled" {
+			t.Fatal("outgoing cancellation was lost or became new-plan input", item)
+		}
+	}
+}
+func TestOldNonterminalIntentObservesCurrentSnapshotWithCorrectBoundary(t *testing.T) {
+	ctx := context.Background()
+	store, b, first, result := recordedTaskResultFixture(t, func(r *contract.TaskResult) {
+		r.Outcome, r.Blockers = "blocked", []string{"need input"}
+	})
+	if _, err := store.Subscribe(ctx, terminalSubscription(b)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkSessionStopped(ctx, b.ID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyTaskResult(ctx, b.ID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.SessionBinding(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = reserveSessionFixture(t, store, b)
+	result.Outcome, result.Blockers = "result", nil
+	recordAndStopTaskResult(t, store, b, "second", result)
+	applied, err := store.ApplyTaskResult(ctx, b.ID, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reconstruct the pre-fanout situation in which an older blocked event is
+	// visited first, after the Task has reached a newer terminal result.
+	if _, err = store.DB.Exec("DELETE FROM kernel_notifications"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB.Exec("DELETE FROM records WHERE kind='notification_fanout' AND id=?", first.ID+":result_applied"); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := store.ReconcileNotifications(ctx, 1); err != nil || count != 1 {
+		t.Fatal(count, err)
+	}
+	var boundary int64
+	if err = store.DB.QueryRow("SELECT max(sequence) FROM kernel_events").Scan(&boundary); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.Notifications(ctx, "main", 0, 100)
+	if err != nil || len(items) != 1 || items[0].ObservedVia != "state_snapshot" || items[0].SourceEventID != "" || items[0].EventBoundary != boundary || items[0].ResultID != applied.ResultID {
+		t.Fatal("nonterminal source was presented as the cause of completion", items, err)
+	}
+}

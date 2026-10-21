@@ -198,10 +198,7 @@ func (k *KernelStore) observeSubscriptionTx(ctx context.Context, tx *sql.Tx, sub
 	if wave.Target() != sub.Target {
 		return nil // History remains available; never reinterpret an old condition.
 	}
-	n := Notification{SubscriptionID: sub.ID, SessionID: sub.Request.SessionID, Target: sub.Target, SourceTarget: sub.Target, SourceEventID: sourceEvent, EventBoundary: sequence, ObservedVia: "event", Kind: sub.Request.Kind, State: "pending", CreatedAt: k.clock()}
-	if sourceEvent == "" {
-		n.ObservedVia = "state_snapshot"
-	}
+	n := Notification{SubscriptionID: sub.ID, SessionID: sub.Request.SessionID, Target: sub.Target, SourceTarget: sub.Target, EventBoundary: sequence, ObservedVia: "state_snapshot", Kind: sub.Request.Kind, State: "pending", CreatedAt: k.clock()}
 	switch sub.Request.Kind {
 	case "task_terminal":
 		task, err := loadTask(ctx, tx, sub.Request.TaskID)
@@ -226,6 +223,21 @@ func (k *KernelStore) observeSubscriptionTx(ctx context.Context, tx *sql.Tx, sub
 	default:
 		return errors.New("unsupported subscription condition")
 	}
+	if sourceEvent != "" {
+		matches, err := notificationSourceMatchesTx(ctx, tx, n, sourceEvent)
+		if err != nil {
+			return err
+		}
+		if matches {
+			n.SourceEventID, n.ObservedVia = sourceEvent, "event"
+		}
+	}
+	if n.ObservedVia == "state_snapshot" {
+		// A current-state observation can be newer than a replayed intent.
+		if err = tx.QueryRowContext(ctx, "SELECT coalesce(max(sequence),0) FROM kernel_events").Scan(&n.EventBoundary); err != nil {
+			return err
+		}
+	}
 	n.ID = structureID("notification-", sub.ID, n.EventID)
 	raw, err := json.Marshal(n)
 	if err != nil {
@@ -233,6 +245,35 @@ func (k *KernelStore) observeSubscriptionTx(ctx context.Context, tx *sql.Tx, sub
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO kernel_notifications(id,subscription_id,event_id,session_id,state,payload) VALUES(?,?,?,?,'pending',?) ON CONFLICT(subscription_id,event_id) DO NOTHING", n.ID, sub.ID, n.EventID, n.SessionID, raw)
 	return err
+}
+
+func notificationSourceMatchesTx(ctx context.Context, tx *sql.Tx, n Notification, eventID string) (bool, error) {
+	var wave, task, kind string
+	var scope, plan int
+	var raw []byte
+	err := tx.QueryRowContext(ctx, "SELECT wave_id,task_id,kind,scope_revision,plan_revision,payload FROM kernel_events WHERE id=?", eventID).Scan(&wave, &task, &kind, &scope, &plan, &raw)
+	if err != nil {
+		return false, err
+	}
+	if wave != n.SourceTarget.WaveID || task != n.TaskID || scope != n.SourceTarget.ScopeRevision || plan != n.SourceTarget.PlanRevision {
+		return false, nil
+	}
+	switch kind {
+	case "task_result_applied", "task_canceled":
+		var applied ResultApplication
+		if err = json.Unmarshal(raw, &applied); err != nil {
+			return false, err
+		}
+		return applied.State.Terminal() && applied.State == n.TaskState && applied.TaskID == n.TaskID && applied.Target == n.SourceTarget && applied.ResultID == n.ResultID, nil
+	case "task_failed":
+		return n.TaskState == contract.TaskFailed, nil
+	case "wave_completed":
+		return n.WaveState == domain.WaveCompleted, nil
+	case "wave_canceled":
+		return n.WaveState == domain.WaveCanceled, nil
+	default:
+		return false, nil
+	}
 }
 
 // fanoutNotificationTx is called with each state transition and its saved
@@ -268,7 +309,7 @@ func (k *KernelStore) fanoutNotificationTx(ctx context.Context, tx *sql.Tx, inte
 		// that case this is a terminal-state snapshot, not a claim that the
 		// visited event caused the observed result.
 		sourceEvent := ""
-		if sub.Request.Kind == "task_terminal" && intent.TaskID == sub.Request.TaskID && (intent.Kind == "task_result_applied" || intent.Kind == "task_failed") || sub.Request.Kind == "wave_terminal" && (intent.Kind == "wave_completed" || intent.Kind == "wave_canceled") {
+		if sub.Request.Kind == "task_terminal" && intent.TaskID == sub.Request.TaskID && (intent.Kind == "task_result_applied" || intent.Kind == "task_failed" || intent.Kind == "task_canceled") || sub.Request.Kind == "wave_terminal" && (intent.Kind == "wave_completed" || intent.Kind == "wave_canceled") {
 			sourceEvent = intent.EventID
 		}
 		if err = k.observeSubscriptionTx(ctx, tx, sub, sourceEvent, intent.Sequence); err != nil {

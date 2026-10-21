@@ -504,6 +504,11 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 			if err = saveTask(ctx, tx, old); err != nil {
 				return receipt, err
 			}
+			// Existing subscribers belong to the outgoing plan. Save their
+			// cancellation observation before switching the Wave's revision.
+			if err = k.waveEventTx(ctx, tx, wave, "task_canceled", old.ID, old.ID+":canceled", ResultApplication{TaskID: old.ID, Target: old.Target(), State: old.State, Reason: old.Reason}); err != nil {
+				return receipt, err
+			}
 		}
 	}
 	wave.PlanRevision = revision
