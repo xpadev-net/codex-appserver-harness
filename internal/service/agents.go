@@ -192,6 +192,25 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 		}
 		input["failure_log_excerpts"] = logs
 	}
+	ciEvidence := []CIEvidence{}
+	for _, id := range correction.EvidenceIDs {
+		var evidence CIEvidence
+		if err := c.Store.Record(ctx, "ci_evidence", id, &evidence); err == nil {
+			if evidence.Candidate != candidate {
+				return c.reject(ctx, w, op, "CI evidence belongs to a stale candidate")
+			}
+			if len(evidence.Check.Output.Summary) > 16384 {
+				evidence.Check.Output.Summary = evidence.Check.Output.Summary[:16384]
+			}
+			if len(evidence.Check.Output.Text) > 16384 {
+				evidence.Check.Output.Text = evidence.Check.Output.Text[:16384]
+			}
+			ciEvidence = append(ciEvidence, evidence)
+		} else if !missing(err) {
+			return err
+		}
+	}
+	input["ci_evidence"] = ciEvidence
 	var schema any
 	schema = implementationSchema()
 	if op.Kind == "verify" {

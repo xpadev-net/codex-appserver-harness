@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/policy"
 	"github.com/xpadev-net/codex-appserver-harness/internal/review"
@@ -32,6 +33,9 @@ type fakeGH struct {
 	requests, merges, closed int
 	requestTime              time.Time
 	approved                 bool
+	checkResults             []github.Check
+	ciFailureSHA             string
+	ciFailFirst              bool
 }
 
 func (f *fakeGH) GetIssue(_ context.Context, n int) (github.Issue, error) {
@@ -100,8 +104,20 @@ func (f *fakeGH) Merge(ctx context.Context, _ int, head, method string) error {
 	f.pr.State = "closed"
 	return nil
 }
-func (f *fakeGH) Checks(context.Context, string) ([]github.Check, error) {
-	return []github.Check{}, nil
+func (f *fakeGH) Checks(_ context.Context, target string) ([]github.Check, error) {
+	if f.ciFailFirst {
+		if f.ciFailureSHA == "" {
+			f.ciFailureSHA = target
+		}
+		check := github.Check{ID: 100, Name: "required", HeadSHA: target, Status: "completed", Conclusion: "success", DetailsURL: "https://github.com/owner/repo/actions/runs/100"}
+		check.App.ID = 9
+		if target == f.ciFailureSHA {
+			check.Conclusion = "failure"
+			check.Output.Summary = "acceptance assertion failed"
+		}
+		return []github.Check{check}, nil
+	}
+	return f.checkResults, nil
 }
 func (f *fakeGH) Conditions(context.Context, int) (string, error) { return "CLEAN", nil }
 func (f *fakeGH) FindChild(_ context.Context, marker string) (int, error) {
@@ -135,6 +151,7 @@ func (f *fakeGH) CloseIssue(_ context.Context, n int) error {
 type fakeAgents struct {
 	totals         map[string]int
 	calls          int
+	prompts        []string
 	classification string
 	autoSplit      bool
 	partialChild   bool
@@ -143,6 +160,7 @@ type fakeAgents struct {
 
 func (f *fakeAgents) Run(_ context.Context, w domain.WorkItem, op domain.Operation, input string, _ any) (worker.Run, error) {
 	f.calls++
+	f.prompts = append(f.prompts, input)
 	var in struct {
 		Scope      verification.Scope `json:"scope"`
 		Correction Correction         `json:"correction"`
@@ -771,5 +789,85 @@ func TestEditedIssueBetweenMergeAndContinuationRequiresAdoption(t *testing.T) {
 	saved, _ := c.Store.Get(ctx, w.ID)
 	if saved.Phase != domain.Merged || saved.ScopeRevision != 1 || saved.Candidate != w.Candidate {
 		t.Fatal("merged history changed", saved)
+	}
+}
+
+func TestRequiredCIFailureRepairsSameRoleAndPreservesEvidence(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.ciFailFirst = true
+	drive(t, c, 32)
+	w, _ := c.Store.Get(ctx, "w")
+	if w.Phase != domain.Merged || agents.calls != 4 || gh.merges != 1 {
+		t.Fatal(w, agents.calls, gh.merges)
+	}
+	raw, err := c.Store.Records(ctx, "ci_evidence", "w")
+	if err != nil || len(raw) != 1 {
+		t.Fatal(raw, err)
+	}
+	var evidence CIEvidence
+	json.Unmarshal(raw[0], &evidence)
+	if evidence.Check.Conclusion != "failure" || evidence.TestedSHA != gh.ciFailureSHA || evidence.Reference == "" {
+		t.Fatal(evidence)
+	}
+	var input struct {
+		CIEvidence []CIEvidence `json:"ci_evidence"`
+	}
+	json.Unmarshal([]byte(agents.prompts[2]), &input)
+	if len(input.CIEvidence) != 1 || input.CIEvidence[0].ID != evidence.ID || input.CIEvidence[0].Check.Output.Summary == "" {
+		t.Fatal("CI evidence missing from existing verification thread input", agents.prompts[2])
+	}
+}
+
+func TestCIFailureSelectionAndMechanicalHold(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, conclusion string
+		stale                  bool
+		assess, hold           bool
+	}{
+		{"old SHA", "head", "failure", true, false, false},
+		{"failure", "head", "failure", false, true, false},
+		{"test merge failure", "test_merge", "failure", false, true, false},
+		{"timeout", "head", "timed_out", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, gh, agents, _ := setup(t)
+			ctx := context.Background()
+			gh.approved = false
+			drive(t, c, 8)
+			w, _ := c.Store.Get(ctx, "w")
+			candidate, _ := c.candidate(ctx, w)
+			target := candidate.SHA
+			mapping := gate.CIRevision{}
+			if tc.mode == "test_merge" {
+				target = strings.Repeat("b", 40)
+				mapping = gate.CIRevision{HeadSHA: candidate.SHA, BaseSHA: candidate.BaseSHA, TestedSHA: target, Verified: true}
+			}
+			check := github.Check{ID: 100, Name: "required", HeadSHA: target, Status: "completed", Conclusion: tc.conclusion}
+			check.App.ID = 9
+			if tc.stale {
+				check.HeadSHA = "old"
+			}
+			snapshot := gate.Snapshot{Candidate: candidate, CI: mapping, RequiredChecks: []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}, Checks: []github.Check{check}}
+			handled, err := c.routeCIFailures(ctx, w, snapshot)
+			if err != nil || handled != (tc.assess || tc.hold) {
+				t.Fatal(handled, err)
+			}
+			after, _ := c.Store.Get(ctx, w.ID)
+			if (after.Phase == domain.Verifying) != tc.assess || (after.Phase == domain.Blocked) != tc.hold || agents.calls != 2 {
+				t.Fatal(after, agents.calls)
+			}
+			if tc.assess {
+				var correction Correction
+				c.Store.Record(ctx, "correction", w.ID, &correction)
+				var evidence CIEvidence
+				c.Store.Record(ctx, "ci_evidence", correction.EvidenceIDs[0], &evidence)
+				if evidence.TestedSHA != target || evidence.Candidate.SHA != candidate.SHA {
+					t.Fatal(evidence)
+				}
+			}
+		})
 	}
 }

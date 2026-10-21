@@ -263,6 +263,9 @@ func (c *Controller) observeReview(ctx context.Context, w domain.WorkItem) error
 	if err != nil {
 		return err
 	}
+	if handled, err := c.routeCIFailures(ctx, w, snapshot); handled || err != nil {
+		return err
+	}
 	if err = c.Store.Put(ctx, "gate", w.ID, w.ID, gate.Reasons(snapshot)); err != nil {
 		return err
 	}

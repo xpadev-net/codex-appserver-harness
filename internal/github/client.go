@@ -220,6 +220,13 @@ func (c Client) Merge(ctx context.Context, number int, expectedHead, method stri
 }
 
 type Check struct {
+	DetailsURL  string    `json:"details_url"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+	Output      struct {
+		Summary string `json:"summary"`
+		Text    string `json:"text"`
+	} `json:"output"`
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	HeadSHA    string `json:"head_sha"`

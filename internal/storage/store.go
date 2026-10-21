@@ -790,6 +790,14 @@ func (s *Store) EventRecords(ctx context.Context, e domain.Event, records map[st
 		return err
 	}
 	defer tx.Rollback()
+	w, err := read(ctx, tx, e.WorkItemID)
+	if err != nil {
+		return err
+	}
+	if e.Candidate != "" && (w.Candidate != e.Candidate || w.ScopeRevision != e.ScopeRevision || w.PolicyRevision != e.PolicyRevision || w.Attempt != e.Attempt) {
+		return errors.New("event record preconditions changed")
+	}
+
 	for kind, entries := range records {
 		for id, value := range entries {
 			data, err := json.Marshal(value)

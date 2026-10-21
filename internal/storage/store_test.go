@@ -395,3 +395,19 @@ func TestSplitDepthIsAtomicWithChildRegistration(t *testing.T) {
 		t.Fatal(depth, err)
 	}
 }
+
+func TestEventRecordsRejectStaleCandidateAtomically(t *testing.T) {
+	s, _ := fixture(t)
+	ctx := context.Background()
+	if err := s.Claim(ctx, work()); err != nil {
+		t.Fatal(err)
+	}
+	e := domain.Event{ID: "stale-ci", WorkItemID: "wi", Kind: "repair_tests", Candidate: "superseded", ScopeRevision: 1, PolicyRevision: 1}
+	if err := s.EventRecords(ctx, e, map[string]map[string]any{"ci_dispatched": {"attempt": true}}); err == nil {
+		t.Fatal("stale event accepted")
+	}
+	var dispatched bool
+	if err := s.Record(ctx, "ci_dispatched", "attempt", &dispatched); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("stale evidence marker committed", dispatched, err)
+	}
+}

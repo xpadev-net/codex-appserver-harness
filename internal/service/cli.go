@@ -77,7 +77,7 @@ func CLI(ctx context.Context, args []string) error {
 			return err
 		}
 		out := map[string]any{"work_item": w}
-		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold"} {
+		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence"} {
 			records, err := s.Records(ctx, kind, w.ID)
 			if err != nil {
 				return err
