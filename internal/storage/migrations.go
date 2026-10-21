@@ -13,6 +13,9 @@ import (
 // Inspect existing files using a read-only SQLite connection so rejecting an
 // unknown/legacy DB cannot checkpoint its WAL or change file permissions.
 func inspectDatabaseFile(path string) (int, error) {
+	return inspectDatabaseFileWith(path, nil)
+}
+func inspectDatabaseFileWith(path string, validate func(*sql.DB, int) error) (int, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return 0, nil
@@ -33,7 +36,11 @@ func inspectDatabaseFile(path string) (int, error) {
 		return 0, err
 	}
 	defer db.Close()
-	return databaseVersion(db)
+	version, err := databaseVersion(db)
+	if err == nil && validate != nil {
+		err = validate(db, version)
+	}
+	return version, err
 }
 
 // databaseVersion inspects before any DDL or journal-mode changes. Version zero

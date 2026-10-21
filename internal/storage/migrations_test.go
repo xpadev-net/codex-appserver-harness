@@ -110,6 +110,9 @@ func TestLegacyRuntimeRejectsUnknownSchemaBeforeDDL(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
 	before, _ := os.ReadFile(path)
 	if s, err := Open(path); err == nil {
 		s.Close()
@@ -118,6 +121,43 @@ func TestLegacyRuntimeRejectsUnknownSchemaBeforeDDL(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if !bytes.Equal(before, after) {
 		t.Fatal("unknown schema modified")
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0644 {
+		t.Fatal("rejected DB permissions changed", info, err)
+	}
+}
+
+func TestKernelRejectsDamagedOtherwiseValidSchemas(t *testing.T) {
+	for _, ddl := range []string{"DROP TABLE kernel_snapshots", "ALTER TABLE records DROP COLUMN payload", "CREATE TRIGGER unexpected AFTER INSERT ON kernel_waves BEGIN DELETE FROM kernel_tasks; END"} {
+		t.Run(ddl, func(t *testing.T) {
+			path := kernelPath(t)
+			store, err := OpenKernel(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.DB.Exec(ddl); err != nil {
+				t.Fatal(err)
+			}
+			store.Close()
+			if err = os.Chmod(path, 0644); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reopened, err := OpenKernel(path); err == nil {
+				reopened.Close()
+				t.Fatal("damaged schema accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("damaged schema modified", err)
+			}
+			if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0644 {
+				t.Fatal("damaged DB permissions changed", info, err)
+			}
+		})
 	}
 }
 func TestMigrationRegistryRejectsConflictsAndDoesNotRunOnOpen(t *testing.T) {

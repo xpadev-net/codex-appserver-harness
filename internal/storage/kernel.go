@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -38,7 +40,12 @@ func OpenKernel(path string) (*KernelStore, error) {
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return nil, errors.New("kernel DB must be a regular file")
 	}
-	inspected, err := inspectDatabaseFile(path)
+	inspected, err := inspectDatabaseFileWith(path, func(db *sql.DB, version int) error {
+		if version == KernelSchemaVersion {
+			return validateKernelSchema(db)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +83,8 @@ func OpenKernel(path string) (*KernelStore, error) {
 			return nil, err
 		}
 	} else {
-		for _, name := range []string{"kernel_waves", "kernel_tasks", "kernel_sessions", "kernel_artifacts", "kernel_events", "kernel_tool_operations", "kernel_run_bindings", "records"} {
-			var n int
-			if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&n); err != nil || n != 1 {
-				return nil, errors.New("incomplete kernel schema; restore/reconcile before dispatch")
-			}
+		if err = validateKernelSchema(db); err != nil {
+			return nil, err
 		}
 	}
 	if err = os.Chmod(path, 0600); err != nil {
@@ -94,6 +98,111 @@ func OpenKernel(path string) (*KernelStore, error) {
 	}
 	success = true
 	return &KernelStore{Store: &Store{DB: db}, Root: root, Now: time.Now, ControllerArtifactBytes: domain.DefaultKernelLimits().ControllerArtifactBytes}, nil
+}
+
+type schemaObject struct{ kind, name, table, definition string }
+
+var kernelShapeOnce sync.Once
+var kernelShape []schemaObject
+var kernelShapeErr error
+
+func schemaObjects(db *sql.DB) ([]schemaObject, error) {
+	rows, err := db.Query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []schemaObject{}
+	for rows.Next() {
+		var o schemaObject
+		var definition sql.NullString
+		if err = rows.Scan(&o.kind, &o.name, &o.table, &definition); err != nil {
+			return nil, err
+		}
+		o.definition = normalizeSchemaSQL(definition.String)
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// Compare the complete declared DDL, including columns, PK/unique constraints,
+// indexes and triggers. Unrelated legacy tables remain permissible for M.
+func validateKernelSchema(db *sql.DB) error {
+	kernelShapeOnce.Do(func() {
+		memory, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			kernelShapeErr = err
+			return
+		}
+		defer memory.Close()
+		if _, err = memory.Exec(kernelSchema); err != nil {
+			kernelShapeErr = err
+			return
+		}
+		kernelShape, kernelShapeErr = schemaObjects(memory)
+	})
+	if kernelShapeErr != nil {
+		return kernelShapeErr
+	}
+	actual, err := schemaObjects(db)
+	if err != nil {
+		return err
+	}
+	tables := map[string]bool{}
+	expected := map[string]schemaObject{}
+	for _, o := range kernelShape {
+		if o.kind == "table" {
+			tables[o.name] = true
+		}
+		expected[o.kind+":"+o.name] = o
+	}
+	seen := map[string]bool{}
+	for _, o := range actual {
+		if !tables[o.table] && !strings.HasPrefix(o.table, "kernel_") {
+			continue
+		}
+		key := o.kind + ":" + o.name
+		if want, ok := expected[key]; !ok || want != o {
+			return errors.New("kernel schema structure differs; restore/reconcile before dispatch")
+		}
+		seen[key] = true
+	}
+	if len(seen) != len(expected) {
+		return errors.New("incomplete kernel schema; restore/reconcile before dispatch")
+	}
+	return nil
+}
+func normalizeSchemaSQL(s string) string {
+	var out strings.Builder
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			out.WriteByte(c)
+			if c == quote {
+				if i+1 < len(s) && s[i+1] == quote {
+					out.WriteByte(s[i+1])
+					i++
+				} else {
+					quote = 0
+				}
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"', '`':
+			quote = c
+		case '[':
+			quote = ']'
+		case ' ', '\t', '\r', '\n':
+			continue
+		}
+		if quote == 0 && c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out.WriteByte(c)
+	}
+	return out.String()
 }
 func (k *KernelStore) clock() time.Time {
 	if k.Now == nil {
