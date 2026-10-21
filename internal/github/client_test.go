@@ -97,7 +97,7 @@ esac
 	}
 	t.Setenv("PATH", dir)
 	t.Setenv("GH_TOKEN", "private-controller-test-token")
-	client := Client{Repository: "owner/repo", RepositoryID: 1}
+	client := Client{Repository: "Owner/Repo", RepositoryID: 1}
 	text, err := client.CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
 	if err != nil || !strings.Contains(text, "expected true") || strings.Contains(text, "private-controller-test-token") || !strings.Contains(text, "[REDACTED]") {
 		t.Fatal("missing or unredacted diagnostic", err)

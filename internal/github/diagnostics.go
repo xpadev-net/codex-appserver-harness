@@ -36,7 +36,7 @@ func (c Client) CheckDiagnostics(ctx context.Context, check Check) (string, erro
 	logErr := error(nil)
 	u, err := url.Parse(check.DetailsURL)
 	if err == nil && u.Scheme == "https" && u.Host == "github.com" && u.User == nil {
-		pattern := regexp.MustCompile("^/" + regexp.QuoteMeta(c.Repository) + `/actions/runs/[0-9]+/job/([0-9]+)/?$`)
+		pattern := regexp.MustCompile("(?i)^/" + regexp.QuoteMeta(c.Repository) + `/actions/runs/[0-9]+/job/([0-9]+)/?$`)
 		if match := pattern.FindStringSubmatch(u.Path); match != nil {
 			cmd := exec.CommandContext(ctx, "gh", "api", "repos/"+c.Repository+"/actions/jobs/"+match[1]+"/logs")
 			logTail := &diagnosticTail{limit: 65536}

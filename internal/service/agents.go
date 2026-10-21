@@ -339,12 +339,6 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			return err
 		}
 
-		if next.ID != candidate.ID {
-			correction, err = c.retireCorrection(ctx, w, op, correction)
-			if err != nil {
-				return err
-			}
-		}
 		if w.Candidate != "" {
 			var previous verification.Plan
 			if c.Store.Record(ctx, "plan", w.ID, &previous) == nil {
@@ -412,11 +406,8 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 	if err = plan.ValidateCommit(ctx, w.Worktree, next.SHA); err != nil {
 		return c.reject(ctx, w, op, err.Error())
 	}
-	if next.ID != candidate.ID {
-		correction, err = c.retireCorrection(ctx, w, op, correction)
-		if err != nil {
-			return err
-		}
+	if err = c.Store.Record(ctx, "correction", w.ID, &correction); err != nil && !missing(err) {
+		return err
 	}
 	plan, err = verification.Rebind(plan, w.ID, next, scope, c.Config.Verification)
 	if err != nil {

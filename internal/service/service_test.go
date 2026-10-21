@@ -978,3 +978,39 @@ func TestMissingCIDiagnosticsBlocksWithoutAssessment(t *testing.T) {
 		t.Fatal(after, handled, err, agents.calls)
 	}
 }
+
+func TestBaseRefreshRetiresConsumedCICorrection(t *testing.T) {
+	c, gh, _, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	candidate, _ := c.candidate(ctx, w)
+	evidence := CIEvidence{ID: "old-ci", Candidate: candidate}
+	c.Store.Put(ctx, "ci_evidence", evidence.ID, w.ID, evidence)
+	c.Store.Put(ctx, "correction", w.ID, w.ID, Correction{Mode: "repair", Consumed: true, EvidenceIDs: []string{evidence.ID}, FeedbackIDs: []string{}})
+	for _, args := range [][]string{{"commit", "--allow-empty", "-m", "base update"}, {"push", "origin", "trunk"}} {
+		if _, err := workspace.Git(ctx, c.Config.RepositoryPath, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := workspace.Resolve(ctx, c.Config.RepositoryPath, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.refreshBase(ctx, w, base); err != nil {
+		t.Fatal(err)
+	}
+	var correction Correction
+	c.Store.Record(ctx, "correction", w.ID, &correction)
+	if len(correction.EvidenceIDs) != 0 || !correction.Consumed {
+		t.Fatal(correction)
+	}
+	history, err := c.Store.Records(ctx, "correction_history", w.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatal(history, err)
+	}
+	if candidateID(w, candidate.SHA, base) == candidateID(w, candidate.SHA, candidate.BaseSHA) {
+		t.Fatal("base change reused candidate identity")
+	}
+}
