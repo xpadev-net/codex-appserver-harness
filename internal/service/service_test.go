@@ -28,6 +28,7 @@ type fakeGH struct {
 	requestIDs               map[string]int64
 	children                 map[int]github.Issue
 	posts                    int
+	poolCalls                int
 	controller               *Controller
 	issue                    github.Issue
 	pr                       github.PR
@@ -52,7 +53,7 @@ func (f *fakeGH) GetIssue(_ context.Context, n int) (github.Issue, error) {
 	}
 	return issue, nil
 }
-func (f *fakeGH) Pool(context.Context) ([]github.Issue, error) { return nil, nil }
+func (f *fakeGH) Pool(context.Context) ([]github.Issue, error) { f.poolCalls++; return nil, nil }
 func (f *fakeGH) Pull(context.Context, int) (github.PR, error) { return f.pr, nil }
 func (f *fakeGH) FindPR(context.Context, string, string) (*github.PR, error) {
 	if f.pr.Number == 0 {
@@ -219,7 +220,11 @@ func (f *fakeAgents) Run(_ context.Context, w domain.WorkItem, op domain.Operati
 		output = verification.Assessment{SchemaVersion: 1, WorkItemID: w.ID, CandidateID: w.Candidate, ScopeRevision: w.ScopeRevision, Classification: f.classification, EvidenceIDs: in.Correction.EvidenceIDs, Reason: "evidence shows defect", ExpectationBasis: "original acceptance", TestChanges: []string{}}
 	} else {
 		os.MkdirAll(filepath.Join(w.Worktree, "tests"), 0700)
-		os.WriteFile(filepath.Join(w.Worktree, "tests", "test.txt"), []byte("expected behavior"), 0600)
+		testBody := "expected behavior"
+		if strings.Contains(w.ID, "final-repair") && f.classification == "test_defect" {
+			testBody = "corrected test expectation"
+		}
+		os.WriteFile(filepath.Join(w.Worktree, "tests", "test.txt"), []byte(testBody), 0600)
 		mappings := []verification.Mapping{}
 		for _, id := range in.Scope.Included {
 			mappings = append(mappings, verification.Mapping{CriterionID: id, TestRef: "tests/test.txt", ExpectationBasis: "original " + id, ProfileID: "unit"})

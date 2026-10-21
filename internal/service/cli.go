@@ -25,7 +25,7 @@ import (
 
 func CLI(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("commands: init, serve, status, inspect, metrics, pause, resume, hold, release, cancel, retry, interrupt, associate, split, adopt, webhook, reconcile-job")
+		return errors.New("commands: init, serve, status, inspect, metrics, pause, resume, hold, release, cancel, retry, interrupt, associate, split, adopt, webhook, reconcile-job, retry-final")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -79,7 +79,13 @@ func CLI(ctx context.Context, args []string) error {
 			return err
 		}
 		out := map[string]any{"work_item": w}
-		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution"} {
+		var final FinalAcceptanceState
+		if err := s.Record(ctx, "parent_final_state", issueKey(w), &final); err == nil {
+			out["parent_final_state"] = final
+		} else if !missing(err) {
+			return err
+		}
+		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution", "final_failure", "final_recovery_audit", "budget_baseline"} {
 			records, err := s.Records(ctx, kind, w.ID)
 			if err != nil {
 				return err
@@ -144,6 +150,8 @@ func CLI(ctx context.Context, args []string) error {
 	switch command {
 	case "pause", "resume", "hold", "release", "cancel":
 		return s.Apply(ctx, event)
+	case "retry-final":
+		return controller.RetryFinal(ctx, w.ID, *evidence, *reason)
 	case "retry":
 		if *reason == "" {
 			return errors.New("--reason is required; budgets are retained")
@@ -418,6 +426,14 @@ func (c *Controller) Metrics(ctx context.Context, id string) (map[string]any, er
 	}
 	for _, total := range threadTotals {
 		tokens += total
+	}
+	if id != "" {
+		var baseline BudgetBaseline
+		if err = c.Store.Record(ctx, "budget_baseline", id, &baseline); err == nil {
+			tokens += baseline.ObservedTokens
+		} else if !missing(err) {
+			return nil, err
+		}
 	}
 	items, err := c.Store.List(ctx)
 	if err != nil {

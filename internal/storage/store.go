@@ -322,6 +322,18 @@ func (s *Store) ClaimNext(ctx context.Context, previous string, w domain.WorkIte
 	return s.ClaimNextRecords(ctx, previous, w, nil)
 }
 func (s *Store) ClaimNextRecords(ctx context.Context, previous string, w domain.WorkItem, records map[string]any) error {
+	return s.claimSuccessor(ctx, previous, w, records, "", nil, nil)
+}
+
+// ClaimFinalRepair atomically transfers a terminal issue claim and its separate
+// final-acceptance lifecycle. It cannot reopen or alter the merged PR history.
+func (s *Store) ClaimFinalRepair(ctx context.Context, previous string, w domain.WorkItem, records map[string]any, key string, expected, next any) error {
+	if key == "" {
+		return errors.New("final acceptance key required")
+	}
+	return s.claimSuccessor(ctx, previous, w, records, key, expected, next)
+}
+func (s *Store) claimSuccessor(ctx context.Context, previous string, w domain.WorkItem, records map[string]any, finalKey string, expected, next any) error {
 	if w.ID == "" || w.ID == previous || w.Phase != domain.Ready || w.ScopeRevision < 1 || w.PolicyRevision < 1 {
 		return errors.New("invalid next work item")
 	}
@@ -334,8 +346,35 @@ func (s *Store) ClaimNextRecords(ctx context.Context, previous string, w domain.
 	if err != nil {
 		return err
 	}
-	if prev.Phase != domain.Merged || w.RepositoryID != prev.RepositoryID || w.Issue != prev.Issue {
-		return errors.New("predecessor must be merged on same issue")
+	if (prev.Phase != domain.Merged && !(finalKey != "" && prev.Phase == domain.Split)) || w.RepositoryID != prev.RepositoryID || w.Issue != prev.Issue {
+		return errors.New("predecessor must be merged, or explicitly recovering a split, on same issue")
+	}
+	if finalKey != "" {
+		if w.ScopeRevision != prev.ScopeRevision || w.PolicyRevision != prev.PolicyRevision {
+			return errors.New("final repair revision changed")
+		}
+		var actual any
+		if err = completionRecord(ctx, tx, "parent_final_state", finalKey, &actual); err != nil {
+			return err
+		}
+		data, err := json.Marshal(expected)
+		if err != nil {
+			return err
+		}
+		var want any
+		if err = json.Unmarshal(data, &want); err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(actual, want) {
+			return errors.New("final acceptance state changed")
+		}
+		data, err = json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE records SET payload=?,work_item_id=? WHERE kind='parent_final_state' AND id=?", data, w.ID, finalKey); err != nil {
+			return err
+		}
 	}
 	initializeClock(&w)
 	b, err := json.Marshal(w)
@@ -870,7 +909,7 @@ func (s *Store) EventRecords(ctx context.Context, e domain.Event, records map[st
 	if err != nil {
 		return err
 	}
-	if e.Candidate != "" && (w.Candidate != e.Candidate || w.ScopeRevision != e.ScopeRevision || w.PolicyRevision != e.PolicyRevision || w.Attempt != e.Attempt) {
+	if (e.Candidate != "" || e.Kind == "start_assessment") && (w.Candidate != e.Candidate || w.ScopeRevision != e.ScopeRevision || w.PolicyRevision != e.PolicyRevision || w.Attempt != e.Attempt) {
 		return ErrEventPreconditions
 	}
 

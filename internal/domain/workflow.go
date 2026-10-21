@@ -230,6 +230,12 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 			if w.Phase == Verifying {
 				w.Phase = Reviewing
 			}
+		case "start_assessment":
+			if w.Phase == Ready && e.Ref != "" {
+				w.Candidate = e.Ref
+				w.Phase = Verifying
+				emit = "verify"
+			}
 		case "start":
 			if w.Phase == Ready {
 				w.Phase = Implementing

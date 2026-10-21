@@ -191,7 +191,7 @@ func (c *Controller) beforeWrite(ctx context.Context, _, _ string) error {
 	case "split":
 		allowed = latest.Phase == domain.Blocked && latest.Reason == "split_pending" && !latest.Paused
 	case "close_issue":
-		allowed = latest.Phase == domain.Merged || latest.Phase == domain.Split
+		allowed = (latest.Phase == domain.Merged || latest.Phase == domain.Split) && !latest.Paused && !latest.MergeHold
 	}
 	if !allowed {
 		return errors.New("operator/workflow state prohibits request")
