@@ -153,6 +153,7 @@ Task_0/1はcompleted、Task_2はin_progress、Task_3〜13はpending。指定owns
   - internal/storage/task_results_test.go
   - internal/storage/template_expansion.go
   - internal/storage/template_expansion_test.go
+  - internal/storage/template_subjects.go
   - internal/storage/migrations.go
   - internal/storage/migrations_test.go
   - internal/storage/store.go

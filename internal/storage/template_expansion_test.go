@@ -608,3 +608,118 @@ func TestTemplateFutureClonePreservesArtifactSelector(t *testing.T) {
 		t.Fatalf("cloned consumer gained unrelated output: deps=%+v", consumer.Spec.DependsOn)
 	}
 }
+
+func TestTemplateReviewIsPinnedToReplacementDespiteOriginalProvenance(t *testing.T) {
+	for _, target := range []string{"replacement", "original"} {
+		t.Run(target, func(t *testing.T) {
+			ctx := context.Background()
+			store, wave, source, old := templateFixture(t, false, []contract.FixReviewTemplate{kernelTemplate()}, []string{"artifact_defect"})
+			expanded, err := store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: wave.Target(), ReviewTaskID: source.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fix, err := store.Task(ctx, expanded.Admission.CreatedTaskIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacement := completeTemplateTask(t, store, fix, "replacement subject", "", nil, old)
+			subject, err := store.TemplateSubject(ctx, fix.ID)
+			if err != nil || subject.State != "bound" || subject.ArtifactID != replacement.ID {
+				t.Fatal(subject, err)
+			}
+			review, err := store.Task(ctx, expanded.Admission.CreatedTaskIDs[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected, err := store.TemplateReviewSubject(ctx, review.ID)
+			if err != nil || expected.ArtifactID != replacement.ID {
+				t.Fatal(expected, err)
+			}
+			// Original bytes remain available for comparison, not as the review target.
+			if _, _, err = store.ReadArtifact(ctx, review.SessionID, review.Target(), old.ID, 0, 100); err != nil {
+				t.Fatal("provenance is unreadable", err)
+			}
+			b, err := store.SessionBinding(ctx, review.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b = reserveSessionFixture(t, store, b)
+			if err = store.BindSessionThread(ctx, b, "pinned-review-thread"); err != nil {
+				t.Fatal(err)
+			}
+			b, err = store.SessionBinding(ctx, b.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := mustImport(t, store, ArtifactImport{SessionID: b.ID, Target: b.Target, Key: "review-output", Kind: "review", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: review.ID}}, "clean review report")
+			digest := replacement.Digest
+			if target == "original" {
+				digest = old.Digest
+			}
+			result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "result", Artifacts: []string{report.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "reviewed", EvidenceIDs: []string{report.ID}}}, Review: &contract.ReviewResult{TargetDigest: digest, Verdict: "clean", Findings: []contract.ReviewFinding{}}}
+			recordAndStopTaskResult(t, store, b, "pinned-review-run", result)
+			applied, err := store.ApplyTaskResult(ctx, b.ID, "pinned-review-run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wanted := contract.TaskCompleted
+			if target == "original" {
+				wanted = contract.TaskFailed
+			}
+			if applied.State != wanted {
+				t.Fatal("review validated wrong subject", applied)
+			}
+		})
+	}
+}
+func TestTemplateAmbiguousOrUnchangedSubjectNeedsMainAndExplicitKindCanSelect(t *testing.T) {
+	for _, mode := range []string{"ambiguous", "unchanged", "explicit"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			store, wave, source, _ := templateFixture(t, false, []contract.FixReviewTemplate{kernelTemplate()}, []string{"artifact_defect"})
+			expanded, err := store.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: wave.Target(), ReviewTaskID: source.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fix, err := store.Task(ctx, expanded.Admission.CreatedTaskIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := "corrected output"
+			extras := []domain.Artifact{}
+			if mode == "unchanged" {
+				text = "initial candidate"
+			} else {
+				kind := "report"
+				if mode == "explicit" {
+					kind = "subject"
+				}
+				extra := mustImport(t, store, ArtifactImport{SessionID: fix.SessionID, Target: fix.Target(), Key: "selected", Kind: kind, ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: fix.ID}}, "another owned output")
+				extras = append(extras, extra)
+			}
+			completeTemplateTask(t, store, fix, text, "", nil, extras...)
+			review, err := store.Task(ctx, expanded.Admission.CreatedTaskIDs[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			subject, err := store.TemplateReviewSubject(ctx, review.ID)
+			if mode == "explicit" {
+				if err != nil || subject.ArtifactID != extras[0].ID {
+					t.Fatal(subject, err)
+				}
+			} else {
+				if !errors.Is(err, ErrTemplateNeedsMain) {
+					t.Fatal("ambiguous/unchanged subject dispatched", subject, err)
+				}
+				saved, err := store.Task(ctx, review.ID)
+				if err != nil || saved.Attempts != 0 || saved.State != contract.TaskReady {
+					t.Fatal(saved, err)
+				}
+			}
+			completed, err := store.Task(ctx, fix.ID)
+			if err != nil || completed.State != contract.TaskCompleted {
+				t.Fatal("valid fix report was not retained", completed, err)
+			}
+		})
+	}
+}
