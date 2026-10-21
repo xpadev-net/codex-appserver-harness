@@ -221,9 +221,9 @@ func TestFinalUnknownLaunchRequiresQuiescenceBeforeRetry(t *testing.T) {
 	}
 }
 
-type reviewSplitRepairAgent struct{ *fakeAgents }
+type splitRepairAgent struct{ *fakeAgents }
 
-func (a reviewSplitRepairAgent) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+func (a splitRepairAgent) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
 	r, err := a.fakeAgents.Run(ctx, w, op, input, schema)
 	if strings.Contains(w.ID, "final-repair") && op.Kind == "implement" {
 		// Restore the assessment checkpoint; request decomposition without making a fix.
@@ -240,7 +240,7 @@ func TestRepairSplitMustWaitForChildren(t *testing.T) {
 	initial.Criteria = append(initial.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
 	initial.Included = []string{"AC1", "AC2"}
 	c.Store.Put(context.Background(), "scope", "w", "w", initial)
-	c.Agents = reviewSplitRepairAgent{a}
+	c.Agents = splitRepairAgent{a}
 	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
 	for i := 0; i < 40; i++ {
 		drive(t, c, 1)
@@ -426,4 +426,75 @@ func TestFinalAdministrativeHoldDoesNotSpendRunnerRetry(t *testing.T) {
 	if state.State != "completed" || state.Retries != 0 || state.Attempt != 0 || gh.closed != 1 || fake.calls != 2 || agents.calls != 2 {
 		t.Fatal(state, gh.closed, fake.calls, agents.calls)
 	}
+}
+
+func TestSingleFinalRepairRoundAllowsCorrection(t *testing.T) {
+	for _, classification := range []string{"implementation_defect", "test_defect"} {
+		t.Run(classification, func(t *testing.T) {
+			c, gh, agents, fake := setup(t)
+			ctx := context.Background()
+			c.Config.Limits.RepairRounds = 1
+			c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+			agents.classification = classification
+			c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+			drive(t, c, 45)
+			state := finalState(t, c)
+			repair, _ := c.Store.Get(ctx, state.WorkItemID)
+			if state.State != "completed" || repair.RepairRounds != 1 || gh.merges != 2 || gh.closed != 1 {
+				t.Fatal(state, repair, gh.merges, gh.closed)
+			}
+		})
+	}
+}
+
+func TestFinalRepairSplitCompletes(t *testing.T) {
+	c, gh, a, fake := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	c.Agents = rootRepairSplitAgent{a}
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "failed", remaining: 1}
+	drive(t, c, 100)
+	state := finalState(t, c)
+	if state.State != "completed" {
+		items, _ := c.Store.List(ctx)
+		t.Fatalf("state=%+v items=%+v merges=%d closed=%d", state, items, gh.merges, gh.closed)
+	}
+}
+
+func TestBlockedSplitChildFinalAllowsPool(t *testing.T) {
+	c, gh, a, fake := setup(t)
+	ctx := context.Background()
+	var scope verification.Scope
+	c.Store.Record(ctx, "scope", "w", &scope)
+	scope.Criteria = append(scope.Criteria, verification.Criterion{ID: "AC2", Requirement: "second"})
+	scope.Included = []string{"AC1", "AC2"}
+	c.Store.Put(ctx, "scope", "w", "w", scope)
+	a.autoSplit = true
+	c.Jobs = &failingFinalJobs{fakeJobs: fake, status: "infrastructure_failure", remaining: 1}
+	drive(t, c, 70)
+	if gh.poolCalls == 0 {
+		items, _ := c.Store.List(ctx)
+		states, _ := c.Store.Records(ctx, "parent_final_state", "")
+		t.Fatalf("pool never checked items=%+v final=%s", items, states)
+	}
+	if err := c.RetryFinal(ctx, "w-part0", "incident:environment-fixed", "restore descendant final acceptance"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, c, 25)
+	if state := finalState(t, c); state.State != "completed" || gh.issue.State != "closed" {
+		t.Fatal("ancestor did not resume after descendant recovery", state, gh.issue.State)
+	}
+}
+
+type rootRepairSplitAgent struct{ *fakeAgents }
+
+func (a rootRepairSplitAgent) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	if w.ID == "r1-i1-final-repair-1" && op.Kind == "implement" {
+		return (splitRepairAgent{a.fakeAgents}).Run(ctx, w, op, input, schema)
+	}
+	return a.fakeAgents.Run(ctx, w, op, input, schema)
 }

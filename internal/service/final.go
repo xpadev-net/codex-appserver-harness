@@ -378,7 +378,7 @@ func (c *Controller) startFinalAssessment(ctx context.Context, w domain.WorkItem
 	return c.Store.EventRecords(ctx, e, map[string]map[string]any{"correction": {w.ID: Correction{Mode: "assessment", Reason: "classify final acceptance failure", EvidenceIDs: []string{failure.JobID}, FeedbackIDs: []string{}}}})
 }
 
-func (c *Controller) finalBlocked(ctx context.Context, w domain.WorkItem) (bool, error) {
+func (c *Controller) finalLocallyBlocked(ctx context.Context, w domain.WorkItem) (bool, error) {
 	lock, err := c.splitLease("final:" + issueKey(w))
 	if errors.Is(err, ErrSplitBusy) {
 		return false, nil
@@ -423,7 +423,7 @@ func (c *Controller) recoverFinalAssertion(ctx context.Context, w domain.WorkIte
 	if w.RepairRounds >= c.Config.Limits.RepairRounds {
 		return errors.New("repair budget exhausted")
 	}
-	next := domain.WorkItem{ID: fmt.Sprintf("%s-final-repair-%d", issueKey(w), state.Attempt+1), RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Phase: domain.Ready, RepairRounds: w.RepairRounds + 1}
+	next := domain.WorkItem{ID: fmt.Sprintf("%s-final-repair-%d", issueKey(w), state.Attempt+1), RepositoryID: w.RepositoryID, Issue: w.Issue, ScopeRevision: w.ScopeRevision, PolicyRevision: w.PolicyRevision, Phase: domain.Ready, RepairRounds: w.RepairRounds}
 	full := scope
 	full.Included = []string{}
 	for _, criterion := range scope.Criteria {
@@ -515,4 +515,54 @@ func (c *Controller) claimContinuation(ctx context.Context, previous, next domai
 		return err
 	}
 	return c.Store.ClaimNextRecords(ctx, previous.ID, next, records)
+}
+
+func (c *Controller) finalBlocked(ctx context.Context, w domain.WorkItem) (bool, error) {
+	return c.finalBlockedTree(ctx, w, map[string]bool{})
+}
+func (c *Controller) finalBlockedTree(ctx context.Context, w domain.WorkItem, seen map[string]bool) (bool, error) {
+	if seen[w.ID] {
+		return false, errors.New("persisted final completion cycle")
+	}
+	seen[w.ID] = true
+	if w.Phase == domain.Canceled {
+		return true, nil
+	}
+	blocked, err := c.finalLocallyBlocked(ctx, w)
+	if err != nil || blocked {
+		return blocked, err
+	}
+	if w.Phase == domain.Split {
+		var progress splitting.Progress
+		if err = c.Store.Record(ctx, "split_progress", w.ID, &progress); err != nil {
+			return false, err
+		}
+		for _, child := range progress.Children {
+			nested, err := c.Store.Get(ctx, w.ID+"-"+child.Key)
+			if err != nil {
+				return false, err
+			}
+			blocked, err := c.finalBlockedTree(ctx, nested, seen)
+			if err != nil || blocked {
+				return blocked, err
+			}
+		}
+	}
+	if w.Phase == domain.Merged {
+		var scope verification.Scope
+		if err = c.Store.Record(ctx, "scope", w.ID, &scope); err != nil {
+			return false, err
+		}
+		if len(scope.Remaining) > 0 {
+			next, err := c.Store.Get(ctx, w.ID+"-remaining")
+			if missing(err) {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			return c.finalBlockedTree(ctx, next, seen)
+		}
+	}
+	return false, nil
 }

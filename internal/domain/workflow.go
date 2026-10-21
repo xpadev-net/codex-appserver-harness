@@ -236,8 +236,11 @@ func Apply(w WorkItem, e Event) (WorkItem, []Operation, error) {
 				w.Phase = Verifying
 				emit = "verify"
 			}
-		case "start":
+		case "start", "start_repair":
 			if w.Phase == Ready {
+				if e.Kind == "start_repair" {
+					w.RepairRounds++
+				}
 				w.Phase = Implementing
 				emit = "implement"
 			}

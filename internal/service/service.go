@@ -235,6 +235,12 @@ func (c *Controller) Tick(ctx context.Context) error {
 				} else if !missing(err) {
 					return err
 				}
+				var recovery map[string]string
+				if err := c.Store.Record(ctx, "final_recovery_audit", w.ID, &recovery); err == nil {
+					return c.emit(ctx, w, "start_repair", "start correction for adopted final recovery scope")
+				} else if !missing(err) {
+					return err
+				}
 				return c.emit(ctx, w, "start", "issue_claimed")
 			}
 		case domain.Reviewing:
