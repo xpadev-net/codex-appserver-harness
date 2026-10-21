@@ -161,6 +161,11 @@ func (a Assessment) Route(id string, c runner.Candidate, evidenceIDs []string) (
 	}
 	switch a.Classification {
 	case "no_action":
+		// A no-action decision consumes the complete correction batch. Requiring
+		// coverage here prevents unassessed findings from becoming resolved.
+		if len(seen) != len(known) {
+			return "", errors.New("no_action must assess every evidence reference")
+		}
 		return "none", nil
 	case "implementation_defect":
 		return "implementation", nil
