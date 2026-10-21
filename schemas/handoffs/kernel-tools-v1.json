@@ -1,0 +1,950 @@
+{
+  "orchestrator": [
+    {
+      "type": "function",
+      "name": "wave_create",
+      "description": "Version 1 controller operation: wave_create. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "wave_plan",
+      "description": "Version 1 controller operation: wave_plan. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "plan": {
+            "additionalProperties": false,
+            "properties": {
+              "phases": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "completion": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "all_success",
+                          "maxLength": 16384,
+                          "type": "string"
+                        },
+                        "required_task_ids": {
+                          "items": {
+                            "maxLength": 16384,
+                            "type": "string"
+                          },
+                          "maxItems": 256,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "required_task_ids"
+                      ],
+                      "type": "object"
+                    },
+                    "failure_policy": {
+                      "const": "drain_and_block",
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "tasks": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "criteria": {
+                            "items": {
+                              "maxLength": 16384,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array"
+                          },
+                          "depends_on": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "artifact_id": {
+                                  "maxLength": 16384,
+                                  "type": "string"
+                                },
+                                "task_id": {
+                                  "maxLength": 16384,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "task_id",
+                                "artifact_id"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 256,
+                            "type": "array"
+                          },
+                          "id": {
+                            "maxLength": 16384,
+                            "type": "string"
+                          },
+                          "input_artifact_ids": {
+                            "items": {
+                              "maxLength": 16384,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array"
+                          },
+                          "instruction": {
+                            "maxLength": 16384,
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "work",
+                              "verification",
+                              "review",
+                              "fix"
+                            ],
+                            "maxLength": 16384,
+                            "type": "string"
+                          },
+                          "work_item_ids": {
+                            "items": {
+                              "maxLength": 16384,
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "instruction",
+                          "criteria",
+                          "depends_on",
+                          "input_artifact_ids",
+                          "work_item_ids"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "tasks",
+                    "completion",
+                    "failure_policy"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              },
+              "schema_version": {
+                "const": 1,
+                "type": "integer"
+              },
+              "templates": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "classifications": {
+                      "items": {
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    },
+                    "fix_instruction": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "input_task_id": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "max_rounds": {
+                      "type": "integer"
+                    },
+                    "review_instruction": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "input_task_id",
+                    "classifications",
+                    "fix_instruction",
+                    "review_instruction",
+                    "max_rounds"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "type": "array"
+              }
+            },
+            "required": [
+              "schema_version",
+              "phases",
+              "templates"
+            ],
+            "type": "object"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "plan"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "task_instruct",
+      "description": "Version 1 controller operation: task_instruct. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          },
+          "task_id": {
+            "maxLength": 16384,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "task_id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "session_wait",
+      "description": "Version 1 controller operation: session_wait. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "subscription_ids": {
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "subscription_ids"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "state_get",
+      "description": "Version 1 controller operation: state_get. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "artifact_read",
+      "description": "Version 1 controller operation: artifact_read. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "artifact_id",
+          "offset",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "artifact_publish",
+      "description": "Version 1 controller operation: artifact_publish. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "content_type": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "input_artifact_ids": {
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "kind": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "content",
+          "content_type",
+          "kind",
+          "input_artifact_ids"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "send_message",
+      "description": "Version 1 controller operation: send_message. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "recipient": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "reply_to": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "recipient",
+          "body",
+          "reply_to"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    }
+  ],
+  "schema_version": 1,
+  "task": [
+    {
+      "type": "function",
+      "name": "task_instruct",
+      "description": "Version 1 controller operation: task_instruct. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          },
+          "task_id": {
+            "maxLength": 16384,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "task_id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "session_wait",
+      "description": "Version 1 controller operation: session_wait. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "subscription_ids": {
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "subscription_ids"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "state_get",
+      "description": "Version 1 controller operation: state_get. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "artifact_read",
+      "description": "Version 1 controller operation: artifact_read. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "artifact_id",
+          "offset",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "artifact_publish",
+      "description": "Version 1 controller operation: artifact_publish. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "content_type": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "input_artifact_ids": {
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "kind": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "content",
+          "content_type",
+          "kind",
+          "input_artifact_ids"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "send_message",
+      "description": "Version 1 controller operation: send_message. Accepted work is not completed work; wait on the returned subscription.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "recipient": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "reply_to": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "recipient",
+          "body",
+          "reply_to"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    }
+  ]
+}

@@ -1,0 +1,191 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "phases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "completion": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "all_success",
+                "maxLength": 16384,
+                "type": "string"
+              },
+              "required_task_ids": {
+                "items": {
+                  "maxLength": 16384,
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "required_task_ids"
+            ],
+            "type": "object"
+          },
+          "failure_policy": {
+            "const": "drain_and_block",
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "criteria": {
+                  "items": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                },
+                "depends_on": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "artifact_id": {
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "task_id": {
+                        "maxLength": 16384,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "task_id",
+                      "artifact_id"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                },
+                "id": {
+                  "maxLength": 16384,
+                  "type": "string"
+                },
+                "input_artifact_ids": {
+                  "items": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                },
+                "instruction": {
+                  "maxLength": 16384,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "work",
+                    "verification",
+                    "review",
+                    "fix"
+                  ],
+                  "maxLength": 16384,
+                  "type": "string"
+                },
+                "work_item_ids": {
+                  "items": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "instruction",
+                "criteria",
+                "depends_on",
+                "input_artifact_ids",
+                "work_item_ids"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "tasks",
+          "completion",
+          "failure_policy"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "templates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "classifications": {
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "fix_instruction": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "input_task_id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "max_rounds": {
+            "type": "integer"
+          },
+          "review_instruction": {
+            "maxLength": 16384,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "input_task_id",
+          "classifications",
+          "fix_instruction",
+          "review_instruction",
+          "max_rounds"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "phases",
+    "templates"
+  ],
+  "type": "object"
+}

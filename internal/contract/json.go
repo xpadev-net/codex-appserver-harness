@@ -17,13 +17,54 @@ func DecodeStrict(data []byte, out any) error {
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return fmt.Errorf("output must be nonnil pointer")
 	}
-	if len(data) > 1<<20 || !json.Valid(data) {
+	if len(data) > 1<<20 || !utf8.Valid(data) || !json.Valid(data) {
 		return fmt.Errorf("invalid JSON envelope")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := uniqueJSONKeys(decoder); err != nil {
+		return err
 	}
 	if err := validateJSON(bytes.TrimSpace(data), v.Elem().Type(), "$"); err != nil {
 		return err
 	}
 	return json.Unmarshal(data, out)
+}
+
+func uniqueJSONKeys(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	switch token {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok || seen[name] {
+				return fmt.Errorf("duplicate or invalid JSON property")
+			}
+			seen[name] = true
+			if err = uniqueJSONKeys(d); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token()
+		return err
+	case json.Delim('['):
+		for d.More() {
+			if err := uniqueJSONKeys(d); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token()
+		return err
+	}
+	return nil
 }
 func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
 	if t.Kind() == reflect.Pointer {

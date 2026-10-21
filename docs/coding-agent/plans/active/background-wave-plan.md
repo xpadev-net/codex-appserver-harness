@@ -10,7 +10,7 @@
 
 大きな依頼をWave→Phase→Taskへ分解し、各Taskに使い捨てsessionを割り当てる。Taskは親と共通runtimeを使ってWave呼び出しだけを禁止し、実行中は親子メッセージと通知で再開する。完了後のfix・再レビューは新Task/sessionへ引き渡す。
 本計画を含むPRの範囲は要件・差分・設計・計画の改訂までとする。
-Task_0は実接続の先行確認が完了。Task_1〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
+Task_0は実接続の先行確認が完了。Task_1は共通基盤を実装してPRレビュー、Task_2〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
 
 ## Definition of Done
 
@@ -79,7 +79,7 @@ Task_0は実接続の先行確認が完了。Task_1〜13はpending。依頼者�
 
 ## Tasks
 
-Task_0はcompleted、Task_1〜13はpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。未実装Taskの検証コマンドを実行済みとは扱わない。
+Task_0はcompleted、Task_1はin_review、Task_2〜13はpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。未実装Taskの検証コマンドを実行済みとは扱わない。
 下記の`rtk`はこのrepositoryでのコマンド実行prefixである。
 
 ### Task_0: 先行成立確認（S）
@@ -106,6 +106,8 @@ Task_0はcompleted、Task_1〜13はpending。指定ownsを実装単位とし、�
 
 ### Task_1: Sessionとtoolの契約・driver
 
+- status: in_review
+- implemented: 共通SessionRPC/SessionDriver、kernel tool gateway認可port、汎用成果・Phase条件schema、未知thread/turnの起動intent、main再bindingの監査port。Task_2/3のDB実装とTask_4以降のcontroller接続は後続。
 - type: impl
 - owns:
   - protocol/codex/**
