@@ -36,6 +36,7 @@ type fakeGH struct {
 	checkResults             []github.Check
 	ciFailureSHA             string
 	ciFailFirst              bool
+	diagnosticsMissing       bool
 }
 
 func (f *fakeGH) GetIssue(_ context.Context, n int) (github.Issue, error) {
@@ -816,7 +817,7 @@ func TestRequiredCIFailureRepairsSameRoleAndPreservesEvidence(t *testing.T) {
 		CIEvidence []CIEvidence `json:"ci_evidence"`
 	}
 	json.Unmarshal([]byte(agents.prompts[2]), &input)
-	if len(input.CIEvidence) != 1 || input.CIEvidence[0].ID != evidence.ID || input.CIEvidence[0].Check.Output.Summary == "" {
+	if len(input.CIEvidence) != 1 || input.CIEvidence[0].ID != evidence.ID || input.CIEvidence[0].Check.Output.Summary == "" || input.CIEvidence[0].Diagnostics == "" {
 		t.Fatal("CI evidence missing from existing verification thread input", agents.prompts[2])
 	}
 }
@@ -899,5 +900,81 @@ func TestCIRepairChangingTestsRetiresOldCorrection(t *testing.T) {
 	history, err := c.Store.Records(ctx, "correction_history", "w")
 	if err != nil || len(history) != 1 {
 		t.Fatal("correction history lost", history, err)
+	}
+}
+
+func (f *fakeGH) CheckDiagnostics(context.Context, github.Check) (string, error) {
+	if f.diagnosticsMissing {
+		return "", fmt.Errorf("private diagnostics access unavailable")
+	}
+	return "expected behavior assertion failed in CI", nil
+}
+
+type testRepair struct{ fake *fakeAgents }
+
+func (a testRepair) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, input string, schema any) (worker.Run, error) {
+	r, err := a.fake.Run(ctx, w, op, input, schema)
+	if err == nil && a.fake.calls == 4 {
+		err = os.WriteFile(filepath.Join(w.Worktree, "tests/test.txt"), []byte("corrected expected behavior"), 0600)
+	}
+	return r, err
+}
+func TestVerificationCIRepairRetiresCorrectionBeforeBaseConflict(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}
+	c.Store.Put(ctx, "policy_snapshot", "w", "w", c.policyDigest())
+	gh.ciFailFirst, gh.approved = true, false
+	agents.classification = "test_defect"
+	c.Agents = testRepair{agents}
+	var w domain.WorkItem
+	for range 25 {
+		drive(t, c, 1)
+		w, _ = c.Store.Get(ctx, "w")
+		candidate, _ := c.candidate(ctx, w)
+		if agents.calls == 4 && w.Phase == domain.Reviewing && gh.pr.Head.SHA == candidate.SHA {
+			break
+		}
+	}
+	if agents.calls != 4 || w.Phase != domain.Reviewing {
+		t.Fatal(w, agents.calls)
+	}
+	var correction Correction
+	c.Store.Record(ctx, "correction", "w", &correction)
+	if len(correction.EvidenceIDs) != 0 {
+		t.Fatal("old correction remains active", correction)
+	}
+	os.WriteFile(filepath.Join(c.Config.RepositoryPath, "app.txt"), []byte("upstream implementation"), 0600)
+	for _, args := range [][]string{{"add", "app.txt"}, {"commit", "-m", "upstream"}, {"push", "origin", "trunk"}} {
+		if _, err := workspace.Git(ctx, c.Config.RepositoryPath, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := workspace.Resolve(ctx, c.Config.RepositoryPath, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.pr.Base.SHA = base
+	drive(t, c, 2)
+	after, _ := c.Store.Get(ctx, "w")
+	if after.Phase == domain.Blocked || agents.calls != 5 {
+		t.Fatal(after, agents.calls)
+	}
+}
+
+func TestMissingCIDiagnosticsBlocksWithoutAssessment(t *testing.T) {
+	c, gh, agents, _ := setup(t)
+	ctx := context.Background()
+	gh.approved = false
+	drive(t, c, 8)
+	w, _ := c.Store.Get(ctx, "w")
+	candidate, _ := c.candidate(ctx, w)
+	check := github.Check{ID: 123, Name: "required", HeadSHA: candidate.SHA, Status: "completed", Conclusion: "failure"}
+	check.App.ID = 9
+	gh.diagnosticsMissing = true
+	handled, err := c.routeCIFailures(ctx, w, gate.Snapshot{Candidate: candidate, RequiredChecks: []gate.RequiredCheck{{Name: "required", AppID: 9, AllowedConclusions: []string{"success"}}}, Checks: []github.Check{check}})
+	after, _ := c.Store.Get(ctx, "w")
+	if err != nil || !handled || after.Phase != domain.Blocked || !strings.Contains(after.Reason, "diagnostics unavailable") || agents.calls != 2 {
+		t.Fatal(after, handled, err, agents.calls)
 	}
 }

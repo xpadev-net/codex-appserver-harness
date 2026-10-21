@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,5 +80,39 @@ esac
 	posts, err := os.ReadFile(filepath.Join(dir, "posts"))
 	if err != nil || string(posts) != "post\n" {
 		t.Fatal("duplicate review request", string(posts), err)
+	}
+}
+
+func TestPrivateCheckDiagnosticsFetchesRedactedJobLogs(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+ *"annotations?per_page=100"*) printf '%s' '[[]]' ;;
+ *"actions/jobs/456/logs"*) printf 'assertion expected true, got false; credential=%s\n' "$GH_TOKEN" ;;
+ *) exit 12 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("GH_TOKEN", "private-controller-test-token")
+	client := Client{Repository: "owner/repo", RepositoryID: 1}
+	text, err := client.CheckDiagnostics(context.Background(), Check{ID: 123, DetailsURL: "https://github.com/owner/repo/actions/runs/789/job/456"})
+	if err != nil || !strings.Contains(text, "expected true") || strings.Contains(text, "private-controller-test-token") || !strings.Contains(text, "[REDACTED]") {
+		t.Fatal("missing or unredacted diagnostic", err)
+	}
+}
+
+func TestDiagnosticTailIsBounded(t *testing.T) {
+	tail := &diagnosticTail{limit: 5}
+	tail.Write([]byte("123"))
+	tail.Write([]byte("4567"))
+	if string(tail.data) != "34567" {
+		t.Fatal(string(tail.data))
+	}
+	tail.Write([]byte("abcdefgh"))
+	if string(tail.data) != "defgh" {
+		t.Fatal(string(tail.data))
 	}
 }

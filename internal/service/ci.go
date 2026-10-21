@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -14,13 +15,15 @@ import (
 )
 
 type CIEvidence struct {
-	ID             string           `json:"id"`
-	Candidate      runner.Candidate `json:"candidate"`
-	TestedSHA      string           `json:"tested_sha"`
-	Check          github.Check     `json:"check"`
-	Reference      string           `json:"reference"`
-	Classification string           `json:"classification"`
-	ObservedAt     time.Time        `json:"observed_at"`
+	ID               string           `json:"id"`
+	Candidate        runner.Candidate `json:"candidate"`
+	TestedSHA        string           `json:"tested_sha"`
+	Check            github.Check     `json:"check"`
+	Reference        string           `json:"reference"`
+	Diagnostics      string           `json:"diagnostics"`
+	DiagnosticsError string           `json:"diagnostics_error,omitempty"`
+	Classification   string           `json:"classification"`
+	ObservedAt       time.Time        `json:"observed_at"`
 }
 
 func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s gate.Snapshot) (bool, error) {
@@ -51,6 +54,11 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 		attempt, _ := json.Marshal([]any{w.Candidate, target, check.ID, check.StartedAt, check.CompletedAt, check.Conclusion})
 		hash := sha256.Sum256(attempt)
 		id := fmt.Sprintf("ci-%x", hash[:16])
+		sanitized := *check
+		sanitized.Output.Summary = runner.RedactText(sanitized.Output.Summary)
+		sanitized.Output.Text = runner.RedactText(sanitized.Output.Text)
+		sanitized.DetailsURL = runner.RedactText(sanitized.DetailsURL)
+		check = &sanitized
 		classification := "requires_assessment"
 		switch check.Conclusion {
 		case "timed_out", "cancelled", "startup_failure", "stale":
@@ -69,6 +77,18 @@ func (c *Controller) routeCIFailures(ctx context.Context, w domain.WorkItem, s g
 				return true, err
 			}
 			return true, c.block(ctx, w, fmt.Sprintf("CI %s: %s (%s); inspect %s, resolve environment/policy and rerun CI before retry", classification, check.Name, check.Conclusion, id))
+		}
+		diagnostics, diagErr := c.GitHub.CheckDiagnostics(ctx, *check)
+		evidence.Diagnostics = diagnostics
+		if diagErr != nil {
+			evidence.DiagnosticsError = diagErr.Error()
+		}
+		if strings.TrimSpace(diagnostics+check.Output.Summary+check.Output.Text) == "" {
+			evidence.Classification = "diagnostics_unavailable"
+			if err := c.Store.Put(ctx, "ci_evidence", id, w.ID, evidence); err != nil {
+				return true, err
+			}
+			return true, c.block(ctx, w, "CI diagnostics unavailable; inspect "+id+" and restore authenticated diagnostic access before retry")
 		}
 		var dispatched bool
 		if err := c.Store.Record(ctx, "ci_dispatched", id, &dispatched); err == nil && dispatched {

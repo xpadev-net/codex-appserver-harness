@@ -39,6 +39,7 @@ type GitHub interface {
 	FindReviewRequest(context.Context, int, string, int64) (int64, error)
 	Merge(context.Context, int, string, string) error
 	Checks(context.Context, string) ([]github.Check, error)
+	CheckDiagnostics(context.Context, github.Check) (string, error)
 	CommitParents(context.Context, string) ([]string, error)
 	Conditions(context.Context, int) (string, error)
 	FindChild(context.Context, string) (int, error)

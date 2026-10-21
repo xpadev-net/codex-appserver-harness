@@ -205,6 +205,9 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			if len(evidence.Check.Output.Text) > 16384 {
 				evidence.Check.Output.Text = evidence.Check.Output.Text[:16384]
 			}
+			if len(evidence.Diagnostics) > 16384 {
+				evidence.Diagnostics = evidence.Diagnostics[len(evidence.Diagnostics)-16384:]
+			}
 			ciEvidence = append(ciEvidence, evidence)
 		} else if !missing(err) {
 			return err
@@ -336,12 +339,9 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			return err
 		}
 
-		if next.ID != candidate.ID && (len(correction.EvidenceIDs) > 0 || len(correction.FeedbackIDs) > 0) {
-			if err = c.Store.Put(ctx, "correction_history", op.ID, w.ID, correction); err != nil {
-				return err
-			}
-			correction = Correction{Consumed: true, EvidenceIDs: []string{}, FeedbackIDs: []string{}}
-			if err = c.Store.Put(ctx, "correction", w.ID, w.ID, correction); err != nil {
+		if next.ID != candidate.ID {
+			correction, err = c.retireCorrection(ctx, w, op, correction)
+			if err != nil {
 				return err
 			}
 		}
@@ -411,6 +411,12 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 	}
 	if err = plan.ValidateCommit(ctx, w.Worktree, next.SHA); err != nil {
 		return c.reject(ctx, w, op, err.Error())
+	}
+	if next.ID != candidate.ID {
+		correction, err = c.retireCorrection(ctx, w, op, correction)
+		if err != nil {
+			return err
+		}
 	}
 	plan, err = verification.Rebind(plan, w.ID, next, scope, c.Config.Verification)
 	if err != nil {
@@ -496,4 +502,15 @@ func (l LiveAgents) environment(w domain.WorkItem, home, gitdir string) []string
 		}
 	}
 	return env
+}
+
+func (c *Controller) retireCorrection(ctx context.Context, w domain.WorkItem, op domain.Operation, correction Correction) (Correction, error) {
+	if len(correction.EvidenceIDs) == 0 && len(correction.FeedbackIDs) == 0 {
+		return correction, nil
+	}
+	if err := c.Store.Put(ctx, "correction_history", op.ID, w.ID, correction); err != nil {
+		return correction, err
+	}
+	retired := Correction{Consumed: true, EvidenceIDs: []string{}, FeedbackIDs: []string{}}
+	return retired, c.Store.Put(ctx, "correction", w.ID, w.ID, retired)
 }

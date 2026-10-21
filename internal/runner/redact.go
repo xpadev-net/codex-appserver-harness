@@ -108,3 +108,16 @@ func writeComplete(writer io.Writer, p []byte) error {
 	}
 	return nil
 }
+
+// NewRedactedWriter applies the same credential filtering to controller-fetched
+// diagnostics as to runner logs. Call Flush after the last write.
+func NewRedactedWriter(writer io.Writer) *redactedLog { return newRedactedLog(writer, secretValues()) }
+
+// RedactText filters known credentials before persisting external diagnostics.
+func RedactText(text string) string {
+	var output bytes.Buffer
+	writer := NewRedactedWriter(&output)
+	_, _ = writer.Write([]byte(text))
+	_ = writer.Flush()
+	return output.String()
+}
