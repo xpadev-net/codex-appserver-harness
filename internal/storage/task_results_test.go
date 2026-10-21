@@ -245,6 +245,11 @@ func marshalTaskResultFixture(r contract.TaskResult) ([]byte, error) {
 	r.Remaining = append([]string{}, r.Remaining...)
 	r.Blockers = append([]string{}, r.Blockers...)
 	r.SubscriptionIDs = append([]string{}, r.SubscriptionIDs...)
+	if r.Review != nil {
+		review := *r.Review
+		review.Findings = append([]contract.ReviewFinding{}, review.Findings...)
+		r.Review = &review
+	}
 	return json.Marshal(r)
 }
 
@@ -287,5 +292,89 @@ func TestTaskResultApplicationEventFailureRollsBackAndReopens(t *testing.T) {
 	replay, err := reopened.ApplyTaskResult(ctx, b.ID, run.ID)
 	if err != nil || !reflect.DeepEqual(receipt, replay) {
 		t.Fatal(replay, err)
+	}
+}
+
+func TestTaskResultReviewTargetMustBeInItsExplicitArtifactGrant(t *testing.T) {
+	for _, target := range []string{"granted", "ungranted"} {
+		t.Run(target, func(t *testing.T) {
+			ctx := context.Background()
+			store, b := boundTaskFixture(t)
+			output := ArtifactImport{SessionID: b.ID, Target: b.Target, Key: "A", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: b.TaskID}}
+			a := mustImport(t, store, output, "candidate A")
+			output.Key = "B"
+			other := mustImport(t, store, output, "candidate B")
+			result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "result", Artifacts: []string{a.ID, other.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "observed", EvidenceIDs: []string{a.ID}}}}
+			recordAndStopTaskResult(t, store, b, "work-run", result)
+			if receipt, err := store.ApplyTaskResult(ctx, b.ID, "work-run"); err != nil || receipt.State != contract.TaskCompleted {
+				t.Fatal(receipt, err)
+			}
+			// Parent explicitly grants A to a fresh reviewer after the producer completes.
+			plan := storagePlanFixture()
+			plan.Phases[1].ID = "review-explicit"
+			plan.Phases[1].Tasks[0].ID = "review-explicit"
+			plan.Phases[1].Tasks[0].DependsOn[0].ArtifactID = a.ID
+			plan.Phases[1].Completion.RequiredTaskIDs = []string{"review-explicit"}
+			receipt, err := store.AdoptPlan(ctx, b.Target, "review-A", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			review, err := store.Task(ctx, receipt.CreatedTaskIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			rb, err := store.SessionBinding(ctx, review.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rb = reserveSessionFixture(t, store, rb)
+			if err = store.BindSessionThread(ctx, rb, "review-thread"); err != nil {
+				t.Fatal(err)
+			}
+			rb, err = store.SessionBinding(ctx, rb.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = store.ReadArtifact(ctx, rb.ID, rb.Target, other.ID, 0, 16); err == nil {
+				t.Fatal("reviewer can read ungranted B")
+			}
+			report := mustImport(t, store, ArtifactImport{SessionID: rb.ID, Target: rb.Target, Key: "review-report", Kind: "review", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: rb.TaskID}}, "review report")
+			digest := a.Digest
+			if target == "ungranted" {
+				digest = other.Digest
+			}
+			reviewed := contract.TaskResult{SchemaVersion: 1, Target: rb.Target, TaskID: rb.TaskID, PhaseID: rb.PhaseID, Outcome: "result", Artifacts: []string{report.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "evaluated", EvidenceIDs: []string{report.ID}}}, Review: &contract.ReviewResult{TargetDigest: digest, Verdict: "clean", Findings: []contract.ReviewFinding{}}}
+			recordAndStopTaskResult(t, store, rb, "review-run", reviewed)
+			applied, err := store.ApplyTaskResult(ctx, rb.ID, "review-run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := contract.TaskCompleted
+			if target == "ungranted" {
+				expected = contract.TaskFailed
+			}
+			if applied.State != expected {
+				t.Fatal(applied)
+			}
+		})
+	}
+}
+func recordAndStopTaskResult(t *testing.T, store *KernelStore, b contract.SessionBinding, id string, result contract.TaskResult) {
+	t.Helper()
+	ctx := context.Background()
+	run := contract.SessionRun{ID: id, ThreadID: b.ThreadID, State: "starting", Started: time.Now().UTC(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if err := store.ReserveSessionRun(ctx, b, sessionSnapshot(), run); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := marshalTaskResultFixture(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.State, run.TurnID, run.Final = "completed", id+"-turn", string(raw)
+	if err = store.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
 	}
 }

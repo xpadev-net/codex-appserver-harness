@@ -159,9 +159,15 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 				return k.pendingTaskResultTx(ctx, tx, task, receipt, "review dependency result requires reconciliation")
 			}
 			for _, id := range resultArtifactReferences(priorResult) {
+				if dep.ArtifactID != "" && id != dep.ArtifactID {
+					continue
+				}
 				a, err := k.currentArtifactTx(ctx, tx, wave, id)
 				if err != nil {
 					return k.pendingTaskResultTx(ctx, tx, task, receipt, "review dependency Artifact is unavailable")
+				}
+				if err = artifactReadableTx(ctx, tx, b, wave, a); err != nil {
+					continue
 				}
 				matched = matched || a.Digest == result.Review.TargetDigest
 			}
