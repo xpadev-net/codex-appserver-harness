@@ -10,7 +10,7 @@
 
 大きな依頼をWave→Phase→Taskへ分解し、各Taskに使い捨てsessionを割り当てる。Taskは親と共通runtimeを使ってWave呼び出しだけを禁止し、実行中は親子メッセージと通知で再開する。完了後のfix・再レビューは新Task/sessionへ引き渡す。
 本計画を含むPRの範囲は要件・差分・設計・計画の改訂までとする。
-Task_0〜13はpending。本PRは文書改訂と公開の依頼に基づく。runtime実装・実接続試験は後続Taskとして管理する。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
+Task_0は実接続の先行確認が完了。Task_1〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
 
 ## Definition of Done
 
@@ -79,14 +79,17 @@ Task_0〜13はpending。本PRは文書改訂と公開の依頼に基づく。run
 
 ## Tasks
 
-全Taskのstatusはpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。検証コマンドは後続実装の完了条件であり、この文書PRで存在しないpackageの試験を実行したとは扱わない。
+Task_0はcompleted、Task_1〜13はpending。指定ownsを実装単位とし、異なるTaskの同一file所有は依存順で引き継ぐ。未実装Taskの検証コマンドを実行済みとは扱わない。
 下記の`rtk`はこのrepositoryでのコマンド実行prefixである。
 
 ### Task_0: 先行成立確認（S）
 
+- status: completed
+- evidence: [AT-050実接続](../../../../evidence/background-wave/spike/session-observation.json)。実model・認証・隔離launcherで2回のtool往復/正常終了、別processで同一未完了thread再開を確認。code-mode hostの限定mountをlauncherへ追加。K/P/Mは未完了。
 - type: test
 - owns:
   - internal/contract/session_live_test.go
+  - scripts/isolate-linux（実tool往復に必要な補助executableの限定mount）
   - docs/connection-contracts.md
   - evidence/background-wave/spike/**
 - depends_on: []

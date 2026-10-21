@@ -25,13 +25,13 @@ service統合テストはfake GitHub / model / job adapterと実際のローカ�
 
 | 段階 | 現在の状態 | 次の証拠 |
 | --- | --- | --- |
-| S | 未確認。生成schemaの存在とinitializeのみの証拠では不足 | Task_0 / AT-050で実tool往復・正常終了・別processの同一未完了thread再開 |
+| S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
 | K | 未実装 | Task_1〜7/9〜10。汎用成果、2 Task並行、独立review/fix、親子message、通知、CLI、復旧と上限 |
 | P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
 | M | 未実装。実DB不存在は未確認 | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
 新しいAT-050〜059は[要件の受入表](../requirements.md#10-受入テスト)を原本とする。K/P/Mで適用/未実行/blocked/合格を別々に記録し、実装前の目標値を実測値として掲載しない。
-既知不具合: [#44 未評価指摘の解決](https://github.com/xpadev-net/codex-appserver-harness/issues/44)、[#45 merge後の要求更新復旧](https://github.com/xpadev-net/codex-appserver-harness/issues/45)。runtime修正と回帰確認までは未解消とする。
+旧基盤の [#44](https://github.com/xpadev-net/codex-appserver-harness/issues/44) は [PR #52](https://github.com/xpadev-net/codex-appserver-harness/pull/52)、[#45](https://github.com/xpadev-net/codex-appserver-harness/issues/45) は [PR #53](https://github.com/xpadev-net/codex-appserver-harness/pull/53) で修正し、回帰・Codex review・CIを確認した。新しいTask/session工程の受入は引き続きKで検証する。
 
 ## 実環境で確認したもの
 

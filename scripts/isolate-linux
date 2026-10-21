@@ -16,6 +16,12 @@ worker)
   args+=(--bind "$CODEX_HOME" "$CODEX_HOME"
     --ro-bind "$HARNESS_CODEX_BINARY" "$HARNESS_CODEX_BINARY"
     --ro-bind "$HARNESS_GIT_DIR" "$HARNESS_GIT_DIR")
+  # Recent native distributions run tool calls through this sibling executable.
+  # Mount only that executable, never the controller's surrounding home.
+  codex_code_mode_host="${HARNESS_CODEX_BINARY%/*}/codex-code-mode-host"
+  if [[ -x "$codex_code_mode_host" ]]; then
+    args+=(--ro-bind "$codex_code_mode_host" "$codex_code_mode_host")
+  fi
   ;;
 runner) ;;
 *) exit 64 ;;
