@@ -16,7 +16,7 @@
   "model_turn": "not_attempted",
   "model_turn_reason": "negative probes do not attest the unconfigured authenticated worker/model deployment",
   "network_policy_snapshot_present": false,
-  "observed_at": "2026-10-21T05:58:32.254475502Z",
+  "observed_at": "2026-10-21T06:07:24.192051457Z",
   "probe_completed": true,
   "proxy_variables_present": false,
   "repository_api_status": "http_401",

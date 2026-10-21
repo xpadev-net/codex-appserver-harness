@@ -233,6 +233,11 @@ func gitURLCredentials(data string) (bool, error) {
 		}
 		for _, raw := range values {
 			raw = strings.TrimSpace(raw)
+			helper := strings.Index(raw, "::")
+			scheme := strings.Index(raw, "://")
+			if helper >= 0 && (scheme < 0 || helper < scheme) {
+				return false, errors.New("unsupported explicit Git URL helper")
+			}
 			if !strings.Contains(raw, "://") {
 				if strings.Contains(raw, "::") {
 					return false, errors.New("unsupported Git URL helper")
@@ -245,6 +250,9 @@ func gitURLCredentials(data string) (bool, error) {
 			parsed, err := url.Parse(raw)
 			if err != nil {
 				return false, errors.New("unparseable Git URL")
+			}
+			if parsed.Opaque != "" {
+				return false, errors.New("unsupported opaque Git URL")
 			}
 			if parsed.RawQuery != "" || parsed.Fragment != "" {
 				return true, nil
@@ -276,6 +284,9 @@ func TestGitURLCredentialDetection(t *testing.T) {
 		{"query", "remote.origin.url\nhttps://github.com/owner/repo.git?token=inert-canary\x00", true, false},
 		{"malformed", "remote.origin.url", false, true},
 		{"custom helper", "remote.origin.url\next::opaque-helper\x00", false, true},
+		{"explicit HTTPS helper", "remote.origin.url\nhttps::https://user:inert-canary@github.com/owner/repo.git\x00", false, true},
+		{"opaque URI", "remote.origin.url\nopaque:https://user:inert-canary@github.com/owner/repo.git\x00", false, true},
+		{"IPv6 URI", "remote.origin.url\nhttps://[::1]/public/repo.git\x00", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

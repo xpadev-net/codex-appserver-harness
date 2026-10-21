@@ -73,3 +73,5 @@ worktree 固有の `config.worktree` も含め、worker 内で有効な Git 設�
 - [Git proxy 設定](../evidence/issue20/isolation-proxy-negative-observation.json) / [cookie source](../evidence/issue20/isolation-cookie-negative-observation.json) / [HTTP 設定 key の URL userinfo](../evidence/issue20/isolation-url-key-negative-observation.json)
 
 全 12 ケースの否定試験は一時 clone と無効な公開 canary 値で実行し、元 checkout の設定を変更していない。どの fixture にも URL、認証値、private path の実値は保存していない。現在の checkout では改めて測定完了を確認したが、実認証済み worker / model deployment の未確認状態は維持する。
+
+Git の明示 helper 形式（protocol の後に `::` を置く形式）は通常の URI 解析より前に拒否する。[helper URL の否定試験](../evidence/issue20/isolation-helper-negative-observation.json) では、内側の URL に無効な公開 userinfo を置き、`probe_completed: false` / unknown として停止した。opaque URI も受理しない。通常 URI の IPv6 address にある `::` は helper prefix と混同しない。解析の回帰試験と、現在 checkout の live probe を再実行した。
