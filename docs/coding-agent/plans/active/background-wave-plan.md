@@ -10,7 +10,7 @@
 
 大きな依頼をWave→Phase→Taskへ分解し、各Taskに使い捨てsessionを割り当てる。Taskは親と共通runtimeを使ってWave呼び出しだけを禁止し、実行中は親子メッセージと通知で再開する。完了後のfix・再レビューは新Task/sessionへ引き渡す。
 本計画を含むPRの範囲は要件・差分・設計・計画の改訂までとする。
-Task_0/1は完了（PR #54/#55）。Task_2は新DB基盤（PR #56）、plan/session永続化（PR #57）、不変Artifact（PR #58）に続き成果適用を実装中。有界展開は後続PRへ分ける。Task_3〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
+Task_0/1は完了（PR #54/#55）。Task_2は新DB基盤（PR #56）、plan/session永続化（PR #57）、不変Artifact（PR #58）、成果適用（PR #59）に続きKの有界展開transactionを実装中。runtimeの自動分岐・品質gate接続はTask_7で行う。Task_3〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
 
 ## Definition of Done
 
@@ -140,7 +140,7 @@ Task_0/1はcompleted、Task_2はin_progress、Task_3〜13はpending。指定owns
 ### Task_2: Wave/Phase/Task・成果と新DBのschema基盤
 
 - status: in_progress
-- split: PR #56でversion/schema・domain・migration registryを追加。PR #57でplan/sessionのtransactionを追加。PR #58で不変Artifactを追加。次に成果適用を実装し、有界展開を後続PRへ分ける。Task_12の既存作業移行はまだ行わない。
+- split: PR #56でversion/schema・domain・migration registryを追加。PR #57でplan/sessionのtransactionを追加。PR #58で不変Artifactを追加。PR #59で成果適用を追加。最後にKの有界展開transactionを実装する。自動分岐・品質gateとPの検証adapterはTask_7/8で接続する。Task_12の既存作業移行はまだ行わない。
 - type: impl
 - owns:
   - internal/domain/wave.go
@@ -151,6 +151,9 @@ Task_0/1はcompleted、Task_2はin_progress、Task_3〜13はpending。指定owns
   - internal/storage/sessions_test.go
   - internal/storage/task_results.go
   - internal/storage/task_results_test.go
+  - internal/storage/template_expansion.go
+  - internal/storage/template_expansion_test.go
+  - internal/storage/template_subjects.go
   - internal/storage/migrations.go
   - internal/storage/migrations_test.go
   - internal/storage/store.go

@@ -155,6 +155,25 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		}
 	}
 	if result.Review != nil {
+		if task.Spec.Kind == "review" {
+			var expected templateReviewTarget
+			err := completionRecord(ctx, tx, "template_review_target", task.ID, &expected)
+			if err == nil && (expected.RunID != runID || expected.Target != task.Target() || expected.Subject.Digest != result.Review.TargetDigest) {
+				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "review target does not match the bound replacement subject")
+			}
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return receipt, err
+			}
+			if errors.Is(err, sql.ErrNoRows) {
+				var input templateTaskInput
+				contextErr := completionRecord(ctx, tx, "template_task_context", task.ID, &input)
+				if contextErr == nil {
+					pendingReason = "generated review target binding requires reconciliation"
+				} else if !errors.Is(contextErr, sql.ErrNoRows) {
+					return receipt, contextErr
+				}
+			}
+		}
 		matched := false
 		unknownReviewInput := false
 		for _, id := range task.Spec.InputArtifactIDs {
@@ -284,6 +303,14 @@ func (k *KernelStore) finishTaskResultTx(ctx context.Context, tx *sql.Tx, b cont
 		}
 		for _, id := range resultArtifactReferences(*result) {
 			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO kernel_artifact_refs(artifact_id,task_id,kind) VALUES(?,?,'result')", id, task.ID); err != nil {
+				return err
+			}
+		}
+		if task.State == contract.TaskCompleted {
+			if err := k.recordTemplateSubjectTx(ctx, tx, task, *result); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE kernel_plan_bindings SET source_result_id=?,input_digest=? WHERE wave_id=? AND revision=? AND task_id=?", task.ResultID, task.InputDigest, task.WaveID, task.PlanRevision, task.ID); err != nil {
 				return err
 			}
 		}

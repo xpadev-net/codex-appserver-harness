@@ -210,6 +210,15 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 		if !k.clock().Before(wave.Deadline) || task.Attempts >= wave.Policy.Limits.TaskAttempts {
 			return errors.New("Wave deadline/Task attempt budget exhausted")
 		}
+		subject, err := k.templateReviewSubjectTx(ctx, tx, task)
+		if err != nil {
+			return err
+		}
+		if subject != nil && task.Spec.Kind == "review" {
+			if err = kernelRecordTx(ctx, tx, "template_review_target", task.ID, task.WaveID, templateReviewTarget{Subject: *subject, Target: task.Target(), RunID: run.ID}); err != nil {
+				return err
+			}
+		}
 		for _, dependency := range task.Spec.DependsOn {
 			prior, err := loadTask(ctx, tx, structureID("task-", wave.ID, dependency.TaskID))
 			if err != nil {
@@ -227,6 +236,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 			return err
 		}
 		task.InputDigest = inputs
+		if _, err = tx.ExecContext(ctx, "UPDATE kernel_plan_bindings SET input_digest=? WHERE wave_id=? AND revision=? AND task_id=?", inputs, task.WaveID, task.PlanRevision, task.ID); err != nil {
+			return err
+		}
 		task.Attempts++
 		task.State = contract.TaskRunning
 		if err = saveTask(ctx, tx, task); err != nil {
