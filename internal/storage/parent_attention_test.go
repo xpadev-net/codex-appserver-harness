@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
 func TestParentAttentionIsDurableAckIndependentAndAppliedOnce(t *testing.T) {
@@ -724,5 +725,53 @@ func TestUnavailableTemplateInputMetadataReachesParent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOrdinarySamePhaseDependencyWaitNeverWakesParent(t *testing.T) {
+	ctx := context.Background()
+	k, w, tasks := readyFixture(t, func(p *contract.PlanProposal) {
+		p.Phases[0].Tasks[1].DependsOn = []contract.TaskDependency{{TaskID: "a"}}
+	})
+	assertQuiet := func() {
+		t.Helper()
+		if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || changed {
+			t.Fatal("normal dependency wait escalated", changed, err)
+		}
+		pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+		if err != nil || len(pending) != 0 {
+			t.Fatal(pending, err)
+		}
+	}
+	assertQuiet()
+	mustReady(t, k, w, tasks[0].ID)
+	b := prepareWakeSession(t, k, tasks[0].SessionID)
+	run := contract.SessionRun{ID: "producer-run", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true}
+	if err := k.ReserveSessionRun(ctx, b, sessionSnapshot(), run); err != nil {
+		t.Fatal(err)
+	}
+	assertQuiet()
+	mustReady(t, k, w)
+	artifact := mustImport(t, k, ArtifactImport{SessionID: b.ID, Target: b.Target, Key: "output", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: b.TaskID}}, "producer output")
+	result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "result", Artifacts: []string{artifact.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "claimed", Basis: "producer observation", EvidenceIDs: []string{artifact.ID}}}}
+	raw, err := marshalTaskResultFixture(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.State, run.TurnID, run.Final = "completed", "producer-turn", string(raw)
+	if err = k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.ApplyTaskResult(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertQuiet()
+	mustReady(t, k, w, tasks[1].ID)
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil || current.MainTurns != 0 || current.Replans != 0 {
+		t.Fatal(current, err)
 	}
 }

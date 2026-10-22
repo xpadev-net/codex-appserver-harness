@@ -239,7 +239,7 @@ func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.
 		if err != nil {
 			return err
 		}
-		reason, err := k.taskReadyTx(ctx, tx, wave, task, false, false)
+		reason, err := k.taskInputAttentionReasonTx(ctx, tx, wave, task)
 		if err != nil {
 			return err
 		}
@@ -301,13 +301,32 @@ func (k *KernelStore) savePhaseAttentionTx(ctx context.Context, tx *sql.Tx, wave
 func inputEvidenceHold(reason string) bool {
 	return reason == "input_unavailable" || reason == "dependency_unavailable" || reason == "template_subject_unavailable"
 }
+
+func (k *KernelStore) taskInputAttentionReasonTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task) (string, error) {
+	reason, err := k.taskReadyTx(ctx, tx, wave, task, false, false)
+	if err != nil || reason != "dependency_unavailable" {
+		return reason, err
+	}
+	// Readiness uses the same hold for an unfinished producer and a completed
+	// producer with unavailable evidence. The former is normal scheduling.
+	for _, dependency := range task.Spec.DependsOn {
+		producer, err := loadTask(ctx, tx, structureID("task-", wave.ID, dependency.TaskID))
+		if err != nil {
+			return "", err
+		}
+		if producer.State != contract.TaskCompleted {
+			return "", nil
+		}
+	}
+	return reason, nil
+}
 func (k *KernelStore) saveReadyInputAttentionTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, tasks []domain.Task) (bool, error) {
 	changed := false
 	for _, task := range tasks {
 		if task.State != contract.TaskReady {
 			continue
 		}
-		reason, err := k.taskReadyTx(ctx, tx, wave, task, false, false)
+		reason, err := k.taskInputAttentionReasonTx(ctx, tx, wave, task)
 		if err != nil {
 			return false, err
 		}
