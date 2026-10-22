@@ -159,7 +159,10 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 		if err != nil {
 			return false, err
 		}
-		return changed, tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		return changed, nil
 	}
 	if set.Reason != "review_findings" {
 		return false, nil

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -315,6 +316,158 @@ func TestParentAttentionInconclusiveAndExhaustedFixBudget(t *testing.T) {
 			current, err := k.Wave(ctx, w.ID)
 			if err != nil || current.Target() != w.Target() || current.MainTurns != 0 || current.Replans != 0 {
 				t.Fatal(current, err)
+			}
+		})
+	}
+}
+
+func TestResolvedAttentionRetiresUnstartedWakeAndPreservesOtherInputs(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run := interruptionFixture(t)
+	run.State = "unknown"
+	if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil {
+		t.Fatal(err)
+	}
+	other, err := k.CreateWave(ctx, WaveRequest{OrchestratorSessionID: w.OrchestratorSessionID, Source: "direct", SourceID: "other-input", OriginalRequest: w.OriginalRequest, Criteria: w.Criteria, Policy: w.Policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.Subscribe(ctx, SubscriptionRequest{SessionID: w.OrchestratorSessionID, Target: other.Target(), Key: "other-terminal", Kind: "wave_terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	mustControl(t, k, operatorRequest(other, "cancel", "cancel", ""))
+	pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(pending) != 2 {
+		t.Fatal(pending, err)
+	}
+	ids := []string{pending[0].ID, pending[1].ID}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: w.OrchestratorSessionID, Key: "shared-attention", NotificationIDs: ids, IncludeSessionContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.State, run.TurnID = "completed", "known-turn"
+	if err = k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.RunnableWake(ctx, wake.Intent.ID); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("resolved source remained runnable", err)
+	}
+	retired, err := k.ReconcileUnstartedWake(ctx, wake.Intent.ID)
+	if err != nil || retired.Intent.State != "superseded" {
+		t.Fatal(retired, err)
+	}
+	current, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(current) != 1 || current[0].Target != other.Target() || current[0].Kind != "wave_terminal" {
+		t.Fatal("other input was lost", current, err)
+	}
+	next, err := k.ReserveWake(ctx, WakeRequest{SessionID: w.OrchestratorSessionID, Key: "other-next", NotificationIDs: []string{current[0].ID}, IncludeSessionContext: true})
+	if err != nil || next.Intent.RunID == wake.Intent.RunID {
+		t.Fatal(next, err)
+	}
+	var reservedRuns int
+	if err = k.DB.QueryRowContext(ctx, "SELECT count(*) FROM kernel_run_bindings WHERE session_id=?", w.OrchestratorSessionID).Scan(&reservedRuns); err != nil || reservedRuns != 0 {
+		t.Fatal("reconciliation started model run", reservedRuns, err)
+	}
+}
+func TestTaskPauseKeepsAttentionReservationUntilResume(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run := interruptionFixture(t)
+	run.State, run.TurnID = "failed", "failed-turn"
+	if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ConfirmManagedProcessStopped(ctx, ManagedStopProof{OwnerID: "owner", Disposition: "group_stopped", Identity: managedIdentity(42)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ArchiveSessionRun(ctx, b.ID, run.ID, "classified transient failure"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(pending) != 1 {
+		t.Fatal(pending, err)
+	}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: w.OrchestratorSessionID, Key: "pause-attention", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustControl(t, k, operatorRequest(w, "pause-task", "pause", b.TaskID))
+	if _, err = k.RunnableWake(ctx, wake.Intent.ID); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal(err)
+	}
+	if _, err = k.ReconcileUnstartedWake(ctx, wake.Intent.ID); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("pause retired current reservation", err)
+	}
+	mustControl(t, k, operatorRequest(w, "resume-task", "resume", b.TaskID))
+	if _, err = k.RunnableWake(ctx, wake.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestParentAttentionMissingOrInvalidResultHasExplicitContext(t *testing.T) {
+	for _, mode := range []string{"missing", "json", "shape", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, review, _ := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, nil)
+			task, err := k.Task(ctx, review.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "missing" {
+				_, err = k.DB.ExecContext(ctx, "DELETE FROM records WHERE kind='task_result' AND id=?", task.ResultID)
+			} else {
+				raw := []byte(`{"id":`)
+				if mode == "shape" {
+					raw = []byte(`{"task_id":7}`)
+				}
+				if mode == "invalid" {
+					var result contract.TaskResult
+					if err = k.Record(ctx, "task_result", task.ResultID, &result); err != nil {
+						t.Fatal(err)
+					}
+					result.Outcome = "invented"
+					raw, err = json.Marshal(result)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, err = k.DB.ExecContext(ctx, "UPDATE records SET payload=? WHERE kind='task_result' AND id=?", raw, task.ResultID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+				t.Fatal(changed, err)
+			}
+			pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+			if err != nil || len(pending) != 1 || pending[0].Reason != "task_evidence_unavailable" {
+				t.Fatal(pending, err)
+			}
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			main, err := sessionBindingTx(ctx, tx, w.OrchestratorSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := k.sessionManifestTx(ctx, tx, main, w)
+			tx.Rollback()
+			if err != nil || len(manifest.UnavailableResults) != 1 || manifest.UnavailableResults[0].ResultID != task.ResultID {
+				t.Fatal(manifest.UnavailableResults, err)
+			}
+			if _, ok := manifest.Results[task.ResultID]; ok {
+				t.Fatal("unavailable result represented as valid output")
+			}
+			if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: main.ID, Key: "missing-result-parent", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true}); err != nil {
+				t.Fatal("parent context could not be constructed", err)
+			}
+			if _, err = k.BuildSessionInput(ctx, task.SessionID, []contract.Target{w.Target()}); err == nil {
+				t.Fatal("Task received incomplete evidence as valid input")
 			}
 		})
 	}

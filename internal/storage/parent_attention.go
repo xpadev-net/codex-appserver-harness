@@ -47,7 +47,7 @@ func parentAttentionTx(ctx context.Context, q queryer, id string) (ParentAttenti
 		return a, err
 	}
 	digest, err := contentDigest(a.Task)
-	if err != nil || a.ID != id || parentAttentionID(a) != id || a.TaskDigest != digest || a.SessionID != a.Task.ParentSessionID || a.Target.WaveID != a.Task.WaveID || a.Target.ScopeRevision != a.Task.ScopeRevision || a.Target.PolicyRevision != a.Task.PolicyRevision || a.CreatedAt.IsZero() {
+	if err != nil || a.ID != id || parentAttentionID(a) != id || !a.Target.Valid() || a.TaskDigest != digest || a.SessionID != a.Task.ParentSessionID || a.Target.WaveID != a.Task.WaveID || a.Target.ScopeRevision != a.Task.ScopeRevision || a.Target.PolicyRevision != a.Task.PolicyRevision || a.CreatedAt.IsZero() {
 		return a, errors.New("parent attention source conflict")
 	}
 	return a, nil
@@ -138,7 +138,10 @@ func (k *KernelStore) saveTemplateAttention(ctx context.Context, request Templat
 	if err != nil {
 		return false, err
 	}
-	return changed, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return changed, nil
 }
 func (k *KernelStore) fanoutParentAttentionTx(ctx context.Context, tx *sql.Tx, intent notificationIntent) error {
 	if intent.Kind != "parent_attention" {
@@ -175,6 +178,12 @@ func (k *KernelStore) fanoutParentAttentionTx(ctx context.Context, tx *sql.Tx, i
 	return err
 }
 func (k *KernelStore) checkParentAttentionWakeTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, n Notification) error {
+	return k.checkParentAttentionSourceTx(ctx, tx, b, n, false)
+}
+
+// Ignore a temporary Task pause only when deciding whether to retire an
+// unstarted reservation. Pause holds dispatch without invalidating the source.
+func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, n Notification, ignorePause bool) error {
 	a, err := parentAttentionTx(ctx, tx, n.AttentionID)
 	if err != nil {
 		return err
@@ -187,6 +196,8 @@ func (k *KernelStore) checkParentAttentionWakeTx(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return err
 	}
+	paused := task.Paused
+	task.Paused = a.Task.Paused
 	digest, err := contentDigest(task)
 	if err != nil {
 		return err
@@ -222,6 +233,9 @@ func (k *KernelStore) checkParentAttentionWakeTx(ctx context.Context, tx *sql.Tx
 		if !readinessHoldError(err) {
 			return err
 		}
+	}
+	if paused && !ignorePause {
+		return ErrWakeHeld
 	}
 	return nil
 }

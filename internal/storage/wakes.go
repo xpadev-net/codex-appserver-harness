@@ -160,6 +160,20 @@ func obsoleteWakeNotification(b contract.SessionBinding, wave domain.Wave, n Not
 	}
 	return terminal
 }
+
+func (k *KernelStore) obsoleteWakeNotificationTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, wave domain.Wave, n Notification) (bool, error) {
+	if obsoleteWakeNotification(b, wave, n, k.clock()) {
+		return true, nil
+	}
+	if n.Kind == "parent_attention" {
+		err := k.checkParentAttentionSourceTx(ctx, tx, b, n, true)
+		if errors.Is(err, ErrWakeHeld) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
 func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, n Notification) error {
 	wave, err := loadWave(ctx, tx, n.Target.WaveID)
 	if err != nil {
@@ -575,7 +589,10 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 		if err != nil {
 			return w, err
 		}
-		old := obsoleteWakeNotification(b, wave, n, k.clock())
+		old, err := k.obsoleteWakeNotificationTx(ctx, tx, b, wave, n)
+		if err != nil {
+			return w, err
+		}
 		obsolete[n.ID], hasObsolete = old, hasObsolete || old
 		held, err := wakeBudgetHeldTx(ctx, tx, b, wave)
 		if err != nil {

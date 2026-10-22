@@ -63,21 +63,29 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
-	SchemaVersion    int                            `json:"schema_version"`
-	SessionID        string                         `json:"session_id"`
-	Kind             string                         `json:"kind"`
-	Wave             domain.Wave                    `json:"wave"`
-	Plan             *PlanAdmission                 `json:"plan"`
-	Tasks            []domain.Task                  `json:"tasks"`
-	Results          map[string]contract.TaskResult `json:"results"`
-	TaskApplications []ResultApplication            `json:"task_applications"`
-	TemplateContexts map[string]json.RawMessage     `json:"template_contexts"`
-	TemplateSubjects map[string]TemplateSubject     `json:"template_subjects"`
-	MainDecisions    []appliedMainDecision          `json:"main_decisions"`
-	Artifacts        []domain.Artifact              `json:"artifacts"`
-	Subscriptions    []inputSubscription            `json:"subscriptions"`
-	Direction        *WaveDirection                 `json:"direction"`
-	Budget           WaveRunBudget                  `json:"budget"`
+	SchemaVersion      int                            `json:"schema_version"`
+	SessionID          string                         `json:"session_id"`
+	Kind               string                         `json:"kind"`
+	Wave               domain.Wave                    `json:"wave"`
+	Plan               *PlanAdmission                 `json:"plan"`
+	Tasks              []domain.Task                  `json:"tasks"`
+	Results            map[string]contract.TaskResult `json:"results"`
+	UnavailableResults []unavailableInputResult       `json:"unavailable_results"`
+	TaskApplications   []ResultApplication            `json:"task_applications"`
+	TemplateContexts   map[string]json.RawMessage     `json:"template_contexts"`
+	TemplateSubjects   map[string]TemplateSubject     `json:"template_subjects"`
+	MainDecisions      []appliedMainDecision          `json:"main_decisions"`
+	Artifacts          []domain.Artifact              `json:"artifacts"`
+	Subscriptions      []inputSubscription            `json:"subscriptions"`
+	Direction          *WaveDirection                 `json:"direction"`
+	Budget             WaveRunBudget                  `json:"budget"`
+}
+
+type unavailableInputResult struct {
+	TaskID   string `json:"task_id"`
+	ResultID string `json:"result_id"`
+	RunID    string `json:"run_id"`
+	Reason   string `json:"reason"`
 }
 
 // BuildSessionInput captures one consistent DB view, with no model/process or
@@ -273,7 +281,7 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
-	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
+	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, UnavailableResults: []unavailableInputResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
 	tokens, unknown, saturated, err := waveTokensTx(ctx, tx, w.ID)
 	if err != nil {
 		return m, err
@@ -361,11 +369,26 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 				continue
 			}
 			var result contract.TaskResult
-			if err = completionRecord(ctx, tx, "task_result", application.ResultID, &result); err != nil {
+			if err = taskEvidenceRecord(ctx, tx, "task_result", application.ResultID, &result); err != nil {
+				if b.Kind == "orchestrator" && (errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence)) {
+					reason := "invalid_result"
+					if errors.Is(err, sql.ErrNoRows) {
+						reason = "missing_result"
+					}
+					m.UnavailableResults = append(m.UnavailableResults, unavailableInputResult{TaskID: task.ID, ResultID: application.ResultID, RunID: runID, Reason: reason})
+					continue
+				}
 				return m, err
 			}
 			if result.TaskID != task.ID || result.Target != task.Target() {
 				return m, errors.New("input result binding conflict")
+			}
+			if err = result.Validate(); err != nil {
+				if b.Kind == "orchestrator" {
+					m.UnavailableResults = append(m.UnavailableResults, unavailableInputResult{TaskID: task.ID, ResultID: application.ResultID, RunID: runID, Reason: "invalid_result"})
+					continue
+				}
+				return m, fmt.Errorf("%w: %v", ErrTaskEvidence, err)
 			}
 			m.Results[application.ResultID] = result
 		}

@@ -353,7 +353,11 @@ func (k *KernelStore) ReleaseUnstartedWake(ctx context.Context, id, reason strin
 			return err
 		}
 		next, nextRun := "pending", ""
-		if obsoleteWakeNotification(state.Binding, w, n, k.clock()) {
+		obsolete, err := k.obsoleteWakeNotificationTx(ctx, tx, state.Binding, w, n)
+		if err != nil {
+			return err
+		}
+		if obsolete {
 			next, nextRun = "archived", wake.Intent.RunID
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE kernel_notifications SET state=?,run_id=? WHERE id=?", next, nextRun, n.ID); err != nil {
