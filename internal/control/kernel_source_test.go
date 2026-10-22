@@ -744,3 +744,66 @@ func TestKernelSourcePauseDuringWakePreparationRenewsUnstartedRun(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+func TestKernelSourceMaintainsMainThreadOnlyForNextMeaningfulInput(t *testing.T) {
+	ctx := context.Background()
+	k, err := storage.OpenKernel(filepath.Join(t.TempDir(), "private", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if _, err = k.CreateOrchestrator(ctx, "main", "configured", t.TempDir(), "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	source := NewKernelSource(k)
+	calls := 0
+	newThreads := 0
+	for i := 0; i < 3; i++ {
+		limits := domain.DefaultKernelLimits()
+		limits.ThreadTurns = 2
+		wave, err := k.CreateWave(ctx, storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: fmt.Sprint("request-", i), OriginalRequest: "report saved context", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "explain remaining work"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "K", Limits: limits}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		work := sourceTaskWork(t, source, "main")
+		result := contract.MainResult{SchemaVersion: 1, SessionID: "main", Decisions: []contract.MainDecision{{Target: wave.Target(), Action: "report", Summary: "report", SubscriptionIDs: []string{}, Remaining: []string{}, Blockers: []string{}}}}
+		raw, _ := json.Marshal(result)
+		out, err := (Runtime{Store: k, Factory: factoryFunc(func(_ context.Context, l Launch) (Process, error) {
+			calls++
+			p := fake(l.Binding)
+			p.threadID = l.Binding.ThreadID
+			if p.threadID == "" {
+				newThreads++
+				p.threadID = fmt.Sprint("main-thread-", newThreads)
+			}
+			p.turnID = fmt.Sprint("turn-", calls)
+			p.final = string(raw)
+			return p, nil
+		})}).Execute(ctx, *work.Execute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = source.Complete(ctx, Completion{SessionID: "main", RunID: work.Execute.RunID, Outcome: out}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 || newThreads != 2 {
+		t.Fatal("maintenance created an extra model/process", calls, newThreads)
+	}
+	b, err := k.SessionBinding(ctx, "main")
+	if err != nil || b.Generation != 2 || b.ThreadID != "main-thread-2" {
+		t.Fatal(b, err)
+	}
+	page, err := source.Ready(ctx, "", 128)
+	if err != nil || len(page.Work) != 0 || page.Recheck {
+		t.Fatal("idle main initiated maintenance/model", page, err)
+	}
+	var audits, turns int
+	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_rebindings WHERE session_id='main' AND old_thread='main-thread-1' AND new_thread='main-thread-2'").Scan(&audits); err != nil || audits != 1 {
+		t.Fatal(audits, err)
+	}
+	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_run_bindings WHERE session_id='main'").Scan(&turns); err != nil || turns != 3 {
+		t.Fatal("rotation changed cumulative run accounting", turns, err)
+	}
+	assertCapacity(t, k, 0)
+}

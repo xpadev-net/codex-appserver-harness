@@ -294,6 +294,15 @@ type dispatchSelection struct {
 }
 
 func (s *KernelSource) selected(ctx context.Context, r ExecuteRequest) (*SessionWork, bool, error) {
+	b, err := s.Store.SessionBinding(ctx, r.SessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	if b.Kind == "orchestrator" {
+		if _, err = s.Store.EnsureMainThreadCapacity(ctx, b.ID, r.Snapshot); err != nil {
+			return nil, false, err
+		}
+	}
 	if err := s.Store.Put(ctx, "kernel_dispatch_selection", r.RunID, r.SessionID, dispatchSelection{SessionID: r.SessionID, SnapshotID: r.Snapshot.ID}); err != nil {
 		return nil, false, err
 	}
