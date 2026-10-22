@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/kernelcli"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/service"
 	"os"
@@ -40,6 +41,11 @@ func run() error {
 		}
 		_, err = runner.ExecuteWithWake(context.Background(), spec, socket)
 		return err
+	}
+	if len(os.Args) > 1 && os.Args[1] == "wave" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		return kernelcli.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)
 	}
 	if len(os.Args) > 1 && os.Args[1] != "doctor" {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

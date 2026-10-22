@@ -12,12 +12,21 @@ import (
 // DecodeStrict rejects unknown/case-variant keys, missing required properties,
 // null scalars/collections, and invalid array element types before Go decoding.
 // Fields with omitempty may be absent. Pointer fields may explicitly be null.
-func DecodeStrict(data []byte, out any) error {
+func DecodeStrict(data []byte, out any) error { return decodeStrictBounded(data, out, 1<<20, 16384) }
+
+// DecodeStrictBounded permits a larger trusted host request without raising
+// the default one-MiB/16K-character bounds used by model output and tools.
+// Host strings may span this envelope; the host still validates field semantics.
+func DecodeStrictBounded(data []byte, out any, limit int) error {
+	return decodeStrictBounded(data, out, limit, limit)
+}
+
+func decodeStrictBounded(data []byte, out any, limit, maxStringRunes int) error {
 	v := reflect.ValueOf(out)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return fmt.Errorf("output must be nonnil pointer")
 	}
-	if len(data) > 1<<20 || !utf8.Valid(data) || !json.Valid(data) {
+	if limit < 1 || limit > 16<<20 || len(data) > limit || !utf8.Valid(data) || !json.Valid(data) {
 		return fmt.Errorf("invalid JSON envelope")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -25,7 +34,7 @@ func DecodeStrict(data []byte, out any) error {
 	if err := uniqueJSONKeys(decoder); err != nil {
 		return err
 	}
-	if err := validateJSON(bytes.TrimSpace(data), v.Elem().Type(), "$"); err != nil {
+	if err := validateJSON(bytes.TrimSpace(data), v.Elem().Type(), "$", maxStringRunes); err != nil {
 		return err
 	}
 	return json.Unmarshal(data, out)
@@ -66,12 +75,12 @@ func uniqueJSONKeys(d *json.Decoder) error {
 	}
 	return nil
 }
-func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
+func validateJSON(raw json.RawMessage, t reflect.Type, path string, maxStringRunes int) error {
 	if t.Kind() == reflect.Pointer {
 		if bytes.Equal(raw, []byte("null")) {
 			return nil
 		}
-		return validateJSON(raw, t.Elem(), path)
+		return validateJSON(raw, t.Elem(), path, maxStringRunes)
 	}
 	if bytes.Equal(raw, []byte("null")) {
 		return fmt.Errorf("%s: null not allowed", path)
@@ -102,7 +111,7 @@ func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
 				}
 				return fmt.Errorf("%s.%s: required", path, name)
 			}
-			if err := validateJSON(bytes.TrimSpace(value), f.Type, path+"."+name); err != nil {
+			if err := validateJSON(bytes.TrimSpace(value), f.Type, path+"."+name, maxStringRunes); err != nil {
 				return err
 			}
 		}
@@ -123,7 +132,7 @@ func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
 			return fmt.Errorf("%s: too many map entries", path)
 		}
 		for key, value := range values {
-			if err := validateJSON(bytes.TrimSpace(value), t.Elem(), path+"."+key); err != nil {
+			if err := validateJSON(bytes.TrimSpace(value), t.Elem(), path+"."+key, maxStringRunes); err != nil {
 				return err
 			}
 		}
@@ -136,7 +145,7 @@ func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
 			return fmt.Errorf("%s: too many items", path)
 		}
 		for i, value := range values {
-			if err := validateJSON(bytes.TrimSpace(value), t.Elem(), fmt.Sprintf("%s[%d]", path, i)); err != nil {
+			if err := validateJSON(bytes.TrimSpace(value), t.Elem(), fmt.Sprintf("%s[%d]", path, i), maxStringRunes); err != nil {
 				return err
 			}
 		}
@@ -148,7 +157,7 @@ func validateJSON(raw json.RawMessage, t reflect.Type, path string) error {
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return err
 		}
-		if utf8.RuneCountInString(value) > 16384 {
+		if utf8.RuneCountInString(value) > maxStringRunes {
 			return fmt.Errorf("%s: string too long", path)
 		}
 	case reflect.Int, reflect.Int64:

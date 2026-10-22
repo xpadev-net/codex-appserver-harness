@@ -20,15 +20,15 @@ service統合テストはfake GitHub / model / job adapterと実際のローカ�
 ## v0.4の適用と現在の未達
 
 上表は旧PRハーネスの実装・試験への対応であり、v0.4の全ATが合格したという表ではない。
-特にAT-009の「新fix Task/session」は未実装で、旧role thread再利用の試験を新版の合格へ読み替えない。
+AT-009の新fix Task/sessionはKのcomponentで追加・検証した。Pの旧role thread経路への接続は未完で、旧試験を新版の合格へ読み替えない。
 2026-10-22のコードレビューでは`7dfa964`でGo tests/vet/buildと主要packageのrace検査が成功した。一時的なoverlay試験で#44/#45を再現したため、テスト全体の成功を要件全充足と扱わない。
 
 | 段階 | 現在の状態 | 次の証拠 |
 | --- | --- | --- |
 | S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
-| K | 共通session/tool契約・driver基盤を追加。DB/controller未接続、K未成立 | Task_2〜7/9〜10。汎用成果、2 Task並行、独立review/fix、親子message、通知、CLI、復旧と上限 |
+| K | 共通runtime/DB/controller/main・Task/独立review・検証済みWave完了のcomponentとCLI初期操作を追加。K全体未成立 | Task_9〜10。実行daemon/操作/watchのCLI接続と実modelを含むK統合受入 |
 | P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
-| M | 未実装。実DB不存在は未確認 | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
+| M | fixture移行は未実装。依頼者確認で運用DBなし | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
 新しいAT-050〜059は[要件の受入表](../requirements.md#10-受入テスト)を原本とする。K/P/Mで適用/未実行/blocked/合格を別々に記録し、実装前の目標値を実測値として掲載しない。
 旧基盤の [#44](https://github.com/xpadev-net/codex-appserver-harness/issues/44) は [PR #52](https://github.com/xpadev-net/codex-appserver-harness/pull/52)、[#45](https://github.com/xpadev-net/codex-appserver-harness/issues/45) は [PR #53](https://github.com/xpadev-net/codex-appserver-harness/pull/53) で修正し、回帰・Codex review・CIを確認した。新しいTask/session工程の受入は引き続きKで検証する。
