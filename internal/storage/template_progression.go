@@ -154,6 +154,26 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 	if err != nil {
 		return false, err
 	}
+	if set.State == "execution_completed" && wave.Policy.Stage == "K" && !wave.Policy.Product {
+		// Execution completion is a meaningful final-judgment input, not a
+		// quality claim. The immutable current-plan source deduplicates polling.
+		var taskID string
+		if err = tx.QueryRowContext(ctx, "SELECT task_id FROM kernel_plan_bindings WHERE wave_id=? AND revision=? ORDER BY task_id LIMIT 1", wave.ID, wave.PlanRevision).Scan(&taskID); err != nil {
+			return false, err
+		}
+		task, err := loadTask(ctx, tx, taskID)
+		if err != nil {
+			return false, err
+		}
+		changed, err := k.saveParentAttentionTx(ctx, tx, wave, task, "wave_execution_completed", "All required Phase executions completed; inspect original criteria, independent evidence and remaining work for the final judgment.")
+		if err != nil {
+			return false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		return changed, nil
+	}
 	if set.State == "active" && set.Reason == "" {
 		changed, err := k.saveReadyInputAttentionTx(ctx, tx, wave, tasks)
 		if err != nil {
