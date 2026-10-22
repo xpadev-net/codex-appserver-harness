@@ -76,3 +76,34 @@ func TestMainResultSchemaListLimitsMatchValidation(t *testing.T) {
 		t.Fatal("oversized explanation accepted")
 	}
 }
+
+func TestMainAcceptanceOnlyProposesBoundedEvidenceWithoutUnresolvedWork(t *testing.T) {
+	proposal := ArtifactAcceptance{Outputs: []string{"output"}, Evaluations: []ArtifactCriterionEvaluation{{CriterionID: "AC", ArtifactID: "output", ReviewTaskID: "independent"}}}
+	result := MainResult{SchemaVersion: 1, SessionID: "main", Decisions: []MainDecision{{Target: Target{"wave", 1, 1, 1}, Action: "accept", Acceptance: &proposal, Summary: "controller must verify all evidence"}}}
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"missing", "remaining", "blocker", "plan", "subscription", "report"} {
+		t.Run(mode, func(t *testing.T) {
+			bad := result
+			bad.Decisions = append([]MainDecision{}, result.Decisions...)
+			switch mode {
+			case "missing":
+				bad.Decisions[0].Acceptance = nil
+			case "remaining":
+				bad.Decisions[0].Remaining = []string{"not checked"}
+			case "blocker":
+				bad.Decisions[0].Blockers = []string{"missing evidence"}
+			case "plan":
+				bad.Decisions[0].Plan = &PlanProposal{}
+			case "subscription":
+				bad.Decisions[0].SubscriptionIDs = []string{"wait"}
+			case "report":
+				bad.Decisions[0].Action = "report"
+			}
+			if bad.Validate() == nil {
+				t.Fatal("invalid acceptance proposal accepted")
+			}
+		})
+	}
+}

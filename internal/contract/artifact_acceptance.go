@@ -5,6 +5,8 @@ import (
 	"errors"
 )
 
+const MaxArtifactEvaluations = 256
+
 type ArtifactCriterionEvaluation struct {
 	CriterionID  string `json:"criterion_id"`
 	ArtifactID   string `json:"artifact_id"`
@@ -19,7 +21,7 @@ type ArtifactAcceptance struct {
 }
 
 func (p ArtifactAcceptance) Validate() error {
-	if len(p.Outputs) == 0 || len(p.Outputs) > 128 || !validIDs(p.Outputs) || len(p.Evaluations) == 0 || len(p.Evaluations) > 1024 {
+	if len(p.Outputs) == 0 || len(p.Outputs) > 128 || !validIDs(p.Outputs) || len(p.Evaluations) == 0 || len(p.Evaluations) > MaxArtifactEvaluations {
 		return errors.New("bounded output/evaluation references required")
 	}
 	outputs := map[string]bool{}
@@ -44,4 +46,14 @@ func (p ArtifactAcceptance) Validate() error {
 		return errors.New("artifact acceptance exceeds 64 KiB")
 	}
 	return nil
+}
+
+func ArtifactAcceptanceSchema() map[string]any {
+	schema := Schema(ArtifactAcceptance{})
+	fields := schema["properties"].(map[string]any)
+	fields["outputs"].(map[string]any)["minItems"] = 1
+	fields["outputs"].(map[string]any)["maxItems"] = 128
+	fields["evaluations"].(map[string]any)["minItems"] = 1
+	fields["evaluations"].(map[string]any)["maxItems"] = MaxArtifactEvaluations
+	return schema
 }
