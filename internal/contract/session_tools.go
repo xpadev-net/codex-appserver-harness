@@ -386,6 +386,8 @@ func toolArgument(name string) any {
 		return &StateRequest{}
 	case "artifact_read":
 		return &ReadArtifactRequest{}
+	case "context_read":
+		return &ContextReadRequest{}
 	case "artifact_publish":
 		return &PublishArtifactRequest{}
 	case "send_message":
@@ -401,7 +403,7 @@ func KernelTools(kind string) []ToolDefinition {
 		return nil
 	}
 	out := []ToolDefinition{}
-	for _, name := range []string{"wave_create", "wave_plan", "task_instruct", "session_wait", "state_get", "artifact_read", "artifact_publish", "send_message"} {
+	for _, name := range []string{"wave_create", "wave_plan", "task_instruct", "session_wait", "state_get", "context_read", "artifact_read", "artifact_publish", "send_message"} {
 		if kind == "task" && parentOnly(name) {
 			continue
 		}
@@ -410,6 +412,13 @@ func KernelTools(kind string) []ToolDefinition {
 			inputSchema["properties"].(map[string]any)["plan"] = PlanSchema()
 		}
 		description := "Version 1 controller operation: " + name + ". Accepted work is not completed work; wait on the returned subscription."
+		if name == "context_read" {
+			description = "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path."
+			properties := inputSchema["properties"].(map[string]any)
+			properties["section"].(map[string]any)["enum"] = []string{"request", "criteria", "policy", "direction"}
+			properties["offset"].(map[string]any)["minimum"] = 0
+			properties["limit"].(map[string]any)["minimum"], properties["limit"].(map[string]any)["maximum"] = 1, MaxContextRead
+		}
 		if name == "state_get" {
 			description += " The default overview returns 16 Tasks/subscriptions. Continue each collection with page {collection: tasks or subscriptions, after: its next cursor, limit: 1..64}; an empty next cursor ends that collection."
 		}
@@ -445,6 +454,11 @@ func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolRep
 	}
 	var target Target
 	switch a := command.(type) {
+	case *ContextReadRequest:
+		target = a.Target
+		if !a.Valid() {
+			return reject("invalid bounded context read")
+		}
 	case *CreateWaveRequest:
 		if a.SchemaVersion != 1 || !inline(a.RequestID) {
 			return reject("invalid wave request")

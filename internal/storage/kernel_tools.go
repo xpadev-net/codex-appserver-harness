@@ -40,6 +40,8 @@ func kernelToolTarget(command any) (string, contract.Target) {
 		return "wave_plan", a.Target
 	case *contract.StateRequest:
 		return "state_get", a.Target
+	case *contract.ContextReadRequest:
+		return "context_read", a.Target
 	case *contract.InstructRequest:
 		return "task_instruct", a.Target
 	case *contract.WaitRequest:
@@ -202,6 +204,19 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	op := kernelToolOperation{ID: structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID), SessionID: b.ID, RunID: call.RunID, ThreadID: b.ThreadID, TurnID: call.TurnID, CallID: call.CallID, Name: call.Name, ArgumentDigest: digest, Target: target, SnapshotID: snapshotID, CreatedAt: k.clock()}
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
+	case *contract.ContextReadRequest:
+		content, err := k.contextSliceTx(ctx, tx, b, *r)
+		if err != nil {
+			return reply, err
+		}
+		raw, err := json.Marshal(content)
+		if err != nil {
+			return reply, err
+		}
+		if len(raw) > contract.MaxInline {
+			return reply, errors.New("context slice exceeds inline response bound")
+		}
+		reply.ResourceID, reply.Content = target.WaveID, string(raw)
 	case *contract.StateRequest:
 		content, err := k.kernelStateTx(ctx, tx, b, *r)
 		if err != nil {
