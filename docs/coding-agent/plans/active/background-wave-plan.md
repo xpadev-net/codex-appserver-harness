@@ -183,8 +183,8 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_3: 永続購読・親子受信箱・再開intent
 
-- status: in_progress
-- split: PR #61でKのTask/Wave終端購読・原子的通知fanout・登録時snapshot・再照合・配送ackを実装。PR #62で親子受信箱・双方向自動購読・返信とmessage通知を追加。PR #63でwake/run binding・Task判断適用・未起動intent復旧を追加。PR #64でkernel tool認可・操作履歴・RPC handlerを接続。最後にArtifact公開transaction・完了通知・復旧を追加する。main判断はTask_6、processへの実接続はTask_5で行い、今回の保存APIをK受入とはしない。
+- status: completed
+- split: PR #61でKのTask/Wave終端購読・原子的通知fanout・登録時snapshot・再照合・配送ackを実装。PR #62で親子受信箱・双方向自動購読・返信とmessage通知を追加。PR #63でwake/run binding・Task判断適用・未起動intent復旧を追加。PR #64でkernel tool認可・操作履歴・RPC handlerを接続。PR #65でArtifact公開transaction・完了通知・復旧を追加した。main判断はTask_6、processへの実接続はTask_5で行い、今回の保存APIをK受入とはしない。
 - type: impl
 - owns:
   - internal/storage/notifications.go
@@ -226,8 +226,13 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_4: 実行枠・排他・予算scheduler
 
+- status: in_progress
+- split: 最初のPRで保存済みplan/Phase/Task成果に基づくready集合とturn予約時の再照合を追加する。実行枠・排他・累積使用量・main turn予算は続くPRで同一transactionへ接続する。製品Candidate/merge判定はTask_8の認可adapterまでfail closedとする。processを起動するTask_5より先に予約portを完成させる。
 - type: impl
 - owns:
+  - internal/storage/scheduler.go
+  - internal/storage/scheduler_test.go
+  - internal/storage/sessions.go（turn予約時のready再照合）
   - internal/service/scheduler.go
   - internal/service/scheduler_test.go
   - internal/service/config.go
