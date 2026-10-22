@@ -16,6 +16,7 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
@@ -496,4 +497,134 @@ func TestLoopShutdownReportsArchivedLaunchWithUnknownIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCapacity(t, k, 1)
+}
+
+type functionSource struct {
+	ready    func(string, int) (WorkPage, error)
+	complete func(Completion) error
+}
+
+func (s functionSource) Ready(_ context.Context, after string, limit int) (WorkPage, error) {
+	return s.ready(after, limit)
+}
+func (s functionSource) Complete(_ context.Context, c Completion) error { return s.complete(c) }
+func TestLoopCompletionRestartsReadyScanBeforeOldCursor(t *testing.T) {
+	k, b := taskFixture(t)
+	if err := k.ConfigureExecutionLimits(context.Background(), domain.LegacyExecutionLimits()); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := k.Tasks(context.Background(), b.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var other contract.SessionBinding
+	for _, task := range tasks {
+		if task.SessionID != b.ID {
+			other, err = k.SessionBinding(context.Background(), task.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	p1 := fake(b)
+	p1.threadID = "first"
+	p2 := fake(other)
+	p2.threadID = "second"
+	stage := 0
+	completed := make(chan Completion, 4)
+	source := functionSource{ready: func(after string, _ int) (WorkPage, error) {
+		switch stage {
+		case 0:
+			return WorkPage{Work: []SessionWork{workRequest(b)}, NextAfter: "z"}, nil
+		case 1:
+			if after == "" {
+				return WorkPage{Work: []SessionWork{workRequest(other)}}, nil
+			}
+		}
+		return WorkPage{}, nil
+	}, complete: func(c Completion) error { stage++; completed <- c; return nil }}
+	l := NewLoop(Runtime{Store: k, Factory: factoryFunc(func(_ context.Context, launch Launch) (Process, error) {
+		if launch.Binding.ID == b.ID {
+			return p1, nil
+		}
+		return p2, nil
+	})}, source)
+	l.ReconcileEvery = time.Hour
+	loopStart(t, l)
+	first := await(t, completed)
+	second := await(t, completed)
+	if first.SessionID != b.ID || second.SessionID != other.ID || first.Err != nil || second.Err != nil {
+		t.Fatal(first, second)
+	}
+}
+
+func TestLoopShutdownRequestsDurableStopsBeforeWaitingForSlowFactory(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	tasks, err := k.Tasks(ctx, b.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var other contract.SessionBinding
+	for _, task := range tasks {
+		if task.SessionID != b.ID {
+			other, err = k.SessionBinding(ctx, task.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err = k.ReserveManagedProcess(ctx, storage.ManagedProcessRequest{OwnerID: "old-owner", RunID: "old-run", Mode: "execute", Binding: b}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.BeginManagedProcessLaunch(ctx, "old-owner"); err != nil {
+		t.Fatal(err)
+	}
+	survivor := nonStoppingFixture(t, b)
+	if err = k.RecordManagedProcessStarted(ctx, "old-owner", survivor.identity); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	entered := make(chan Launch, 1)
+	source := newSource(workRequest(other))
+	l := NewLoop(Runtime{Store: k, Factory: factoryFunc(func(_ context.Context, launch Launch) (Process, error) {
+		entered <- launch
+		<-release
+		return nil, ErrNotStarted
+	})}, source)
+	l.StopWait = 50 * time.Millisecond
+	l.ReconcileEvery = time.Hour
+	runctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- l.Run(runctx) }()
+	launch := await(t, entered)
+	cancel()
+	err = await(t, done)
+	close(release)
+	if !errors.Is(err, process.ErrUnconfirmed) {
+		t.Fatal(err)
+	}
+	stopped, stop := context.WithTimeout(ctx, time.Second)
+	defer stop()
+	if err = process.WaitStopped(stopped, survivor.identity); err != nil {
+		t.Fatal("slow factory suppressed prior owner's stop", err)
+	}
+	// Let the deliberately uncooperative factory finish its own durable cleanup
+	// before closing the fixture DB. Run's result delivery was already abandoned.
+	deadline := time.After(5 * time.Second)
+	for {
+		p, err := k.ManagedProcess(ctx, launch.Process.Request.OwnerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.State == "stopped" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("factory cleanup did not complete")
+		case <-time.After(time.Millisecond):
+		}
+	}
 }

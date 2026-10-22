@@ -151,7 +151,18 @@ func WaitStopped(ctx context.Context, p Identity) error {
 // a missing leader with surviving children is uncertain and stays held. No
 // numeric group signal is used, and missing pidfd support fails closed.
 // This requests stopping only; callers still need GroupAlive/WaitStopped proof.
-func RequestGroupStop(p Identity) error {
+func RequestGroupStop(p Identity) error { return RequestGroupStopContext(context.Background(), p) }
+
+// RequestGroupStopContext also bounds collection by the caller's stop budget.
+func RequestGroupStopContext(ctx context.Context, p Identity) error {
+	bounded, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	return requestGroupStop(bounded, p)
+}
+func requestGroupStop(ctx context.Context, p Identity) error {
+	if err := ctx.Err(); err != nil {
+		return errors.Join(ErrUnconfirmed, err)
+	}
 	if !p.Valid() {
 		return ErrUnconfirmed
 	}
@@ -162,42 +173,28 @@ func RequestGroupStop(p Identity) error {
 	if !alive {
 		return nil
 	}
-	if Identify(p.PID) != p {
-		return ErrUnconfirmed
-	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return errors.Join(ErrUnconfirmed, err)
-	}
-	targets := []*os.Process{}
+	targets := map[Identity]*os.Process{}
 	defer func() {
 		for _, target := range targets {
 			_ = target.Release()
 		}
 	}()
-	for _, entry := range entries {
-		pid, e := strconv.Atoi(entry.Name())
-		if e != nil {
-			continue
-		}
-		state, group, ticks, e := ReadStat(pid)
-		if os.IsNotExist(e) || errors.Is(e, syscall.ESRCH) {
-			continue
-		}
-		if e != nil {
-			return errors.Join(ErrUnconfirmed, e)
-		}
-		if group != p.PID || state == "Z" || state == "X" {
-			continue
+	// Freeze the original leader before enumeration so it cannot fork between
+	// the snapshot and its death. Then freeze and rescan descendant members until
+	// the complete observed group is stopped. Numeric PIDs never receive signals.
+	pinAndFreeze := func(pid int, ticks uint64) error {
+		key := Identity{PID: pid, BootID: p.BootID, StartTicks: ticks}
+		if target := targets[key]; target != nil {
+			return target.Signal(syscall.SIGSTOP)
 		}
 		target, e := os.FindProcess(pid)
 		if e != nil {
-			return errors.Join(ErrUnconfirmed, e)
+			return e
 		}
 		matched := false
 		var inspectErr error
 		handleErr := target.WithHandle(func(_ uintptr) {
-			currentState, currentGroup, currentTicks, e := ReadStat(pid)
+			state, group, currentTicks, e := ReadStat(pid)
 			if os.IsNotExist(e) || errors.Is(e, syscall.ESRCH) {
 				return
 			}
@@ -205,31 +202,126 @@ func RequestGroupStop(p Identity) error {
 				inspectErr = e
 				return
 			}
-			matched = currentGroup == p.PID && currentTicks == ticks && currentState != "Z" && currentState != "X"
+			matched = group == p.PID && ticks == currentTicks && state != "Z" && state != "X"
+			if matched {
+				_, leaderGroup, leaderTicks, e := ReadStat(p.PID)
+				if e != nil || leaderGroup != p.PID || leaderTicks != p.StartTicks || BootID() != p.BootID {
+					inspectErr = errors.Join(ErrUnconfirmed, e)
+					return
+				}
+				inspectErr = target.Signal(syscall.SIGSTOP)
+			}
 		})
 		if errors.Is(handleErr, os.ErrProcessDone) {
 			handleErr = nil
 		}
+		if errors.Is(inspectErr, os.ErrProcessDone) || errors.Is(inspectErr, syscall.ESRCH) {
+			inspectErr = nil
+			matched = false
+		}
 		if handleErr != nil || inspectErr != nil {
 			_ = target.Release()
-			return errors.Join(ErrUnconfirmed, handleErr, inspectErr)
+			return errors.Join(handleErr, inspectErr)
 		}
 		if matched {
-			targets = append(targets, target)
+			targets[key] = target
 		} else {
 			_ = target.Release()
 		}
+		return nil
 	}
-	// No signals precede this final check. If this exact leader is still here,
-	// its PGID could not have been recycled during the pinned snapshot above.
-	state, group, ticks, err := ReadStat(p.PID)
-	if err != nil || group != p.PID || ticks != p.StartTicks || state == "Z" || state == "X" || BootID() != p.BootID {
+	if Identify(p.PID) != p {
+		return ErrUnconfirmed
+	}
+	if err = pinAndFreeze(p.PID, p.StartTicks); err != nil {
 		return errors.Join(ErrUnconfirmed, err)
 	}
-	for _, target := range targets {
-		if err = target.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+	if targets[p] == nil {
+		return ErrUnconfirmed
+	}
+	previousFrozen := false
+	for {
+		if err = ctx.Err(); err != nil {
 			return errors.Join(ErrUnconfirmed, err)
 		}
+		entries, e := os.ReadDir("/proc")
+		if e != nil {
+			return errors.Join(ErrUnconfirmed, e)
+		}
+		frozen := true
+		for _, entry := range entries {
+			pid, e := strconv.Atoi(entry.Name())
+			if e != nil {
+				continue
+			}
+			state, group, ticks, e := ReadStat(pid)
+			if os.IsNotExist(e) || errors.Is(e, syscall.ESRCH) {
+				continue
+			}
+			if e != nil {
+				return errors.Join(ErrUnconfirmed, e)
+			}
+			if group != p.PID || state == "Z" || state == "X" {
+				continue
+			}
+			key := Identity{PID: pid, BootID: p.BootID, StartTicks: ticks}
+			threadsStopped, e := allThreadsStopped(pid)
+			if e != nil {
+				return errors.Join(ErrUnconfirmed, e)
+			}
+			if targets[key] == nil || state != "T" && state != "t" || !threadsStopped {
+				frozen = false
+				if e = pinAndFreeze(pid, ticks); e != nil && !errors.Is(e, os.ErrProcessDone) && !errors.Is(e, syscall.ESRCH) {
+					return errors.Join(ErrUnconfirmed, e)
+				}
+			}
+		}
+		// Holding this exact stopped leader ensures the PGID was never recycled
+		// during collection; every target below is pinned to its original process.
+		state, group, ticks, e := ReadStat(p.PID)
+		if e != nil || group != p.PID || ticks != p.StartTicks || state == "Z" || state == "X" || BootID() != p.BootID {
+			return errors.Join(ErrUnconfirmed, e)
+		}
+		if frozen && previousFrozen && (state == "T" || state == "t") {
+			for _, target := range targets {
+				if e = target.Signal(syscall.SIGKILL); e != nil && !errors.Is(e, os.ErrProcessDone) && !errors.Is(e, syscall.ESRCH) {
+					return errors.Join(ErrUnconfirmed, e)
+				}
+			}
+			return nil
+		}
+		previousFrozen = frozen
+		select {
+		case <-ctx.Done():
+			return errors.Join(ErrUnconfirmed, ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
 	}
-	return nil
+}
+
+func allThreadsStopped(pid int) (bool, error) {
+	threads, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, thread := range threads {
+		tid, err := strconv.Atoi(thread.Name())
+		if err != nil {
+			return false, err
+		}
+		state, _, _, err := ReadStat(tid)
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if state != "T" && state != "t" && state != "Z" && state != "X" {
+			return false, nil
+		}
+	}
+	return true, nil
 }

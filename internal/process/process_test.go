@@ -110,3 +110,34 @@ func TestRecoveredGroupStopUsesOriginalIdentityAndPinnedMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRecoveredGroupStopPreventsForkDuringEnumeration(t *testing.T) {
+	for range 6 {
+		cmd := exec.Command("sh", "-c", "printf ready; while :; do sleep 30 & sleep 0.001; done")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		pipe, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		p := Identify(cmd.Process.Pid)
+		func() {
+			defer func() { _ = syscall.Kill(-p.PID, syscall.SIGKILL); _ = cmd.Wait() }()
+			buf := make([]byte, 5)
+			if _, err = pipe.Read(buf); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(5 * time.Millisecond)
+			if err = RequestGroupStop(p); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err = WaitStopped(ctx, p); err != nil {
+				t.Fatal("forking descendant survived", err)
+			}
+		}()
+	}
+}

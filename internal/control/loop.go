@@ -147,6 +147,7 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 				continue
 			}
 			f.cancel()
+			workCursor = "" // application can make an earlier stable key ready.
 			delete(flights, id)
 		}
 	}
@@ -237,8 +238,10 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 		select {
 		case <-ctx.Done():
 		case <-ticker.C:
+			workCursor = ""
 			scan = true
 		case <-l.wake:
+			workCursor = ""
 			scan = true
 		case completion := <-results:
 			f := flights[completion.SessionID]
@@ -250,6 +253,7 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 				return errors.New("completion source conflict")
 			}
 			f.completion = &completion
+			workCursor = ""
 			scan = true
 		}
 	}
@@ -260,6 +264,8 @@ func (l *Loop) shutdown(ctx context.Context, wait time.Duration, flights map[str
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
+	initialStopErr := l.requestShutdownStops(cleanup)
+	l.report(initialStopErr)
 	pending := 0
 	for _, f := range flights {
 		if f.completion == nil {
@@ -276,7 +282,7 @@ func (l *Loop) shutdown(ctx context.Context, wait time.Duration, flights map[str
 			f.completion = &c
 			pending--
 		case <-cleanup.Done():
-			return errors.Join(ctx.Err(), process.ErrUnconfirmed)
+			return errors.Join(ctx.Err(), process.ErrUnconfirmed, initialStopErr)
 		}
 	}
 	var errs []error
@@ -416,7 +422,7 @@ func (l *Loop) shutdownManaged(ctx context.Context) error {
 					errs = append(errs, process.ErrUnconfirmed)
 					continue
 				}
-				requestErr := process.RequestGroupStop(p.Identity)
+				requestErr := process.RequestGroupStopContext(ctx, p.Identity)
 				if err = process.WaitStopped(ctx, p.Identity); err != nil {
 					errs = append(errs, errors.Join(requestErr, err))
 					continue
@@ -425,6 +431,28 @@ func (l *Loop) shutdownManaged(ctx context.Context) error {
 			}
 			if err = k.ConfirmManagedProcessStopped(ctx, proof); err != nil {
 				errs = append(errs, errors.Join(process.ErrUnconfirmed, err))
+			}
+		}
+		if page.NextAfter == "" {
+			return errors.Join(errs...)
+		}
+		cursor = page.NextAfter
+	}
+}
+
+// Request every known durable owner's stop before a slow local factory can
+// consume the shutdown wait. Release still requires the later proof pass.
+func (l *Loop) requestShutdownStops(ctx context.Context) error {
+	cursor := ""
+	var errs []error
+	for {
+		page, err := l.Runtime.Store.PendingManagedProcesses(ctx, cursor, 128)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		for _, p := range page.Processes {
+			if p.Identity.Valid() {
+				errs = append(errs, process.RequestGroupStopContext(ctx, p.Identity))
 			}
 		}
 		if page.NextAfter == "" {
