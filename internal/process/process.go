@@ -145,3 +145,91 @@ func WaitStopped(ctx context.Context, p Identity) error {
 		}
 	}
 }
+
+// RequestGroupStop signals members pinned by Linux process handles. The
+// original leader must remain identifiable while collecting the group snapshot;
+// a missing leader with surviving children is uncertain and stays held. No
+// numeric group signal is used, and missing pidfd support fails closed.
+// This requests stopping only; callers still need GroupAlive/WaitStopped proof.
+func RequestGroupStop(p Identity) error {
+	if !p.Valid() {
+		return ErrUnconfirmed
+	}
+	alive, err := GroupAlive(p)
+	if err != nil {
+		return errors.Join(ErrUnconfirmed, err)
+	}
+	if !alive {
+		return nil
+	}
+	if Identify(p.PID) != p {
+		return ErrUnconfirmed
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return errors.Join(ErrUnconfirmed, err)
+	}
+	targets := []*os.Process{}
+	defer func() {
+		for _, target := range targets {
+			_ = target.Release()
+		}
+	}()
+	for _, entry := range entries {
+		pid, e := strconv.Atoi(entry.Name())
+		if e != nil {
+			continue
+		}
+		state, group, ticks, e := ReadStat(pid)
+		if os.IsNotExist(e) || errors.Is(e, syscall.ESRCH) {
+			continue
+		}
+		if e != nil {
+			return errors.Join(ErrUnconfirmed, e)
+		}
+		if group != p.PID || state == "Z" || state == "X" {
+			continue
+		}
+		target, e := os.FindProcess(pid)
+		if e != nil {
+			return errors.Join(ErrUnconfirmed, e)
+		}
+		matched := false
+		var inspectErr error
+		handleErr := target.WithHandle(func(_ uintptr) {
+			currentState, currentGroup, currentTicks, e := ReadStat(pid)
+			if os.IsNotExist(e) || errors.Is(e, syscall.ESRCH) {
+				return
+			}
+			if e != nil {
+				inspectErr = e
+				return
+			}
+			matched = currentGroup == p.PID && currentTicks == ticks && currentState != "Z" && currentState != "X"
+		})
+		if errors.Is(handleErr, os.ErrProcessDone) {
+			handleErr = nil
+		}
+		if handleErr != nil || inspectErr != nil {
+			_ = target.Release()
+			return errors.Join(ErrUnconfirmed, handleErr, inspectErr)
+		}
+		if matched {
+			targets = append(targets, target)
+		} else {
+			_ = target.Release()
+		}
+	}
+	// No signals precede this final check. If this exact leader is still here,
+	// its PGID could not have been recycled during the pinned snapshot above.
+	state, group, ticks, err := ReadStat(p.PID)
+	if err != nil || group != p.PID || ticks != p.StartTicks || state == "Z" || state == "X" || BootID() != p.BootID {
+		return errors.Join(ErrUnconfirmed, err)
+	}
+	for _, target := range targets {
+		if err = target.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+			return errors.Join(ErrUnconfirmed, err)
+		}
+	}
+	return nil
+}

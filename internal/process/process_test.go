@@ -73,3 +73,40 @@ func TestProcessGroupKeepsOrphanChildrenUntilTheyStop(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRecoveredGroupStopUsesOriginalIdentityAndPinnedMembers(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "sleep 30 & printf ready; wait")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := Identify(cmd.Process.Pid)
+	t.Cleanup(func() { _ = syscall.Kill(-p.PID, syscall.SIGKILL); _ = cmd.Wait() })
+	buf := make([]byte, 5)
+	if _, err = out.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	wrong := p
+	wrong.StartTicks++
+	if err = RequestGroupStop(wrong); err != nil {
+		t.Fatal(err)
+	}
+	if !Alive(p) {
+		t.Fatal("mismatched generation signaled live process")
+	}
+	if err = RequestGroupStop(Identity{}); !errors.Is(err, ErrUnconfirmed) {
+		t.Fatal(err)
+	}
+	if err = RequestGroupStop(p); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err = WaitStopped(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+}

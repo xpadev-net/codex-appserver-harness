@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -162,15 +163,10 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 				l.report(e)
 			} else {
 				waveCursor = page.NextAfter
-				if waveCursor != "" {
-					scan = true
-				}
 			}
 			e = l.maintain(ctx, flights, &processCursor, &actionCursor)
 			if e != nil {
 				l.report(e)
-			} else if processCursor != "" || actionCursor != "" {
-				scan = true
 			}
 			finish()
 			if ctx.Err() != nil {
@@ -287,73 +283,116 @@ func (l *Loop) shutdown(ctx context.Context, wait time.Duration, flights map[str
 	for _, f := range flights {
 		if f.completion != nil {
 			errs = append(errs, l.Source.Complete(cleanup, *f.completion))
+			if errors.Is(f.completion.Err, process.ErrUnconfirmed) || (f.completion.Outcome.PreparationID != "" && !f.completion.Outcome.Stopped) {
+				errs = append(errs, errors.Join(process.ErrUnconfirmed, f.completion.Err))
+			}
 		}
 	}
 	return errors.Join(append(errs, ctx.Err())...)
 }
 
+// One unreadable process must not suppress another owner's deadline action.
 func (l *Loop) maintain(ctx context.Context, flights map[string]*flight, processCursor, actionCursor *string) error {
 	k := l.Runtime.Store
+	var errs []error
 	page, err := k.PendingManagedProcesses(ctx, *processCursor, 128)
 	if err != nil {
-		return err
-	}
-	*processCursor = page.NextAfter
-	for _, p := range page.Processes {
-		f := flights[p.Request.Binding.ID]
-		if f != nil {
-			_, run, _ := f.work.identity()
-			if run == p.Request.RunID && f.completion == nil {
-				continue
-			}
-		}
-		proof := storage.ManagedStopProof{OwnerID: p.Request.OwnerID}
-		if p.State == "admitted" {
-			proof.Disposition = "not_started"
-		} else {
-			if !p.Identity.Valid() {
-				continue
-			}
-			alive, e := process.GroupAlive(p.Identity)
-			if e != nil {
-				return e
-			}
-			if alive {
-				continue
-			}
-			proof.Disposition, proof.Identity = "group_stopped", p.Identity
-		}
-		if err = k.ConfirmManagedProcessStopped(ctx, proof); err != nil {
-			return err
+		errs = append(errs, err)
+	} else {
+		*processCursor = page.NextAfter
+		for _, p := range page.Processes {
+			errs = append(errs, l.maintainProcess(ctx, p, flights))
 		}
 	}
 	actions, err := k.PendingDeadlineActions(ctx, *actionCursor, 128)
 	if err != nil {
-		return err
+		return errors.Join(append(errs, err)...)
 	}
 	*actionCursor = actions.NextAfter
 	for _, a := range actions.Actions {
-		if a.Kind != "stop_process" {
-			continue
+		errs = append(errs, l.maintainAction(ctx, a, flights))
+	}
+	return errors.Join(errs...)
+}
+func (l *Loop) maintainProcess(ctx context.Context, p storage.ManagedProcess, flights map[string]*flight) error {
+	if f := flights[p.Request.Binding.ID]; f != nil {
+		_, run, _ := f.work.identity()
+		if run == p.Request.RunID && f.completion == nil {
+			return nil
 		}
-		if f := flights[a.SessionID]; f != nil && f.completion == nil {
-			_, run, _ := f.work.identity()
-			var ownerID string
-			if err = k.Record(ctx, "managed_run_claim", run, &ownerID); err == nil {
-				p, e := k.ManagedProcess(ctx, ownerID)
+	}
+	proof := storage.ManagedStopProof{OwnerID: p.Request.OwnerID}
+	if p.State == "admitted" {
+		proof.Disposition = "not_started"
+	} else {
+		if !p.Identity.Valid() {
+			return nil
+		}
+		alive, e := process.GroupAlive(p.Identity)
+		if e != nil {
+			return e
+		}
+		if alive {
+			return nil
+		}
+		proof.Disposition, proof.Identity = "group_stopped", p.Identity
+	}
+	return l.Runtime.Store.ConfirmManagedProcessStopped(ctx, proof)
+}
+func (l *Loop) maintainAction(ctx context.Context, a storage.DeadlineAction, flights map[string]*flight) error {
+	if a.Kind != "stop_process" || a.OperationID != "" {
+		return nil
+	} // runner/Git use a separate operation adapter.
+	k := l.Runtime.Store
+	if f := flights[a.SessionID]; f != nil && f.completion == nil {
+		_, run, _ := f.work.identity()
+		var ownerID string
+		err := k.Record(ctx, "managed_run_claim", run, &ownerID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			p, e := k.ManagedProcess(ctx, ownerID)
+			if e != nil {
+				return e
+			}
+			if p.Request.Binding.ID == a.SessionID && p.PreparationID == a.PreparationID {
+				f.cancel()
+			}
+		}
+	}
+	if flights[a.SessionID] == nil {
+		var ownerID string
+		e := k.Record(ctx, "managed_preparation", a.PreparationID, &ownerID)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return e
+		}
+		if e == nil {
+			p, e := k.ManagedProcess(ctx, ownerID)
+			if e != nil {
+				return e
+			}
+			if p.PreparationID != a.PreparationID || p.Request.Binding.ID != a.SessionID || (a.RunID != "" && p.Request.RunID != a.RunID) {
+				return errors.New("deadline managed source conflict")
+			}
+			if p.State != "stopped" && p.Identity.Valid() {
+				if e = process.RequestGroupStop(p.Identity); e != nil {
+					return e
+				}
+				alive, e := process.GroupAlive(p.Identity)
 				if e != nil {
 					return e
 				}
-				if p.Request.Binding.ID == a.SessionID && p.PreparationID == a.PreparationID {
-					f.cancel()
+				if !alive {
+					if e = k.ConfirmManagedProcessStopped(ctx, storage.ManagedStopProof{OwnerID: ownerID, Disposition: "group_stopped", Identity: p.Identity}); e != nil {
+						return e
+					}
 				}
-			} else if !errors.Is(err, context.Canceled) {
-				l.report(err)
 			}
 		}
-		if err = k.CompleteDeadlineAction(ctx, a.ID); err != nil && !errors.Is(err, storage.ErrDeadlineHeld) {
-			return err
-		}
+	}
+	if err := k.CompleteDeadlineAction(ctx, a.ID); err != nil && !errors.Is(err, storage.ErrDeadlineHeld) {
+		return err
 	}
 	return nil
 }
