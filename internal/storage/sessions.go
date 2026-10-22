@@ -213,6 +213,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 		if !k.clock().Before(wave.Deadline) || task.Attempts >= wave.Policy.Limits.TaskAttempts {
 			return errors.New("Wave deadline/Task attempt budget exhausted")
 		}
+		if err = k.checkTaskDispatchTx(ctx, tx, task); err != nil {
+			return err
+		}
 		subject, err := k.templateReviewSubjectTx(ctx, tx, task)
 		if err != nil {
 			return err

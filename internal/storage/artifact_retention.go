@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -11,7 +12,8 @@ import (
 )
 
 // CollectArtifacts expires only artifacts past terminal retention, while closing
-// over all provenance/dependency references of unfinished Tasks. Deletion intent
+// over provenance/dependency references of unfinished Tasks and current-plan
+// completed results that still prove Phase completion. Deletion intent
 // remains charged until the physical file is removed; a crash can resume it.
 func (k *KernelStore) CollectArtifacts(ctx context.Context) error {
 	tx, err := k.kernelTx(ctx)
@@ -102,6 +104,9 @@ func (k *KernelStore) CollectArtifacts(ctx context.Context) error {
 			}
 		}
 	}
+	if err = protectPhaseEvidenceTx(ctx, tx, protected); err != nil {
+		return err
+	}
 	// Referenced artifacts retain their own source artifacts recursively.
 	var protect func(string)
 	expanded := map[string]bool{}
@@ -162,6 +167,74 @@ func (k *KernelStore) CollectArtifacts(ctx context.Context) error {
 	for _, a := range deleting {
 		if err = k.deleteArtifactObject(ctx, a); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// Phase barriers implicitly reference every required result, even when a later
+// Task has no explicit data dependency on it. Keep this evidence through final
+// Wave acceptance, including paused/blocked Waves and explicitly carried Tasks.
+// Historical results dropped from the current plan may follow normal retention.
+func protectPhaseEvidenceTx(ctx context.Context, tx *sql.Tx, protected map[string]bool) error {
+	rows, err := tx.QueryContext(ctx, "SELECT b.wave_id,b.revision,b.task_id FROM kernel_plan_bindings b JOIN kernel_tasks t ON t.id=b.task_id WHERE t.state='completed'")
+	if err != nil {
+		return err
+	}
+	type binding struct {
+		wave     string
+		revision int
+		task     string
+	}
+	bindings := []binding{}
+	for rows.Next() {
+		var b binding
+		if err = rows.Scan(&b.wave, &b.revision, &b.task); err != nil {
+			rows.Close()
+			return err
+		}
+		bindings = append(bindings, b)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	waves := map[string]domain.Wave{}
+	for _, binding := range bindings {
+		wave, found := waves[binding.wave]
+		if !found {
+			wave, err = loadWave(ctx, tx, binding.wave)
+			if err != nil {
+				return err
+			}
+			waves[wave.ID] = wave
+		}
+		if wave.State == domain.WaveCompleted || wave.State == domain.WaveCanceled || binding.revision != wave.PlanRevision {
+			continue
+		}
+		task, err := loadTask(ctx, tx, binding.task)
+		if err != nil {
+			return err
+		}
+		if err = currentObservedTaskTx(ctx, tx, wave, task); err != nil {
+			return err
+		}
+		var result contract.TaskResult
+		if err = completionRecord(ctx, tx, "task_result", task.ResultID, &result); err != nil {
+			return err
+		}
+		if err = result.Validate(); err != nil {
+			return err
+		}
+		if result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Target != task.Target() || result.Outcome != "result" {
+			return errors.New("Phase evidence result binding conflict")
+		}
+		for _, id := range task.Spec.InputArtifactIDs {
+			protected[id] = true
+		}
+		for _, id := range resultArtifactReferences(result) {
+			protected[id] = true
 		}
 	}
 	return nil
