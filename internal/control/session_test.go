@@ -22,6 +22,10 @@ import (
 
 func taskFixture(t *testing.T) (*storage.KernelStore, contract.SessionBinding) {
 	t.Helper()
+	return taskFixtureWithLimits(t, domain.DefaultKernelLimits())
+}
+func taskFixtureWithLimits(t *testing.T, limits domain.KernelLimits) (*storage.KernelStore, contract.SessionBinding) {
+	t.Helper()
 	ctx := context.Background()
 	k, err := storage.OpenKernel(filepath.Join(t.TempDir(), "private", "state.db"))
 	if err != nil {
@@ -31,7 +35,7 @@ func taskFixture(t *testing.T) (*storage.KernelStore, contract.SessionBinding) {
 	if _, err = k.CreateOrchestrator(ctx, "main", "configured", t.TempDir(), "read-only"); err != nil {
 		t.Fatal(err)
 	}
-	w, err := k.CreateWave(ctx, storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "request", OriginalRequest: "research", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "report"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "K", Limits: domain.DefaultKernelLimits()}})
+	w, err := k.CreateWave(ctx, storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "request", OriginalRequest: "research", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "report"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "K", Limits: limits}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +79,8 @@ type fakeProcess struct {
 	methods                                   []string
 	binding                                   contract.SessionBinding
 	threadID                                  string
+	turnID                                    string
+	final                                     string
 	manualCompletion                          bool
 	turnStarted                               chan struct{}
 	stopped, closed, initializeFail, turnFail bool
@@ -126,9 +132,9 @@ func (p *fakeProcess) Send(value any) error {
 		if p.turnFail {
 			return errors.New("lost turn reply")
 		}
-		result = map[string]any{"turn": map[string]any{"id": "turn", "status": "inProgress"}}
+		result = map[string]any{"turn": map[string]any{"id": p.resultTurnID(), "status": "inProgress"}}
 	case "thread/read":
-		result = map[string]any{"thread": map[string]any{"id": p.threadID, "cwd": p.binding.CWD, "turns": []any{map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}}}}
+		result = map[string]any{"thread": map[string]any{"id": p.threadID, "cwd": p.binding.CWD, "turns": []any{map[string]any{"id": p.resultTurnID(), "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": p.resultText()}}}}}}
 	default:
 		return fmt.Errorf("unexpected method %s", m.Method)
 	}
@@ -141,7 +147,7 @@ func (p *fakeProcess) Send(value any) error {
 		if p.manualCompletion {
 			return nil
 		}
-		params, _ := json.Marshal(map[string]any{"threadId": p.threadID, "turn": map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}})
+		params, _ := json.Marshal(map[string]any{"threadId": p.threadID, "turn": map[string]any{"id": p.resultTurnID(), "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": p.resultText()}}}})
 		p.queue <- codex.Message{Method: "turn/completed", Params: params}
 	}
 	return nil
@@ -331,4 +337,18 @@ func TestRecoveryRejectsWritesBeforeSpawn(t *testing.T) {
 	if calls != 0 {
 		t.Fatal(calls)
 	}
+}
+
+func (p *fakeProcess) resultText() string {
+	if p.final != "" {
+		return p.final
+	}
+	return `{"ok":true}`
+}
+
+func (p *fakeProcess) resultTurnID() string {
+	if p.turnID != "" {
+		return p.turnID
+	}
+	return "turn"
 }
