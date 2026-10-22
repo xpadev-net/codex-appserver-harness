@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -56,4 +57,16 @@ func sameUser(conn *net.UnixConn) error {
 		return err
 	}
 	return peerErr
+}
+
+// Unix sun_path is short even when the private filesystem root is valid. Keep
+// a directory descriptor while binding/dialing through its /proc alias; the
+// socket inode still lives only inside the same private root, never abstract IPC.
+func socketAddress(path string) (string, func(), error) {
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return "", nil, err
+	}
+	address := filepath.Join("/proc/self/fd", strconv.FormatUint(uint64(directory.Fd()), 10), filepath.Base(path))
+	return address, func() { _ = directory.Close() }, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
+	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
@@ -23,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -122,7 +122,7 @@ func New(c Config) (*Controller, error) {
 		s.Close()
 		return nil, err
 	}
-	controller.Jobs = FileJobs{Executable: exe}
+	controller.Jobs = FileJobs{Executable: exe, WakeSocket: filepath.Join(c.Root, ipc.SocketName)}
 	controller.Agents = LiveAgents{Config: c, Store: s}
 	return controller, nil
 }
@@ -130,31 +130,11 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err := c.VerifyRuntime(ctx); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(c.Config.Root, "controller.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("another controller owns this state root")
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	ticker := time.NewTicker(time.Duration(c.Config.ReconcileSeconds) * time.Second)
-	defer ticker.Stop()
-	for {
-		if err := c.Tick(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			_ = c.Store.Put(context.WithoutCancel(ctx), "service_error", fmt.Sprint(time.Now().UnixNano()), "", map[string]any{"error": err.Error(), "time": time.Now().UTC()})
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	return runWakeLoop(ctx, c.Config.Root, time.Duration(c.Config.ReconcileSeconds)*time.Second, c.Tick, func(err error) {
+		_ = c.Store.Put(context.WithoutCancel(ctx), "service_error", fmt.Sprint(time.Now().UnixNano()), "", map[string]any{"error": err.Error(), "time": time.Now().UTC()})
+	})
 }
+
 func digest(issue github.Issue) string {
 	sum := sha256.Sum256([]byte(issue.Title + "\n" + issue.Body))
 	return hex.EncodeToString(sum[:])
@@ -548,7 +528,10 @@ func (c *Controller) results(ctx context.Context, candidate runner.Candidate, w 
 }
 
 // FileJobs launches a durable _runner subprocess; Read is ordinary filesystem polling.
-type FileJobs struct{ Executable string }
+type FileJobs struct {
+	Executable string
+	WakeSocket string
+}
 
 func (j FileJobs) Start(ctx context.Context, s runner.Spec) error {
 	if err := os.MkdirAll(s.Root, 0700); err != nil {
@@ -558,7 +541,7 @@ func (j FileJobs) Start(ctx context.Context, s runner.Spec) error {
 	if err := runner.WriteJSON(path, s); err != nil {
 		return err
 	}
-	_, err := runner.Launch(ctx, j.Executable, path)
+	_, err := runner.LaunchWithWake(ctx, j.Executable, path, j.WakeSocket)
 	return err
 }
 func (j FileJobs) Read(s runner.Spec) (runner.Result, error) {

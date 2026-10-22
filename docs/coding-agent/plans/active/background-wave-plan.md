@@ -275,7 +275,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_5: イベントloopとprocess間wake
 
 - status: in_progress
-- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。PR #75で共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続した。PR #76で非同期session loop、完了時の即時再評価、定期再照合、停止確認を待つshutdownとdeadlineの世代付き停止を追加した。本PRでprivate Unix socketのhint/read専用状態streamと永続event cursorの読み取り境界を追加する。ready/input/結果適用のWorkSourceはTask_6が接続し、runner notifier/daemon配線、production launcher設定、優先操作と実測負荷試験は後続PRで接続する。
+- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。PR #75で共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続した。PR #76で非同期session loop、完了時の即時再評価、定期再照合、停止確認を待つshutdownとdeadlineの世代付き停止を追加した。PR #77でprivate Unix socketのhint/read専用状態streamと永続event cursorの読み取り境界を追加した。本PRで既存daemonのhint再照合、CLI/webhookの保存後wake、子group停止後のrunner結果公開とtrustedラッパーだけのjob ID通知を配線する。ready/input/結果適用のWorkSourceはTask_6が接続し、Kernel daemon/production launcher設定、優先操作と実測負荷試験は後続PRで接続する。
 - type: impl
 - owns:
   - internal/control/**
@@ -295,7 +295,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/service/event_loop_test.go
   - internal/runner/completion.go
   - internal/runner/completion_test.go
-  - cmd/harness/main.go
+  - cmd/harness/main.go、cmd/harness/main_test.go
 - depends_on: [Task_3, Task_4]
 - description: 同期Tickを非同期dispatch・結果取り込みへ接続し、controller所有のprivate IPC、runnerの制限付き完了hintを実装する。既存の永続DB/fileと低頻度再照合を回復経路として残す。
 - acceptance:

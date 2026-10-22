@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/policy"
+	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 	"io"
 	"os"
@@ -160,8 +162,20 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 			}
 		}
 	}()
+	var profile process.Identity
 	r = Result{JobID: s.JobID, Candidate: s.Candidate, ProfileID: s.ProfileID, ProfileRevision: s.Profile.Revision, Status: "infrastructure_failure", Started: time.Now().UTC(), Environment: runtime.GOOS + "/" + runtime.GOARCH, LogPath: filepath.Join(dir, "output.log")}
 	defer func() {
+		if profile.PID > 0 {
+			stopping, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			stopErr := process.WaitStopped(stopping, profile)
+			cancel()
+			if stopErr != nil {
+				r.Status = "unknown"
+				r.Finished = time.Now().UTC()
+				err = errors.Join(err, stopErr)
+				return
+			}
+		}
 		r.Finished = time.Now().UTC()
 		if ctx.Err() != nil && r.Status == "infrastructure_failure" {
 			r.Status = "canceled"
@@ -259,19 +273,29 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	cmd.Stdout = redacted
 	cmd.Stderr = redacted
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	var groupKillOnce sync.Once
+	var groupKillErr error
+	cmd.Cancel = func() error {
+		groupKillOnce.Do(func() { groupKillErr = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+		return groupKillErr
+	}
 	cmd.WaitDelay = 2 * time.Second
 	if err = cmd.Start(); err != nil {
 		return r, err
 	}
 	life.State = "running"
-	life.Profile = identity(cmd.Process.Pid)
+	profile = identity(cmd.Process.Pid)
+	life.Profile = profile
 	if err = saveLifecycle(s, life); err != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Cancel()
 		_ = cmd.Wait()
 		return r, err
 	}
-	waitErr := cmd.Wait()
+	leaderErr := waitLeaderExit(runCtx, profile)
+	// Signal once before Wait can reap the original leader, including normal
+	// completion. A late context watcher cannot signal a recycled group ID.
+	_ = cmd.Cancel()
+	waitErr := errors.Join(leaderErr, cmd.Wait())
 	if flushErr := redacted.Flush(); flushErr != nil {
 		waitErr = errors.Join(waitErr, flushErr)
 	}
@@ -280,7 +304,6 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		code := cmd.ProcessState.ExitCode()
 		r.ExitCode = &code
 	}
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	life.State = "quiesced"
 	if err = saveLifecycle(s, life); err != nil {
 		return r, err
@@ -382,6 +405,15 @@ func Passed(c Candidate, v policy.Verification, results []Result) bool {
 
 // Launch starts a durable runner subprocess; the parent only polls result.json.
 func Launch(ctx context.Context, executable, specPath string) (*os.Process, error) {
+	return LaunchWithWake(ctx, executable, specPath, "")
+}
+
+// LaunchWithWake passes the private notification path only to the trusted
+// wrapper argv, never into the profile specification or its environment.
+func LaunchWithWake(ctx context.Context, executable, specPath, socketPath string) (*os.Process, error) {
+	if socketPath != "" && (!filepath.IsAbs(socketPath) || filepath.Base(socketPath) != ipc.SocketName) {
+		return nil, errors.New("absolute controller socket path required")
+	}
 	if strings.TrimSpace(specPath) == "" {
 		return nil, errors.New("spec path required")
 	}
@@ -423,7 +455,11 @@ func Launch(ctx context.Context, executable, specPath string) (*os.Process, erro
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(executable, "_runner", specPath)
+	args := []string{"_runner", specPath}
+	if socketPath != "" {
+		args = append(args, "--wake-socket", socketPath)
+	}
+	cmd := exec.Command(executable, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard

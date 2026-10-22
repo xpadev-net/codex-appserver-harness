@@ -11,6 +11,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
+	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/policy"
 	"github.com/xpadev-net/codex-appserver-harness/internal/review"
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
@@ -62,6 +63,11 @@ func CLI(ctx context.Context, args []string) error {
 		return err
 	}
 	defer controller.Store.Close()
+	// Hints follow the command's durable writes, including partially completed
+	// operations that need reconciliation. Read-only/serve surfaces never wake.
+	if mutatesState(command) {
+		defer func() { _ = ipc.Notify(context.WithoutCancel(ctx), filepath.Join(cfg.Root, ipc.SocketName), "") }()
+	}
 	s := controller.Store
 	encode := func(v any) error { return json.NewEncoder(os.Stdout).Encode(v) }
 	switch command {
@@ -126,7 +132,7 @@ func CLI(ctx context.Context, args []string) error {
 		if secret == "" {
 			return errors.New("HARNESS_WEBHOOK_SECRET is required")
 		}
-		server := &http.Server{Addr: *listen, Handler: github.Webhook([]byte(secret), s), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+		server := &http.Server{Addr: *listen, Handler: github.Webhook([]byte(secret), wakingInbox{Inbox: s, Socket: filepath.Join(cfg.Root, ipc.SocketName)}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 		go func() {
 			<-ctx.Done()
 			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -484,4 +490,12 @@ func (c *Controller) Metrics(ctx context.Context, id string) (map[string]any, er
 		lifecycle[w.ID] = entry
 	}
 	return map[string]any{"turn_start_attempts_by_reason": calls, "acknowledged_turns": acknowledged, "runs_without_phase_evidence": phaseUnknown, "observed_tokens": tokens, "runs_with_unavailable_usage": unknown, "cloud_usage": "unavailable", "turn_starts_during_wait": waiting, "phase_duration_nanoseconds": durations, "lifecycle": lifecycle}, nil
+}
+
+func mutatesState(command string) bool {
+	switch command {
+	case "gc", "pause", "resume", "hold", "release", "cancel", "retry-final", "retry", "reconcile-job", "cancel-job", "interrupt", "reconcile", "associate", "rereview", "split", "adopt":
+		return true
+	}
+	return false
 }

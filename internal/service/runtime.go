@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 	"io/fs"
@@ -136,7 +137,7 @@ func (c *Controller) PendingModelWork(ctx context.Context, id string) bool {
 }
 func forbiddenPaths(c Config) []string {
 	home, _ := os.UserHomeDir()
-	paths := []string{filepath.Join(c.Root, "state.db"), filepath.Join(home, ".config", "gh"), filepath.Join(home, ".git-credentials")}
+	paths := []string{filepath.Join(c.Root, "state.db"), filepath.Join(c.Root, ipc.SocketName), filepath.Join(home, ".config", "gh"), filepath.Join(home, ".git-credentials")}
 	if p := os.Getenv("GH_CONFIG_DIR"); p != "" {
 		paths = append(paths, p)
 	}

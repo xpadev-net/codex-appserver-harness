@@ -64,11 +64,16 @@ func Listen(root string, reader Reader, wake func()) (*Server, error) {
 		return nil, errors.New("another daemon owns IPC root")
 	}
 	path := filepath.Join(root, SocketName)
+	address, closeAddress, err := socketAddress(path)
+	if err != nil {
+		return nil, err
+	}
+	defer closeAddress()
 	if old, e := os.Lstat(path); e == nil {
 		if _, e = ownedSocket(path); e != nil {
 			return nil, e
 		}
-		conn, e := net.DialTimeout("unix", path, 100*time.Millisecond)
+		conn, e := net.DialTimeout("unix", address, 100*time.Millisecond)
 		if e == nil {
 			conn.Close()
 			return nil, errors.New("controller socket already active")
@@ -86,7 +91,7 @@ func Listen(root string, reader Reader, wake func()) (*Server, error) {
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	}
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: address, Net: "unix"})
 	if err != nil {
 		return nil, err
 	}

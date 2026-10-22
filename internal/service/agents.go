@@ -89,9 +89,9 @@ func (l LiveAgents) Run(ctx context.Context, w domain.WorkItem, op domain.Operat
 		return worker.Run{}, err
 	}
 	env := l.environment(w, home, strings.TrimSpace(gitdir))
-	// The actual worker mount configuration must hide controller credentials and DB.
-	controllerHome, _ := os.UserHomeDir()
-	for _, hidden := range []string{filepath.Join(controllerHome, ".config", "gh"), filepath.Join(controllerHome, ".git-credentials"), filepath.Join(l.Config.Root, "state.db")} {
+	// Parent and Task workers share the runner's controller/credential/socket
+	// exclusions. A launcher hiding only selected files must hide every one.
+	for _, hidden := range forbiddenPaths(l.Config) {
 		args := append(append([]string{}, l.Config.Launcher[1:]...), "sh", "-c", `test ! -e "$1"`, "probe", hidden)
 		probe := exec.CommandContext(ctx, l.Config.Launcher[0], args...)
 		probe.Env = env

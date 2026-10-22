@@ -25,7 +25,7 @@ func main() {
 	}
 }
 func run() error {
-	if len(os.Args) == 3 && os.Args[1] == "_runner" {
+	if (len(os.Args) == 3 || (len(os.Args) == 5 && os.Args[3] == "--wake-socket")) && os.Args[1] == "_runner" {
 		b, err := os.ReadFile(os.Args[2])
 		if err != nil {
 			return err
@@ -34,7 +34,11 @@ func run() error {
 		if err = json.Unmarshal(b, &spec); err != nil {
 			return err
 		}
-		_, err = runner.Execute(context.Background(), spec)
+		socket := ""
+		if len(os.Args) == 5 {
+			socket = os.Args[4]
+		}
+		_, err = runner.ExecuteWithWake(context.Background(), spec, socket)
 		return err
 	}
 	if len(os.Args) > 1 && os.Args[1] != "doctor" {

@@ -21,7 +21,12 @@ func connect(ctx context.Context, path string) (*net.UnixConn, error) {
 	if _, err := ownedSocket(path); err != nil {
 		return nil, err
 	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
+	address, closeAddress, err := socketAddress(path)
+	if err != nil {
+		return nil, err
+	}
+	defer closeAddress()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", address)
 	if err != nil {
 		return nil, err
 	}

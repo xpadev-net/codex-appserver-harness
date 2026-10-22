@@ -11,6 +11,7 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
+	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/worker"
 )
@@ -193,5 +194,39 @@ func TestLiveAgentAdmissionRefusesUnconfirmedPreviousGenerationBeforeLaunch(t *t
 	}
 	if _, err := (LiveAgents{Config: c.Config, Store: c.Store}).Run(ctx, w, op, "unused", nil); !errors.Is(err, process.ErrUnconfirmed) {
 		t.Fatal(err)
+	}
+}
+
+func TestLiveAgentRefusesLauncherThatExposesControllerSocket(t *testing.T) {
+	ctx := context.Background()
+	c, _, _, _ := setup(t)
+	c.Config.Root = wakeRoot(t)
+	socket, err := ipc.Listen(c.Config.Root, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	launcher := filepath.Join(t.TempDir(), "partial-isolation")
+	script := `#!/bin/sh
+if [ "$1" = sh ] && [ "$2" = -c ] && [ "$4" = probe ]; then
+ case "$5" in
+  */controller.sock) exec "$@" ;;
+  *) exit 0 ;;
+ esac
+fi
+exit 98
+`
+	if err = os.WriteFile(launcher, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	c.Config.Launcher = []string{launcher}
+	w, err := c.Store.Get(ctx, "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Worktree = c.Config.RepositoryPath
+	result, err := (LiveAgents{Config: c.Config, Store: c.Store}).Run(ctx, w, domain.Operation{ID: "socket-probe"}, "unused", nil)
+	if err == nil || !strings.Contains(err.Error(), "worker isolation probe failed") || result.ID != "" {
+		t.Fatal("socket exposure passed worker launch probes", result, err)
 	}
 }
