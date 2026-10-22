@@ -264,3 +264,34 @@ func TestArtifactAcceptanceRequiresAllCriteriaAndNoOutstandingWork(t *testing.T)
 		})
 	}
 }
+
+func TestArtifactAcceptanceRetainsExplicitlyCarriedReviewAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	k, w, review, _, p := acceptanceFixture(t, nil)
+	admission, err := k.AdoptPlan(ctx, w.Target(), "carry-completed-work-and-review", storagePlanFixture())
+	if err != nil || len(admission.CarriedTaskIDs) != 2 {
+		t.Fatal(admission, err)
+	}
+	current, err := k.SessionBinding(ctx, review.SessionID)
+	if err != nil || current.Target.PlanRevision != 1 {
+		t.Fatal("carry rewrote reviewer history", current, err)
+	}
+	proof, err := k.CheckArtifactAcceptance(ctx, admission.Target, p)
+	if err != nil || proof.Target.PlanRevision != 2 {
+		t.Fatal(proof, err)
+	}
+	path := filepath.Join(k.Root, "state.db")
+	k.Close()
+	k, err = OpenKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	replay, err := k.CheckArtifactAcceptance(ctx, admission.Target, p)
+	if err != nil || !reflect.DeepEqual(replay, proof) {
+		t.Fatal(replay, err)
+	}
+	if _, err = k.CheckArtifactAcceptance(ctx, w.Target(), p); !errors.Is(err, ErrArtifactAcceptanceHeld) {
+		t.Fatal("old plan accepted as current", err)
+	}
+}

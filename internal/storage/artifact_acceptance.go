@@ -147,7 +147,11 @@ func (k *KernelStore) checkArtifactAcceptanceTx(ctx context.Context, tx *sql.Tx,
 		if binding.Sandbox != "read-only" {
 			return proof, acceptanceHeld("independent reviewer must have read-only scope")
 		}
-		if err = artifactReadableTx(ctx, tx, binding, wave, a); err != nil {
+		// Current-plan membership was checked above. A carried completed
+		// reviewer retains its immutable original target and input grants.
+		reviewedWave := wave
+		reviewedWave.PlanRevision = reviewer.PlanRevision
+		if err = artifactReadableTx(ctx, tx, binding, reviewedWave, a); err != nil {
 			return proof, err
 		}
 		covered[evaluation.CriterionID] = true
