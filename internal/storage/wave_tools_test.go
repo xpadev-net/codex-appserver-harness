@@ -311,8 +311,7 @@ func TestWavePlanReplanPreservesSameRunToolsReplayAndFinalScope(t *testing.T) {
 			// Original judgment bytes keep their original version label even though
 			// access is authorized through this run's newly accepted current target.
 			var input struct {
-				Context SessionContext `json:"context"
-"errors"`
+				Context SessionContext `json:"context"`
 			}
 			if err = json.Unmarshal(snapshot.Input, &input); err != nil {
 				t.Fatal(err)
