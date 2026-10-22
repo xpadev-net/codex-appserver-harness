@@ -284,6 +284,14 @@ func TestRuntimeRecoveryReadsSavedTurnWithoutNewAttempt(t *testing.T) {
 	if !reflect.DeepEqual(recovery.methods, []string{"initialize", "initialized", "thread/read"}) {
 		t.Fatal(recovery.methods)
 	}
+	var observationRaw []byte
+	if err = k.DB.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='session_history_observation' AND work_item_id=?", b.ID).Scan(&observationRaw); err != nil {
+		t.Fatal(err)
+	}
+	var observation storage.HistoryObservation
+	if err = json.Unmarshal(observationRaw, &observation); err != nil || observation.Status != "observed_turn" || observation.RunID != out.Run.ID || observation.SessionID != b.ID || observation.ResponseDigest == "" {
+		t.Fatal(observation, err)
+	}
 	assertCapacity(t, k, 0)
 }
 
