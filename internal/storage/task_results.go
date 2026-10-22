@@ -355,12 +355,7 @@ func (k *KernelStore) completedTaskResultTx(ctx context.Context, tx *sql.Tx, wav
 	if task.State != contract.TaskCompleted || task.ResultID == "" || task.ScopeRevision != wave.ScopeRevision || task.PolicyRevision != wave.Policy.Revision {
 		return result, fmt.Errorf("%w: dependency result is not current and complete", ErrTaskEvidence)
 	}
-	if err := completionRecord(ctx, tx, "task_result", task.ResultID, &result); err != nil {
-		var syntax *json.SyntaxError
-		var shape *json.UnmarshalTypeError
-		if errors.As(err, &syntax) || errors.As(err, &shape) {
-			return result, fmt.Errorf("%w: %v", ErrTaskEvidence, err)
-		}
+	if err := taskEvidenceRecord(ctx, tx, "task_result", task.ResultID, &result); err != nil {
 		return result, err
 	}
 	if err := result.Validate(); err != nil {

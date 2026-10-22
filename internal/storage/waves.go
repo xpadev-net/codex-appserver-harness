@@ -559,7 +559,7 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 			Target      contract.Target `json:"target"`
 			CandidateID string          `json:"candidate_id"`
 		}
-		if err := completionRecord(ctx, tx, "wave_work_item", id, &binding); err != nil {
+		if err := taskEvidenceRecord(ctx, tx, "wave_work_item", id, &binding); err != nil {
 			return "", err
 		}
 		if binding.Target.WaveID != wave.ID || binding.Target.ScopeRevision != wave.ScopeRevision || binding.Target.PolicyRevision != wave.Policy.Revision {

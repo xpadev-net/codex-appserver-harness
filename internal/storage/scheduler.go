@@ -38,9 +38,6 @@ type ReadySet struct {
 	Held    []TaskHold      `json:"held"`
 }
 
-var ErrTaskEvidence = errors.New("Task evidence is unavailable or inconsistent")
-var ErrTaskBinding = errors.New("Task is not bound to the current plan")
-
 func readinessHoldError(err error) bool {
 	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrTaskBinding) || errors.Is(err, ErrArtifactUnavailable) || errors.Is(err, ErrArtifactScope) || errors.Is(err, ErrArtifactIntegrity) || errors.Is(err, ErrTemplateNeedsMain)
 }

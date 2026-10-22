@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -251,5 +252,72 @@ func TestReadinessPropagatesInputArtifactReadFailure(t *testing.T) {
 	}
 	if set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()}); err == nil {
 		t.Fatal("input read failure became a successful hold", set)
+	}
+}
+
+func TestCorruptTemplateEvidenceHoldsOnlyAffectedTask(t *testing.T) {
+	for _, kind := range []string{"context_json", "context_type", "context_empty", "context_null", "subject_json", "subject_type", "lineage_type"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, tasks := readyFixture(t, func(p *contract.PlanProposal) {
+				p.Phases[0].Tasks[0].Kind = "fix"
+				if kind == "lineage_type" {
+					p.Phases[0].Tasks[0].Kind = "review"
+				}
+			})
+			recordKind, id, raw := "template_task_context", tasks[0].ID, []byte(`{"input_digest":`)
+			if kind == "context_type" {
+				raw = []byte(`{"input_digest":7}`)
+			}
+			if kind == "context_empty" {
+				raw = []byte(`{}`)
+			}
+			if kind == "context_null" {
+				raw = []byte(`null`)
+			}
+			if kind == "lineage_type" {
+				recordKind = "template_review_lineage"
+				raw = []byte(`{"root_review_local_id":7}`)
+			}
+			if kind == "subject_json" || kind == "subject_type" {
+				tx, err := k.kernelTx(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = kernelRecordTx(ctx, tx, "template_task_context", tasks[0].ID, w.ID, templateTaskInput{InputDigest: strings.Repeat("a", 64), PreviousFixLocalID: tasks[1].LocalID}); err != nil {
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				recordKind, id, raw = "template_subject", tasks[1].ID, []byte(`{"task_id":`)
+				if kind == "subject_type" {
+					raw = []byte(`{"task_id":7}`)
+				}
+			}
+			if _, err := k.DB.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES(?,?,?,?)", recordKind, id, w.ID, raw); err != nil {
+				t.Fatal(err)
+			}
+			set := mustReady(t, k, w, tasks[1].ID)
+			if len(set.Held) != 1 || set.Held[0].TaskID != tasks[0].ID || set.Held[0].Reason != "template_subject_unavailable" {
+				t.Fatal(set)
+			}
+		})
+	}
+}
+func TestTemplateEvidenceReaderPreservesOperationalErrors(t *testing.T) {
+	ctx := context.Background()
+	k, w, _ := readyFixture(t, func(p *contract.PlanProposal) { p.Phases[0].Tasks[0].Kind = "fix" })
+	if _, err := k.DB.Exec("ALTER TABLE records RENAME TO unavailable_records"); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()}); err == nil || errors.Is(err, ErrTaskEvidence) {
+		t.Fatal(set, err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	var out templateTaskInput
+	if err := taskEvidenceRecord(canceled, k.DB, "template_task_context", "any", &out); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
