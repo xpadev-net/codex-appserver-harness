@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -244,5 +245,36 @@ func TestUnsafeRootAndSocketSymlinksAreRejected(t *testing.T) {
 	if s, err := ipc.Listen(dir, nil, nil); err == nil {
 		s.Close()
 		t.Fatal("symlink socket admitted")
+	}
+}
+
+func TestPrivateSocketSupportsLongConfiguredRoot(t *testing.T) {
+	dir := filepath.Join(root(t), strings.Repeat("long-private-root-", 8))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	wake := make(chan struct{}, 1)
+	server, err := ipc.Listen(dir, nil, func() { wake <- struct{}{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.Serve(ctx)
+	path := filepath.Join(dir, ipc.SocketName)
+	if len(path) <= 108 {
+		t.Fatal("fixture must exceed Unix sockaddr path bound")
+	}
+	if err = ipc.Notify(ctx, path, ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-wake:
+	case <-time.After(time.Second):
+		t.Fatal("long private root lost wake")
+	}
+	if _, err = os.Stat(path); err != nil {
+		t.Fatal("socket was not stored in configured private root", err)
 	}
 }
