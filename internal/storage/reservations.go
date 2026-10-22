@@ -209,11 +209,23 @@ func worktreeResource(ctx context.Context, path string) (string, error) {
 		existing = parent
 	}
 	for directory := existing; ; directory = filepath.Dir(directory) {
-		_, err := os.Lstat(filepath.Join(directory, ".git"))
+		marker := filepath.Join(directory, ".git")
+		info, err := os.Lstat(marker)
+		if err == nil && info.IsDir() {
+			entries, readErr := os.ReadDir(marker)
+			if readErr != nil {
+				return "", readErr
+			}
+			// An empty .git placeholder is not a repository. Git discovery
+			// also skips it; preserve standalone K workspaces beneath it.
+			if len(entries) == 0 {
+				err = os.ErrNotExist
+			}
+		}
 		if err == nil {
 			identity, err := workspace.Git(ctx, existing, "rev-parse", "--absolute-git-dir")
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("resolve worktree at %s from %s: %w", directory, existing, err)
 			}
 			identity = strings.TrimSpace(identity)
 			if !filepath.IsAbs(identity) {
