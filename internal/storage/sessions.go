@@ -249,6 +249,19 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	var runClaimOwner string
+	err = completionRecord(ctx, tx, "managed_run_claim", run.ID, &runClaimOwner)
+	if err == nil {
+		if managedOwner == "" || runClaimOwner == "" || runClaimOwner != managedOwner {
+			return ErrManagedProcessHeld
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+		if managedOwner != "" {
+			return ErrManagedProcessHeld
+		}
+	} else {
+		return err
+	}
 	var deadlineStop int
 	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='deadline_preparation_stop' AND id=?)", b.PreparationID).Scan(&deadlineStop); err != nil {
 		return err
@@ -466,11 +479,11 @@ func (k *KernelStore) markSessionStoppedTx(ctx context.Context, tx *sql.Tx, sess
 	}
 	if preparationID == "" && active != "" {
 		var recovered int
-		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='run_recovery' AND id=?)", active).Scan(&recovered); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('run_recovery','managed_run_claim') AND id=?)", active).Scan(&recovered); err != nil {
 			return err
 		}
 		if recovered != 0 {
-			return errors.New("recovered run requires an explicit preparation stopping proof")
+			return errors.New("managed or recovered run requires an explicit preparation stopping proof")
 		}
 	}
 	if proofID == "" || (active != "" && active != proofID) || (active == "" && b.PreparationID != proofID) {

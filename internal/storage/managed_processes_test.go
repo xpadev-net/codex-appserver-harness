@@ -613,3 +613,31 @@ func TestManagedPlannedRunClaimIsAtomicAcrossConnections(t *testing.T) {
 		t.Fatal(owners, err)
 	}
 }
+
+func TestManagedRunClaimCannotBeStolenByUnmanagedPreparation(t *testing.T) {
+	ctx := context.Background()
+	k, w, task := managedTaskFixture(t)
+	owner := managedReserve(t, k, task, "reserved-task", "reserved-run", "execute")
+	main := prepareWakeSession(t, k, w.OrchestratorSessionID)
+	input := mainBudgetSnapshot(t, "unmanaged-input", main.ID, w.Target())
+	if err := k.ReserveSessionRun(ctx, main, input, recoveryRun(k, main, "reserved-run")); !errors.Is(err, ErrManagedProcessHeld) {
+		t.Fatal("unmanaged path stole planned run", err)
+	}
+	usage, err := k.WaveRunBudget(ctx, w.ID)
+	if err != nil || usage.MainTurns != 0 || usage.UnobservedRuns != 0 {
+		t.Fatal("rejected claim charged budget", usage, err)
+	}
+	var runs int
+	if err := k.DB.QueryRow("SELECT count(*) FROM kernel_run_bindings").Scan(&runs); err != nil || runs != 0 {
+		t.Fatal(runs, err)
+	}
+	managedStart(t, k, owner, 150)
+	bound := managedBind(t, k, owner)
+	if err := k.ReserveSessionRun(ctx, bound, sessionSnapshot(), recoveryRun(k, bound, "reserved-run")); err != nil {
+		t.Fatal("original owner could not use planned run", err)
+	}
+	if err := k.MarkSessionStopped(ctx, bound.ID, "reserved-run"); err == nil {
+		t.Fatal("run-only stop proof bypassed the managed generation")
+	}
+	managedCapacity(t, k, 2)
+}
