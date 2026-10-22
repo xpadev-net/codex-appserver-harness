@@ -28,6 +28,7 @@ type SessionPersistence interface {
 	SessionBinding(context.Context, string) (SessionBinding, error)
 	ReserveSessionThread(context.Context, SessionBinding) error
 	BindSessionThread(context.Context, SessionBinding, string) error
+	SessionThreadUnused(context.Context, SessionBinding) (bool, error)
 	ReserveSessionRun(context.Context, SessionBinding, InputSnapshot, Run) error
 	RebindMainThread(context.Context, SessionBinding, string, string, string) error
 }
@@ -130,9 +131,18 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 	}
 	b.ThreadID = reply.Thread.ID
 	prepared := PreparedSession{Binding: b, BaselineKnown: true, BaselineTurnIDs: []string{}}
-	if method == "thread/start" && len(baseline.Turns) == 0 {
-		zero := int64(0)
-		prepared.UsageBaseline = &zero
+	if len(baseline.Turns) == 0 {
+		unused := method == "thread/start"
+		if !unused {
+			unused, err = d.Store.SessionThreadUnused(ctx, b)
+			if err != nil {
+				return PreparedSession{}, err
+			}
+		}
+		if unused {
+			zero := int64(0)
+			prepared.UsageBaseline = &zero
+		}
 	}
 	for _, turn := range baseline.Turns {
 		prepared.BaselineTurnIDs = append(prepared.BaselineTurnIDs, turn.ID)

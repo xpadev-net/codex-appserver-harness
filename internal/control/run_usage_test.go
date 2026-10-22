@@ -66,3 +66,58 @@ func TestRuntimePersistsWholeObservedTurnUsageBeforeCompletion(t *testing.T) {
 	}
 	assertCapacity(t, k, 0)
 }
+
+func TestPreparedUnusedThreadRetainsZeroBaselineOnResume(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	first := fake(b)
+	owner, err := newOwner(ctx, k, factoryFunc(func(context.Context, Launch) (Process, error) { return first, nil }), b.ID, "not-dispatched", "execute", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := owner.driver().Prepare(ctx, b.ID)
+	if err != nil || prepared.UsageBaseline == nil || *prepared.UsageBaseline != 0 {
+		t.Fatal(prepared, err)
+	}
+	if err = owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err = k.SessionBinding(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An actual empty thread/read on the next process confirms there are still
+	// no turns; controller creation and run-reservation records prove zero.
+	next := fake(b)
+	next.manualCompletion = true
+	next.turnStarted = make(chan struct{})
+	next.threadReadReply = json.RawMessage(fmt.Sprintf(`{"thread":{"id":"thread","cwd":%q,"turns":[]}}`, b.CWD))
+	type result struct {
+		out Outcome
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := (Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return next, nil })}).Execute(ctx, request(b))
+		done <- result{out, err}
+	}()
+	await(t, next.turnStarted)
+	next.queue <- codex.Message{Method: "thread/tokenUsage/updated", Params: json.RawMessage(`{"threadId":"thread","turnId":"turn","tokenUsage":{"total":{"totalTokens":70},"last":{"totalTokens":40}}}`)}
+	next.queue <- codex.Message{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread","turn":{"id":"turn","status":"completed","items":[{"type":"agentMessage","text":"{\"ok\":true}"}]}}`)}
+	resultValue := await(t, done)
+	if resultValue.err != nil || !resultValue.out.Stopped {
+		t.Fatal(resultValue)
+	}
+	budget, err := k.WaveRunBudget(ctx, b.Target.WaveID)
+	if err != nil || budget.ObservedTokens != 70 || budget.UnobservedRuns != 1 {
+		t.Fatal(budget, err)
+	}
+	b, err = k.SessionBinding(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused, err := k.SessionThreadUnused(ctx, b)
+	if err != nil || unused {
+		t.Fatal("used thread retained zero proof", unused, err)
+	}
+}

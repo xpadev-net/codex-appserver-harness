@@ -198,6 +198,11 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET thread_id=?,creating=0,payload=? WHERE id=?", thread, raw, b.ID); err != nil {
 		return err
 	}
+	if expected.ThreadID == "" {
+		if err = kernelRecordTx(ctx, tx, "session_new_thread", thread, b.ID, b); err != nil {
+			return err
+		}
+	}
 	if err = k.finishMainRotationTx(ctx, tx, b, thread); err != nil {
 		return err
 	}

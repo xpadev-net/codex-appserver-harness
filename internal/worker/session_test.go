@@ -34,6 +34,9 @@ func (s *sessionStoreFixture) ReserveSessionThread(_ context.Context, b SessionB
 	return nil
 }
 
+func (s *sessionStoreFixture) SessionThreadUnused(context.Context, SessionBinding) (bool, error) {
+	return false, nil
+}
 func (s *sessionStoreFixture) SessionBinding(context.Context, string) (SessionBinding, error) {
 	return s.binding, nil
 }
