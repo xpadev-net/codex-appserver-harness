@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -257,6 +258,12 @@ func TestWavePlanReplanPreservesSameRunToolsReplayAndFinalScope(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			ctx := context.Background()
 			k, w, b, run, snapshot := existingWaveToolFixture(t)
+			priorState := kernelCall(t, b, run, "state_get", contract.StateRequest{SchemaVersion: 1, Target: w.Target()})
+			priorState.CallID = "state-before-replan"
+			priorReply, err := (contract.KernelGateway{Backend: k}).Handle(ctx, priorState)
+			if err != nil {
+				t.Fatal(err)
+			}
 			proposal := renamedWaveToolPlan("new-")
 			call := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: proposal})
 			call.CallID = "replan"
@@ -272,6 +279,16 @@ func TestWavePlanReplanPreservesSameRunToolsReplayAndFinalScope(t *testing.T) {
 				t.Fatal(replyView, err)
 			}
 			current := replyView.Target
+			stateReplay, err := gateway.Handle(ctx, priorState)
+			if err != nil || !reflect.DeepEqual(stateReplay, priorReply) {
+				t.Fatal("exact earlier read replay rejected or recomputed", stateReplay, err)
+			}
+			changedState := priorState
+			changedState.Arguments, _ = json.Marshal(contract.StateRequest{SchemaVersion: 1, Target: w.Target(), Page: &contract.StatePage{Collection: "tasks", Limit: 1}})
+			if _, err = gateway.Handle(ctx, changedState); err == nil {
+				t.Fatal("same call ID changed its arguments after replan")
+			}
+
 			replay, err := gateway.Handle(ctx, call)
 			if err != nil || !reflect.DeepEqual(accepted, replay) {
 				t.Fatal("accepted replan cannot replay", replay, err)
@@ -294,7 +311,8 @@ func TestWavePlanReplanPreservesSameRunToolsReplayAndFinalScope(t *testing.T) {
 			// Original judgment bytes keep their original version label even though
 			// access is authorized through this run's newly accepted current target.
 			var input struct {
-				Context SessionContext `json:"context"`
+				Context SessionContext `json:"context"
+"errors"`
 			}
 			if err = json.Unmarshal(snapshot.Input, &input); err != nil {
 				t.Fatal(err)
@@ -383,6 +401,53 @@ func TestReplanTransitionRollsBackWithItsOperationRecord(t *testing.T) {
 	}
 	after, err := k.Wave(ctx, w.ID)
 	if err != nil || after.Target() != w.Target() || after.Replans != 0 || after.TasksCreated != 2 {
+		t.Fatal(after, err)
+	}
+}
+
+func TestInitialWavePlanCallCanReplayAfterAnotherSameRunReplan(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run := waveToolFixture(t)
+	gateway := contract.KernelGateway{Backend: k}
+	first := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: storagePlanFixture()})
+	first.CallID = "initial-plan"
+	original, err := gateway.Handle(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: renamedWaveToolPlan("new-")})
+	second.CallID = "replan"
+	if _, err = gateway.Handle(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := gateway.Handle(ctx, first)
+	if err != nil || !reflect.DeepEqual(original, replay) {
+		t.Fatal("initial acceptance has no transition but must replay", replay, err)
+	}
+	changed := first
+	changed.CallID = "new-old-target-call"
+	if _, err = gateway.Handle(ctx, changed); err == nil {
+		t.Fatal("new old-target plan call was accepted as replay")
+	}
+}
+func TestWaveReplanWaitsForPendingMainOperation(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run, _ := existingWaveToolFixture(t)
+	// A publication intent may already be durable while its file write is still
+	// pending. Do not advance the plan and invalidate that authorized old-target
+	// operation/subscription before it has a known outcome.
+	op := kernelToolOperation{ID: "pending-publication", SessionID: b.ID, RunID: run.ID, ThreadID: b.ThreadID, TurnID: "tool-turn", CallID: "publish", Name: "artifact_publish", Target: w.Target()}
+	raw, _ := json.Marshal(op)
+	if _, err := k.DB.Exec("INSERT INTO kernel_tool_operations(id,session_id,thread_id,turn_id,call_id,name,argument_digest,state,result,payload) VALUES(?,?,?,?,?,?,'digest','accepted','{}',?)", op.ID, b.ID, b.ThreadID, op.TurnID, op.CallID, op.Name, raw); err != nil {
+		t.Fatal(err)
+	}
+	call := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: renamedWaveToolPlan("new-")})
+	call.CallID = "replan"
+	if _, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call); !errors.Is(err, ErrPlanAdmissionHeld) {
+		t.Fatal("pending operation invalidated by a replan", err)
+	}
+	after, err := k.Wave(ctx, w.ID)
+	if err != nil || after.Target() != w.Target() {
 		t.Fatal(after, err)
 	}
 }

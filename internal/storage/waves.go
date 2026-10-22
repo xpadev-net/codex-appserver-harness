@@ -380,6 +380,19 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	if active > 0 {
 		return receipt, ErrPlanAdmissionHeld
 	}
+	var changesRevision, pendingOperations bool
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_plans WHERE wave_id=? AND revision=?)", wave.ID, wave.PlanRevision).Scan(&changesRevision); err != nil {
+		return receipt, err
+	}
+	if changesRevision {
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_tool_operations WHERE session_id=? AND state IN ('accepted','unknown') AND json_extract(payload,'$.target.wave_id')=?)", wave.OrchestratorSessionID, wave.ID).Scan(&pendingOperations); err != nil {
+			return receipt, err
+		}
+		if pendingOperations {
+			return receipt, ErrPlanAdmissionHeld
+		}
+	}
+
 	var mainRaw []byte
 	var main contract.SessionBinding
 	if err = tx.QueryRowContext(ctx, "SELECT payload FROM kernel_sessions WHERE id=?", wave.OrchestratorSessionID).Scan(&mainRaw); err != nil {

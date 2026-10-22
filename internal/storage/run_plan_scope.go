@@ -79,12 +79,23 @@ func effectiveRunTargetsTx(ctx context.Context, tx *sql.Tx, b contract.SessionBi
 	}
 	return targets, nil
 }
-func acceptedPlanReplayTargetTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, call contract.ToolInvocation, target contract.Target) (bool, error) {
-	if call.Name != "wave_plan" {
+func completedReplayTargetTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, call contract.ToolInvocation, target contract.Target, snapshotID, argumentDigest string, original, effective []contract.Target) (bool, error) {
+	var from, to contract.Target
+	for _, candidate := range original {
+		if candidate.WaveID == target.WaveID {
+			from = candidate
+		}
+	}
+	for _, candidate := range effective {
+		if candidate.WaveID == target.WaveID {
+			to = candidate
+		}
+	}
+	if !from.Valid() || !to.Valid() || target.ScopeRevision != from.ScopeRevision || target.PolicyRevision != from.PolicyRevision || target.PlanRevision < from.PlanRevision || target.PlanRevision > to.PlanRevision {
 		return false, nil
 	}
 	var raw []byte
-	err := tx.QueryRowContext(ctx, "SELECT payload FROM kernel_tool_operations WHERE session_id=? AND turn_id=? AND call_id=? AND name='wave_plan' AND state='completed'", b.ID, call.TurnID, call.CallID).Scan(&raw)
+	err := tx.QueryRowContext(ctx, "SELECT payload FROM kernel_tool_operations WHERE session_id=? AND turn_id=? AND call_id=? AND name=? AND argument_digest=? AND thread_id=? AND state='completed'", b.ID, call.TurnID, call.CallID, call.Name, argumentDigest, b.ThreadID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -95,16 +106,5 @@ func acceptedPlanReplayTargetTx(ctx context.Context, tx *sql.Tx, b contract.Sess
 	if err = json.Unmarshal(raw, &op); err != nil {
 		return false, err
 	}
-	if op.RunID != call.RunID || op.ThreadID != b.ThreadID || op.Target != target {
-		return false, nil
-	}
-	var transition runPlanTransition
-	err = completionRecord(ctx, tx, "run_plan_transition", op.ID, &transition)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return transition.OperationID == op.ID && transition.From == target && transition.SessionID == b.ID && transition.RunID == call.RunID && transition.ThreadID == b.ThreadID && transition.SnapshotID == op.SnapshotID && transition.ArgumentDigest == op.ArgumentDigest, nil
+	return op.SessionID == b.ID && op.RunID == call.RunID && op.ThreadID == b.ThreadID && op.TurnID == call.TurnID && op.CallID == call.CallID && op.Name == call.Name && op.SnapshotID == snapshotID && op.Target == target && op.ArgumentDigest == argumentDigest, nil
 }

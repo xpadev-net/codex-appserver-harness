@@ -59,7 +59,7 @@ func kernelToolTarget(command any) (string, contract.Target) {
 // kernelToolAuthorityTx binds a server-observed early turn only to the already
 // reserved, active run whose known history baseline excludes that turn. This
 // permits a tool call before turn/start replies without accepting an old turn.
-func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, call contract.ToolInvocation, target contract.Target) (contract.SessionAuthority, contract.SessionBinding, string, error) {
+func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, call contract.ToolInvocation, target contract.Target, argumentDigest string) (contract.SessionAuthority, contract.SessionBinding, string, error) {
 	var a contract.SessionAuthority
 	b, err := sessionBindingTx(ctx, tx, call.SessionID)
 	if err != nil {
@@ -149,7 +149,7 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 			}
 			a.Target, a.Paused = wave.Target(), wave.DispatchPaused()
 			if target != wave.Target() {
-				replay, err := acceptedPlanReplayTargetTx(ctx, tx, b, call, target)
+				replay, err := completedReplayTargetTx(ctx, tx, b, call, target, snapshotID, argumentDigest, scope.Targets, effective)
 				if err != nil {
 					return a, b, "", err
 				}
@@ -180,12 +180,16 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	if publication, ok := command.(*contract.PublishArtifactRequest); ok {
 		return k.applyKernelPublication(ctx, call, publication, guard)
 	}
+	digest, err := contentDigest(command)
+	if err != nil {
+		return reply, err
+	}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return reply, err
 	}
 	defer tx.Rollback()
-	a, b, snapshotID, err := k.kernelToolAuthorityTx(ctx, tx, call, target)
+	a, b, snapshotID, err := k.kernelToolAuthorityTx(ctx, tx, call, target, digest)
 	if err != nil {
 		return reply, err
 	}
@@ -198,10 +202,6 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 			return reply, err
 		}
 		target = wave.Target()
-	}
-	digest, err := contentDigest(command)
-	if err != nil {
-		return reply, err
 	}
 	var oldRaw, oldReply []byte
 	var oldName, oldDigest, oldThread, state string
