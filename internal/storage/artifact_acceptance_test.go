@@ -267,10 +267,18 @@ func TestArtifactAcceptanceRequiresAllCriteriaAndNoOutstandingWork(t *testing.T)
 
 func TestArtifactAcceptanceRetainsExplicitlyCarriedReviewAfterRestart(t *testing.T) {
 	ctx := context.Background()
-	k, w, review, _, p := acceptanceFixture(t, nil)
-	admission, err := k.AdoptPlan(ctx, w.Target(), "carry-completed-work-and-review", storagePlanFixture())
+	k, w, p := acceptanceTwoCriteriaFixture(t, nil)
+	plan := storagePlanFixture()
+	for i := range plan.Phases {
+		plan.Phases[i].Tasks[0].Criteria = []string{"AC", "BC"}
+	}
+	admission, err := k.AdoptPlan(ctx, w.Target(), "carry-completed-work-and-review", plan)
 	if err != nil || len(admission.CarriedTaskIDs) != 2 {
 		t.Fatal(admission, err)
+	}
+	review, err := k.Task(ctx, p.Evaluations[0].ReviewTaskID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	current, err := k.SessionBinding(ctx, review.SessionID)
 	if err != nil || current.Target.PlanRevision != 1 {
