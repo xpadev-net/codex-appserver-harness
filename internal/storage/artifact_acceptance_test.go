@@ -303,3 +303,92 @@ func TestArtifactAcceptanceRetainsExplicitlyCarriedReviewAfterRestart(t *testing
 		t.Fatal("old plan accepted as current", err)
 	}
 }
+
+func TestArtifactAcceptanceCannotSelectDefectiveOutputThroughAnotherCleanReview(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		t.Run(map[bool]string{false: "current_findings", true: "retired_findings"}[retire], func(t *testing.T) {
+			ctx := context.Background()
+			k, request := waveStoreFixture(t)
+			w, err := k.CreateWave(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := storagePlanFixture()
+			plan.Templates = []contract.FixReviewTemplate{kernelTemplate()}
+			peer := plan.Phases[1].Tasks[0]
+			peer.ID = "other-review"
+			plan.Phases[1].Tasks = append(plan.Phases[1].Tasks, peer)
+			plan.Phases[1].Completion.RequiredTaskIDs = append(plan.Phases[1].Completion.RequiredTaskIDs, peer.ID)
+			admitted, err := k.AdoptPlan(ctx, w.Target(), "initial", plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, err := k.Task(ctx, admitted.CreatedTaskIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := completeTemplateTask(t, k, work, "defective original output", "", nil)
+			dirty, err := k.Task(ctx, admitted.CreatedTaskIDs[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			completeTemplateTask(t, k, dirty, "confirmed original defect", original.Digest, []string{"artifact_defect"})
+			oldClean, err := k.Task(ctx, admitted.CreatedTaskIDs[2])
+			if err != nil {
+				t.Fatal(err)
+			}
+			completeTemplateTask(t, k, oldClean, "another reviewer missed the defect", original.Digest, nil)
+			expansion, err := k.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: w.Target(), ReviewTaskID: dirty.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var replacement domain.Artifact
+			var finalReview domain.Task
+			for _, id := range expansion.Admission.CreatedTaskIDs {
+				task, err := k.Task(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if task.Spec.Kind == "fix" {
+					replacement = completeTemplateTask(t, k, task, "corrected replacement output", "", nil)
+				} else {
+					completeTemplateTask(t, k, task, "checked replacement", replacement.Digest, nil)
+					finalReview = task
+				}
+			}
+			w, err = k.Wave(ctx, w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			good := contract.ArtifactAcceptance{Outputs: []string{replacement.ID}, Evaluations: []contract.ArtifactCriterionEvaluation{{CriterionID: "AC", ArtifactID: replacement.ID, ReviewTaskID: finalReview.ID}}}
+			if _, err = k.CheckArtifactAcceptance(ctx, w.Target(), good); err != nil {
+				t.Fatal("actual replacement rejected", err)
+			}
+			if retire {
+				// A parent replan cannot make known findings disappear merely by omitting
+				// their Task and requesting another clean review of the same old bytes.
+				next := storagePlanFixture()
+				next.Phases[1].ID = "fresh-clean-phase"
+				next.Phases[1].Tasks[0].ID = "fresh-clean-review"
+				next.Phases[1].Completion.RequiredTaskIDs = []string{"fresh-clean-review"}
+				admission, err := k.AdoptPlan(ctx, w.Target(), "omit-old-findings", next)
+				if err != nil {
+					t.Fatal(err)
+				}
+				oldClean, err = k.Task(ctx, admission.CreatedTaskIDs[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				completeTemplateTask(t, k, oldClean, "re-evaluated old output without resolving the confirmed finding", original.Digest, nil)
+				w, err = k.Wave(ctx, w.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			bad := contract.ArtifactAcceptance{Outputs: []string{original.ID}, Evaluations: []contract.ArtifactCriterionEvaluation{{CriterionID: "AC", ArtifactID: original.ID, ReviewTaskID: oldClean.ID}}}
+			if _, err = k.CheckArtifactAcceptance(ctx, w.Target(), bad); !errors.Is(err, ErrArtifactAcceptanceHeld) {
+				t.Fatal("known-defective bytes accepted via a clean review", err)
+			}
+		})
+	}
+}

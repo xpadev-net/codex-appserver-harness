@@ -119,6 +119,21 @@ func (k *KernelStore) checkArtifactAcceptanceTx(ctx context.Context, tx *sql.Tx,
 		if err != nil {
 			return proof, err
 		}
+		// A different clean review cannot erase a confirmed findings report
+		// for these exact bytes, even after the old review leaves the plan.
+		findings, err := inputIDsTx(ctx, tx, `SELECT r.id FROM records r JOIN kernel_tasks t ON t.id=r.work_item_id WHERE r.kind='task_result' AND t.wave_id=? AND json_extract(t.payload,'$.scope_revision')=? AND json_extract(t.payload,'$.policy_revision')=? AND json_extract(r.payload,'$.review.target_digest')=? AND json_extract(r.payload,'$.review.verdict')='findings' ORDER BY r.id`, wave.ID, wave.ScopeRevision, wave.Policy.Revision, a.Digest)
+		if err != nil {
+			return proof, err
+		}
+		for _, id := range findings {
+			input, err := k.taskResultInputTx(ctx, tx, wave, id)
+			if err != nil {
+				return proof, err
+			}
+			if input.SourceSpec.Kind == "review" && input.Result.Outcome == "result" && input.Result.Review != nil && input.Result.Review.Verdict == "findings" && input.Result.Review.TargetDigest == a.Digest {
+				return proof, acceptanceHeld("selected output has confirmed findings; select the independently reviewed replacement")
+			}
+		}
 		producer, ok := tasks[a.TaskID]
 		if !ok || producer.SessionID != a.SessionID || producer.Spec.Kind == "review" || !slices.Contains(results[producer.ID].Artifacts, id) {
 			return proof, acceptanceHeld("final output must belong to a current applied producer result")
