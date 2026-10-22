@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -15,84 +14,19 @@ import (
 
 var ErrJobBusy = errors.New("runner lifecycle is locked")
 
-type ProcessIdentity struct {
-	PID        int    `json:"pid"`
-	BootID     string `json:"boot_id"`
-	StartTicks uint64 `json:"start_ticks"`
-}
+type ProcessIdentity = process.Identity
+
 type Lifecycle struct {
 	State   string          `json:"state"`
 	Process ProcessIdentity `json:"process"`
 	Profile ProcessIdentity `json:"profile"`
 }
 
-func bootID() string {
-	b, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	return strings.TrimSpace(string(b))
-}
-func processStat(pid int) (state string, group int, ticks uint64, err error) {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return "", 0, 0, err
-	}
-	pos := strings.LastIndex(string(b), ") ")
-	if pos < 0 {
-		return "", 0, 0, errors.New("invalid process stat")
-	}
-	fields := strings.Fields(string(b)[pos+2:])
-	if len(fields) < 20 {
-		return "", 0, 0, errors.New("short process stat")
-	}
-	group, err = strconv.Atoi(fields[2])
-	if err != nil {
-		return "", 0, 0, err
-	}
-	ticks, err = strconv.ParseUint(fields[19], 10, 64)
-	return fields[0], group, ticks, err
-}
-func identity(pid int) ProcessIdentity {
-	_, _, ticks, _ := processStat(pid)
-	return ProcessIdentity{PID: pid, BootID: bootID(), StartTicks: ticks}
-}
-func processAlive(p ProcessIdentity) bool {
-	if p.PID <= 0 || (p.BootID != "" && p.BootID != bootID()) {
-		return false
-	}
-	state, _, ticks, err := processStat(p.PID)
-	if err == nil {
-		return state != "Z" && state != "X" && (p.StartTicks == 0 || ticks == p.StartTicks)
-	}
-	return !os.IsNotExist(err) && !errors.Is(err, syscall.ESRCH) // Unreadable identity is uncertainty, never absence.
-}
-func groupAlive(p ProcessIdentity) (bool, error) {
-	if p.PID <= 0 || (p.BootID != "" && p.BootID != bootID()) {
-		return false, nil
-	}
-	if _, _, ticks, err := processStat(p.PID); err == nil && p.StartTicks != 0 && ticks != p.StartTicks {
-		return false, nil
-	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return true, err
-	}
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-		state, group, _, err := processStat(pid)
-		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
-			continue
-		}
-		if err != nil {
-			return true, err
-		}
-		if group == p.PID && state != "Z" && state != "X" {
-			return true, nil
-		}
-	}
-	return false, nil
-}
+func bootID() string                                   { return process.BootID() }
+func processStat(pid int) (string, int, uint64, error) { return process.ReadStat(pid) }
+func identity(pid int) ProcessIdentity                 { return process.Identify(pid) }
+func processAlive(p ProcessIdentity) bool              { return process.Alive(p) }
+func groupAlive(p ProcessIdentity) (bool, error)       { return process.GroupAlive(p) }
 func jobLock(ctx context.Context, s Spec, wait bool) (*os.File, error) {
 	if !identifier.MatchString(s.JobID) || !filepath.IsAbs(s.Root) {
 		return nil, errors.New("invalid lifecycle identity")

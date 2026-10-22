@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -21,14 +23,62 @@ import (
 	"time"
 )
 
+type AgentProcess struct {
+	Generation  string           `json:"generation"`
+	OperationID string           `json:"operation_id"`
+	WorkItemID  string           `json:"work_item_id"`
+	Identity    process.Identity `json:"identity"`
+}
+
+type AgentStopProof struct {
+	Process     AgentProcess `json:"process"`
+	Disposition string       `json:"disposition"`
+	ConfirmedAt time.Time    `json:"confirmed_at"`
+}
+
+func recordAgentStop(ctx context.Context, store *storage.Store, p AgentProcess, disposition string) error {
+	proof := AgentStopProof{Process: p, Disposition: disposition, ConfirmedAt: time.Now().UTC()}
+	if err := store.Put(ctx, "agent_stop_proof", p.OperationID, p.WorkItemID, proof); err != nil {
+		return err
+	}
+	return store.Put(ctx, "agent_quiesced", p.OperationID, p.WorkItemID, true)
+}
+func agentProofMatches(p AgentProcess, proof AgentStopProof) bool {
+	if p.Generation == "" || p.OperationID == "" || p.WorkItemID == "" || proof.Process.Generation != p.Generation || proof.Process.OperationID != p.OperationID || proof.Process.WorkItemID != p.WorkItemID || proof.ConfirmedAt.IsZero() {
+		return false
+	}
+	if proof.Disposition == "not_started" {
+		return p.Identity == (process.Identity{}) && proof.Process.Identity == (process.Identity{})
+	}
+	return proof.Disposition == "group_stopped" && proof.Process.Identity.Valid() && (p.Identity == (process.Identity{}) || p.Identity == proof.Process.Identity)
+}
+
 type LiveAgents struct {
 	Config Config
 	Store  *storage.Store
 }
 
-func (l LiveAgents) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, prompt string, schema any) (worker.Run, error) {
+func (l LiveAgents) Run(ctx context.Context, w domain.WorkItem, op domain.Operation, prompt string, schema any) (result worker.Run, runErr error) {
 	if !l.Config.IsolationVerified {
 		return worker.Run{}, errors.New("execution isolation is not verified")
+	}
+	var previousProcess AgentProcess
+	if err := l.Store.Record(ctx, "agent_process", op.ID, &previousProcess); err == nil {
+		var proof AgentStopProof
+		if previousProcess.OperationID != op.ID || previousProcess.WorkItemID != w.ID {
+			return worker.Run{}, errors.New("saved agent process source conflict")
+		}
+		if err := l.Store.Record(ctx, "agent_stop_proof", op.ID, &proof); err != nil {
+			if !missing(err) {
+				return worker.Run{}, err
+			}
+			return worker.Run{}, process.ErrUnconfirmed
+		}
+		if !agentProofMatches(previousProcess, proof) {
+			return worker.Run{}, process.ErrUnconfirmed
+		}
+	} else if !missing(err) {
+		return worker.Run{}, err
 	}
 	home := filepath.Join(l.Config.Root, "worker-homes", w.ID)
 	if err := os.MkdirAll(home, 0700); err != nil {
@@ -61,14 +111,37 @@ func (l LiveAgents) Run(ctx context.Context, w domain.WorkItem, op domain.Operat
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(l.Config.Limits.TurnSeconds)*time.Second)
 	defer cancel()
 	args := append(append([]string{}, l.Config.Launcher[1:]...), l.Config.CodexBinary, "app-server", "--listen", "stdio://", "--disable", "goals", "--disable", "multi_agent", "--disable", "multi_agent_v2")
+	// Persist admission even when a crash loses the started PID or no run was
+	// saved yet. A missing start response is never proof that no process exists.
+	var nonce [16]byte
+	if _, err = rand.Read(nonce[:]); err != nil {
+		return worker.Run{}, err
+	}
+	admission := AgentProcess{Generation: fmt.Sprintf("process-%x", nonce), OperationID: op.ID, WorkItemID: w.ID}
+	if err = l.Store.Put(ctx, "agent_process", op.ID, w.ID, admission); err != nil {
+		return worker.Run{}, err
+	}
 	client, err := codex.StartCommand(runCtx, l.Config.Launcher[0], args, env)
 	if err != nil {
-		return worker.Run{}, err
+		// StartCommand errors occur before a process is returned; a failed exec is
+		// reaped by os/exec and cannot have run the configured launcher.
+		proofErr := recordAgentStop(context.WithoutCancel(ctx), l.Store, admission, "not_started")
+		return worker.Run{}, errors.Join(err, proofErr)
 	}
 	defer func() {
 		_ = client.Close()
-		_ = l.Store.Put(context.WithoutCancel(ctx), "agent_quiesced", op.ID, w.ID, true)
+		if client.GroupStopped() {
+			if err := recordAgentStop(context.WithoutCancel(ctx), l.Store, admission, "group_stopped"); err != nil {
+				runErr = errors.Join(runErr, err)
+			}
+		} else {
+			runErr = errors.Join(runErr, process.ErrUnconfirmed)
+		}
 	}()
+	admission.Identity = client.ProcessIdentity()
+	if err = l.Store.Put(ctx, "agent_process", op.ID, w.ID, admission); err != nil {
+		return worker.Run{}, err
+	}
 	if err = client.Initialize(runCtx); err != nil {
 		return worker.Run{}, err
 	}
@@ -259,10 +332,10 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			return err
 		}
 	}
-	if errors.Is(runErr, ErrDispatchHeld) {
+	if errors.Is(runErr, ErrDispatchHeld) && !errors.Is(runErr, process.ErrUnconfirmed) {
 		return c.Store.ReturnUnsent(context.WithoutCancel(ctx), op.ID, "operator state changed before turn/start")
 	}
-	if runErr != nil && r.ID != "" && (r.State == "unknown" || r.State == "starting") && ctx.Err() == nil {
+	if runErr != nil && !errors.Is(runErr, process.ErrUnconfirmed) && r.ID != "" && (r.State == "unknown" || r.State == "starting") && ctx.Err() == nil {
 		r, runErr = c.Agents.Run(ctx, w, op, string(body), schema)
 		if r.ID != "" {
 			if err = c.Store.Put(context.WithoutCancel(ctx), "agent_run", r.ID, w.ID, r); err != nil {
@@ -270,8 +343,8 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			}
 		}
 	}
-	if r.ID != "" {
-		active := runErr != nil && (r.State == "unknown" || r.State == "starting" || r.State == "running" || r.State == "inProgress")
+	if r.ID != "" || errors.Is(runErr, process.ErrUnconfirmed) {
+		active := runErr != nil && !errors.Is(runErr, process.ErrUnconfirmed) && (r.State == "unknown" || r.State == "starting" || r.State == "running" || r.State == "inProgress")
 		if err = c.Store.Put(context.WithoutCancel(ctx), "reconcile_needed", w.ID, w.ID, ReconcileIntent{OperationID: op.ID, Active: active}); err != nil {
 			return err
 		}
@@ -280,7 +353,11 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 		if r.ID != "" {
 			_ = c.Store.Put(context.WithoutCancel(ctx), "last_run", w.ID, w.ID, r)
 		}
-		return c.reject(context.WithoutCancel(ctx), w, op, fmt.Sprintf("agent %s; inspect run %s and resume information", r.State, op.ID))
+		reason := fmt.Sprintf("agent %s; inspect run %s and resume information", r.State, op.ID)
+		if errors.Is(runErr, process.ErrUnconfirmed) {
+			reason = "agent process stopping is unconfirmed; inspect operation " + op.ID
+		}
+		return c.reject(context.WithoutCancel(ctx), w, op, reason)
 	}
 	if r.State != "completed" {
 		return errors.New("agent adapter returned success without completed turn")
