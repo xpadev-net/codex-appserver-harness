@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +22,7 @@ import (
 // The helper executes the real CLI entrypoint with the exact detached runner
 // argv. It needs no separately built executable or model connection.
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && os.Args[1] == "_runner" {
+	if len(os.Args) > 1 && (os.Args[1] == "_runner" || os.Args[1] == "wave") {
 		if err := run(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -96,5 +100,40 @@ func TestDetachedRunnerPublishesThenHintsWithoutWorkerCredentials(t *testing.T) 
 	defer stop()
 	if err = process.WaitStopped(stopped, id); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWaveCLIEntrypointCreatesAndInspectsDirectRequestWithoutExternalPrograms(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "kernel")
+	invoke := func(args ...string) []byte {
+		t.Helper()
+		command := exec.Command(executable, append([]string{"wave"}, args...)...)
+		command.Env = []string{"PATH=/nonexistent"}
+		raw, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("wave command: %v: %s", err, raw)
+		}
+		return raw
+	}
+	invoke("init", "--root", root, "--model", "unavailable-model")
+	request := filepath.Join(t.TempDir(), "request.json")
+	if err = os.WriteFile(request, []byte(`{"schema_version":1,"request_id":"entrypoint","request":"調査結果を説明する","criteria":[{"id":"AC","requirement":"根拠がある"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var wave domain.Wave
+	if err = json.Unmarshal(invoke("create", "--root", root, "--file", request), &wave); err != nil || wave.ID == "" {
+		t.Fatal(wave, err)
+	}
+	var inspection storage.WaveInspection
+	if err = json.Unmarshal(invoke("inspect", "--root", root, "--id", wave.ID), &inspection); err != nil || inspection.Wave.ID != wave.ID || inspection.Budget.MainTurns != 0 {
+		t.Fatal(inspection, err)
+	}
+	var page storage.WaveSummaryPage
+	if err = json.Unmarshal(invoke("list", "--root", root), &page); err != nil || len(page.Waves) != 1 {
+		t.Fatal(page, err)
 	}
 }

@@ -4,7 +4,7 @@ Go製のIssue実装ハーネスです。SQLiteで進行状態と外部操作を�
 
 設計の改訂案（v0.4）は、大きな依頼をWave→Phase→Taskへ分解し、各Taskに独立した使い捨てsessionを割り当て、実行中は親子メッセージとイベント通知で再開する構成です。Taskは親と同じruntimeを使い、Wave呼び出しを禁止します。[改訂要件](requirements.md)、[現行との差分](docs/background-wave-gap-analysis.md)、[実装設計](implementation-plan.md)、[実行計画](docs/coding-agent/plans/active/background-wave-plan.md)を参照してください。
 実接続の先行確認（S）、PRなしのWave基盤（K）、GitHub接続（P）、旧作業の移行（M）を分けて受け入れる計画です。Phase条件・失敗/反復・汎用成果・上限・親thread復旧は実装設計へ記録しています。
-Wave・メインOrchestrator・tool callによる自動購読・並行schedulerは未実装です。以下は現行バイナリの操作と制約です。
+Waveの新DB、共通runtime、main/Task tools、並行scheduler、独立review/fixと検証済み完了のcomponent実装を追加しています。K用CLIの初期操作は以下を参照してください。実modelによるK全体受入、Pへの接続、Mのfixture移行は追跡中です。
 
 必要環境: Linux、Go 1.26とCコンパイラ、Git、認証済み`gh`、Codex CLI **0.163.0**、Bubblewrap (`bwrap`)。
 
@@ -16,6 +16,26 @@ go vet ./...
 ```
 
 初期構成はcontroller 1、実行中turn 1、進行中PR 1、runner job 1です。実装・独立検証のthreadを再利用し、テスト・CI・review・mergeの待機は通常コードで処理します。workerのgoalsとmulti-agent機能は無効にします。
+
+## Wave kernel のローカル操作（K）
+
+GitHub設定なしで、新しいprivate rootに直接依頼を保存できます。
+
+```sh
+./harness wave init --root /absolute/private/kernel --model YOUR_AVAILABLE_MODEL
+cat > request.json <<'JSON'
+{"schema_version":1,"request_id":"request-001","request":"調査結果を根拠付きで説明する","criteria":[{"id":"AC","requirement":"根拠を辿れるレポートがある"}]}
+JSON
+./harness wave create --root /absolute/private/kernel --file request.json
+./harness wave list --root /absolute/private/kernel --limit 64
+./harness wave inspect --root /absolute/private/kernel --id WAVE_ID --limit 64
+```
+
+`kernel.json`は設定version 2、`state.db`はkernel schema 2です。同じinit/request IDは同じ内容で再実行でき、設定や依頼を上書きしません。既存の未設定DB・v1 DBは明示移行/復旧が必要です。既存のPR用rootと混ぜずに使用してください。
+
+この4コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
+
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。kernelの実行daemon・watch・優先操作のCLI接続と実K受入は後続工程です。
 
 ## 設定と起動
 

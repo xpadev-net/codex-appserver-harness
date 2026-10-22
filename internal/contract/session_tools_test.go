@@ -179,3 +179,23 @@ func TestPlanSourceResultsAreOptionalBoundedAndUnique(t *testing.T) {
 		})
 	}
 }
+
+func TestHostJSONLimitDoesNotRaiseModelOutputLimit(t *testing.T) {
+	type hostRequest struct {
+		Request string `json:"request"`
+	}
+	raw, err := json.Marshal(hostRequest{Request: strings.Repeat("x", (1<<20)+1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded hostRequest
+	if DecodeStrict(raw, &decoded) == nil {
+		t.Fatal("model output envelope limit raised")
+	}
+	if err = DecodeStrictBounded(raw, &decoded, 2<<20); err != nil {
+		t.Fatal("bounded host request rejected", err)
+	}
+	if DecodeStrictBounded([]byte(`{"request":"first","request":"second"}`), &decoded, 2<<20) == nil {
+		t.Fatal("bounded host decoder accepted duplicate keys")
+	}
+}
