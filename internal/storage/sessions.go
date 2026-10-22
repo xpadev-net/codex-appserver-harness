@@ -108,6 +108,9 @@ func (k *KernelStore) ReserveSessionThread(ctx context.Context, expected contrac
 	if err != nil {
 		return err
 	}
+	if err = k.reserveSessionResourcesTx(ctx, tx, b); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return err
@@ -153,6 +156,9 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 		return errors.New("thread creation was not reserved")
 	}
 	b.ThreadID = thread
+	if err = bindSessionResourcesTx(ctx, tx, b, thread, ""); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return err
@@ -280,6 +286,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET active_run_id=?,process_stopped=0 WHERE id=?", run.ID, b.ID); err != nil {
 		return err
 	}
+	if err = bindSessionResourcesTx(ctx, tx, b, b.ThreadID, run.ID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any) error {
@@ -364,6 +373,9 @@ func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID
 	}
 	// Keep the run binding until its outcome is applied or explicitly archived.
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET process_stopped=1 WHERE id=?", sessionID); err != nil {
+		return err
+	}
+	if err = k.releaseSessionResourcesTx(ctx, tx, b, proofID); err != nil {
 		return err
 	}
 	return tx.Commit()
