@@ -234,6 +234,19 @@ func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.
 			return err
 		}
 	}
+	if a.Reason == "task_input_unavailable" {
+		wave, err := loadWave(ctx, tx, a.Target.WaveID)
+		if err != nil {
+			return err
+		}
+		reason, err := k.taskReadyTx(ctx, tx, wave, task, false, false)
+		if err != nil {
+			return err
+		}
+		if !inputEvidenceHold(reason) {
+			return ErrWakeHeld
+		}
+	}
 	if paused && !ignorePause {
 		return ErrWakeHeld
 	}
@@ -277,6 +290,31 @@ func (k *KernelStore) savePhaseAttentionTx(ctx context.Context, tx *sql.Tx, wave
 			continue
 		}
 		saved, err := k.saveParentAttentionTx(ctx, tx, wave, task, reason, detail)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || saved
+	}
+	return changed, nil
+}
+
+func inputEvidenceHold(reason string) bool {
+	return reason == "input_unavailable" || reason == "dependency_unavailable" || reason == "template_subject_unavailable"
+}
+func (k *KernelStore) saveReadyInputAttentionTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, tasks []domain.Task) (bool, error) {
+	changed := false
+	for _, task := range tasks {
+		if task.State != contract.TaskReady {
+			continue
+		}
+		reason, err := k.taskReadyTx(ctx, tx, wave, task, false, false)
+		if err != nil {
+			return false, err
+		}
+		if !inputEvidenceHold(reason) {
+			continue
+		}
+		saved, err := k.saveParentAttentionTx(ctx, tx, wave, task, "task_input_unavailable", reason)
 		if err != nil {
 			return false, err
 		}

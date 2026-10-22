@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -571,5 +572,157 @@ func TestCanceledPausedTaskStillNotifiesParentWithoutReopeningTask(t *testing.T)
 	set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()})
 	if err != nil || len(set.Tasks) != 0 {
 		t.Fatal(set, err)
+	}
+}
+
+func TestUnstartedTaskInputExpiryNotifiesParentAndRestorationRetiresWake(t *testing.T) {
+	ctx := context.Background()
+	k, w, request := artifactFixture(t)
+	artifact := mustImport(t, k, request, "trusted task input")
+	plan := storagePlanFixture()
+	plan.Phases[0].Tasks[0].InputArtifactIDs = []string{artifact.ID}
+	admission, err := k.AdoptPlan(ctx, w.Target(), "initial", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := artifact
+	expired.State, expired.ExpiredAt = "expired", k.clock()
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveArtifact(ctx, tx, expired); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()})
+	if err != nil || len(set.Tasks) != 0 || len(set.Held) != 1 || set.Held[0].Reason != "input_unavailable" {
+		t.Fatal(set, err)
+	}
+	if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(pending) != 1 || pending[0].Reason != "task_input_unavailable" || pending[0].TaskID != admission.CreatedTaskIDs[0] {
+		t.Fatal(pending, err)
+	}
+	tx, err = k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := sessionBindingTx(ctx, tx, w.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := k.sessionManifestTx(ctx, tx, b, w)
+	tx.Rollback()
+	if err != nil || len(manifest.UnavailableArtifacts) != 1 || manifest.UnavailableArtifacts[0].ArtifactID != artifact.ID {
+		t.Fatal(manifest.UnavailableArtifacts, err)
+	}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: b.ID, Key: "expired-input", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err = k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveArtifact(ctx, tx, artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := k.ReconcileUnstartedWake(ctx, wake.Intent.ID); err != nil || retired.Intent.State != "superseded" {
+		t.Fatal(retired, err)
+	}
+}
+func TestCorruptArtifactObjectIsUnavailableInParentContext(t *testing.T) {
+	ctx := context.Background()
+	k, w, _, artifact := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, nil)
+	path := filepath.Join(k.Root, "objects", artifact.ID)
+	if err := os.WriteFile(path, []byte("corrupt artifact bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(pending) != 1 {
+		t.Fatal(pending, err)
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := sessionBindingTx(ctx, tx, w.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := k.sessionManifestTx(ctx, tx, b, w)
+	tx.Rollback()
+	if err != nil || len(manifest.UnavailableArtifacts) != 1 || manifest.UnavailableArtifacts[0].Reason != "invalid_artifact_object" {
+		t.Fatal(manifest.UnavailableArtifacts, err)
+	}
+	for _, a := range manifest.Artifacts {
+		if a.ID == artifact.ID {
+			t.Fatal("corrupt object marked available")
+		}
+	}
+	if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: b.ID, Key: "corrupt-object", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestUnavailableTemplateInputMetadataReachesParent(t *testing.T) {
+	for _, mode := range []string{"json", "type", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, tasks := readyFixture(t, func(p *contract.PlanProposal) { p.Phases[0].Tasks[0].Kind = "fix" })
+			task := tasks[0]
+			raw := []byte(`{"input_digest":`)
+			if mode == "type" {
+				raw = []byte(`{"input_digest":7}`)
+			}
+			if mode == "empty" {
+				raw = []byte(`{}`)
+			}
+			if _, err := k.DB.ExecContext(ctx, "INSERT INTO records(kind,id,work_item_id,payload) VALUES('template_task_context',?,?,?)", task.ID, w.ID, raw); err != nil {
+				t.Fatal(err)
+			}
+			if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+				t.Fatal(changed, err)
+			}
+			pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+			if err != nil || len(pending) != 1 || pending[0].Reason != "task_input_unavailable" {
+				t.Fatal(pending, err)
+			}
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := sessionBindingTx(ctx, tx, w.OrchestratorSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := k.sessionManifestTx(ctx, tx, b, w)
+			tx.Rollback()
+			if err != nil || len(manifest.UnavailableTaskMetadata) != 1 || manifest.UnavailableTaskMetadata[0].TaskID != task.ID {
+				t.Fatal(manifest.UnavailableTaskMetadata, err)
+			}
+			if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: b.ID, Key: "bad-template-input", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true}); err != nil {
+				t.Fatal(err)
+			}
+			set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ready := range set.Tasks {
+				if ready.Task.ID == task.ID {
+					t.Fatal("invalid template input admitted", set)
+				}
+			}
+		})
 	}
 }

@@ -154,6 +154,16 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 	if err != nil {
 		return false, err
 	}
+	if set.State == "active" && set.Reason == "" {
+		changed, err := k.saveReadyInputAttentionTx(ctx, tx, wave, tasks)
+		if err != nil {
+			return false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		return changed, nil
+	}
 	if set.Reason == "review_inconclusive" || set.Reason == "drain_and_block" {
 		changed, err := k.savePhaseAttentionTx(ctx, tx, wave, tasks)
 		if err != nil {
