@@ -288,6 +288,7 @@ func (l *Loop) shutdown(ctx context.Context, wait time.Duration, flights map[str
 			}
 		}
 	}
+	errs = append(errs, l.shutdownManaged(cleanup))
 	return errors.Join(append(errs, ctx.Err())...)
 }
 
@@ -361,7 +362,7 @@ func (l *Loop) maintainAction(ctx context.Context, a storage.DeadlineAction, fli
 			}
 		}
 	}
-	if flights[a.SessionID] == nil {
+	if f := flights[a.SessionID]; f == nil || f.completion != nil {
 		var ownerID string
 		e := k.Record(ctx, "managed_preparation", a.PreparationID, &ownerID)
 		if e != nil && !errors.Is(e, sql.ErrNoRows) {
@@ -395,4 +396,40 @@ func (l *Loop) maintainAction(ctx context.Context, a storage.DeadlineAction, fli
 		return err
 	}
 	return nil
+}
+
+// Archived completion callbacks do not own physical quiescence. Scan the durable
+// owners again on shutdown, including owners no longer present in flights.
+func (l *Loop) shutdownManaged(ctx context.Context) error {
+	k := l.Runtime.Store
+	cursor := ""
+	var errs []error
+	for {
+		page, err := k.PendingManagedProcesses(ctx, cursor, 128)
+		if err != nil {
+			return errors.Join(append(errs, process.ErrUnconfirmed, err)...)
+		}
+		for _, p := range page.Processes {
+			proof := storage.ManagedStopProof{OwnerID: p.Request.OwnerID, Disposition: "not_started"}
+			if p.State != "admitted" {
+				if !p.Identity.Valid() {
+					errs = append(errs, process.ErrUnconfirmed)
+					continue
+				}
+				requestErr := process.RequestGroupStop(p.Identity)
+				if err = process.WaitStopped(ctx, p.Identity); err != nil {
+					errs = append(errs, errors.Join(requestErr, err))
+					continue
+				}
+				proof.Disposition, proof.Identity = "group_stopped", p.Identity
+			}
+			if err = k.ConfirmManagedProcessStopped(ctx, proof); err != nil {
+				errs = append(errs, errors.Join(process.ErrUnconfirmed, err))
+			}
+		}
+		if page.NextAfter == "" {
+			return errors.Join(errs...)
+		}
+		cursor = page.NextAfter
+	}
 }

@@ -319,7 +319,7 @@ func TestLoopShutdownReturnsUnconfirmedStopDespiteSuccessfulResultWrite(t *testi
 	if c.Outcome.Stopped {
 		t.Fatal(c)
 	}
-	assertCapacity(t, k, 1)
+	assertCapacity(t, k, 0) // durable boot identity proves this fixture process is absent.
 }
 
 func TestLoopDeadlineStopsPersistedOwnerAfterRestart(t *testing.T) {
@@ -393,4 +393,107 @@ func TestMaintenanceErrorDoesNotSuppressOtherDeadlineAction(t *testing.T) {
 	if err == nil || !canceled {
 		t.Fatal("unrelated corrupt process suppressed deadline stop", err, canceled)
 	}
+}
+
+type nonStoppingTransport struct {
+	*fakeProcess
+	identity process.Identity
+}
+
+func (p nonStoppingTransport) ProcessIdentity() process.Identity { return p.identity }
+func nonStoppingFixture(t *testing.T, b contract.SessionBinding) nonStoppingTransport {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	p := fake(b)
+	p.stopped = false
+	return nonStoppingTransport{fakeProcess: p, identity: process.Identify(cmd.Process.Pid)}
+}
+func TestLoopShutdownReconcilesArchivedUnconfirmedOwner(t *testing.T) {
+	k, b := taskFixture(t)
+	p := nonStoppingFixture(t, b)
+	source := newSource(workRequest(b))
+	l := NewLoop(Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return p, nil })}, source)
+	l.ReconcileEvery = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- l.Run(ctx) }()
+	await(t, source.scans)
+	c := await(t, source.completed)
+	if c.Outcome.Stopped || !errors.Is(c.Err, process.ErrUnconfirmed) {
+		t.Fatal(c)
+	}
+	await(t, source.scans) // callback archived the completion and loop removed its flight.
+	cancel()
+	err := await(t, done)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if alive, err := process.GroupAlive(p.identity); err != nil || alive {
+		t.Fatal("archived owner survived shutdown", alive, err)
+	}
+	assertCapacity(t, k, 0)
+}
+func TestLoopDeadlineStopsOwnerWhileCompletionWriteKeepsFailing(t *testing.T) {
+	k, b := taskFixture(t)
+	var clock atomic.Int64
+	k.Now = func() time.Time { return time.Now().Add(time.Duration(clock.Load())) }
+	p := nonStoppingFixture(t, b)
+	source := newSource(workRequest(b))
+	source.failures = 1000
+	reported := make(chan error, 1)
+	l := NewLoop(Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return p, nil })}, source)
+	l.ReconcileEvery = 10 * time.Millisecond
+	l.Report = func(err error) {
+		select {
+		case reported <- err:
+		default:
+		}
+	}
+	loopStart(t, l)
+	await(t, reported)
+	clock.Add(int64(49 * time.Hour))
+	l.Wake()
+	deadline := time.After(5 * time.Second)
+	for {
+		capacity, err := k.ExecutionCapacity(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if capacity.HeldProcessSlots == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("completion retry suppressed physical deadline stop")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if alive, err := process.GroupAlive(p.identity); err != nil || alive {
+		t.Fatal(alive, err)
+	}
+}
+
+func TestLoopShutdownReportsArchivedLaunchWithUnknownIdentity(t *testing.T) {
+	k, b := taskFixture(t)
+	source := newSource(workRequest(b))
+	l := NewLoop(Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return nil, errors.New("ambiguous exec") })}, source)
+	l.ReconcileEvery = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- l.Run(ctx) }()
+	await(t, source.scans)
+	await(t, source.completed)
+	await(t, source.scans)
+	cancel()
+	if err := await(t, done); !errors.Is(err, process.ErrUnconfirmed) {
+		t.Fatal(err)
+	}
+	assertCapacity(t, k, 1)
 }
