@@ -131,6 +131,12 @@ func (k *KernelStore) applyKernelPublication(ctx context.Context, call contract.
 		if err = kernelRecordTx(ctx, tx, "kernel_publication", op.ID, binding.ID, pub); err != nil {
 			return reply, err
 		}
+		// Admission is not delivery. Keep the recovery path deferred until a
+		// completed reply is actually selected for the active source run. In
+		// particular, cancellation after this commit must not imply consumption.
+		if err = kernelRecordTx(ctx, tx, "kernel_publication_awaited", op.ID, binding.ID, true); err != nil {
+			return reply, err
+		}
 		if err = kernelRecordTx(ctx, tx, "artifact_kernel_operation", artifact.ID, artifact.WaveID, op.ID); err != nil {
 			return reply, err
 		}

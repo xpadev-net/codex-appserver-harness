@@ -520,3 +520,51 @@ func TestKernelPublicationReconciliationSkipsLockedObjectAndKeepsProgress(t *tes
 		t.Fatal(report, err)
 	}
 }
+
+func TestKernelPublicationCanceledAfterAdmissionRemainsDeferred(t *testing.T) {
+	ctx := context.Background()
+	k, wave, _, b, run := kernelToolFixture(t, "task")
+	content := "admitted but no response delivered"
+	call := publicationCall(t, b, run, wave.Target(), content)
+	opID := structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID)
+	request := ArtifactImport{SessionID: b.ID, Target: wave.Target(), Key: opID, Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: b.TaskID}, InputArtifactIDs: []string{}}
+	artifact, err := k.reserveArtifact(ctx, request, []byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(k.Root, "objects", artifact.ID), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	deadline, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if _, err = (contract.KernelGateway{Backend: k}).Handle(deadline, call); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("call did not cancel after reservation", err)
+	}
+	var pub kernelPublication
+	if err = k.Record(ctx, "kernel_publication", opID, &pub); err != nil || pub.ArtifactID != artifact.ID {
+		t.Fatal("operation was not durably admitted", pub, err)
+	}
+	var awaited bool
+	if err = k.Record(ctx, "kernel_publication_awaited", opID, &awaited); err != nil || !awaited {
+		t.Fatal("cancellation implied response delivery", awaited, err)
+	}
+	result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "blocked", Blockers: []string{"publication response missing"}}
+	savePublicationTaskOutcome(t, k, b, run, call.TurnID, result)
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	report, err := k.ReconcileKernelPublications(ctx, 10)
+	if err != nil || len(report.Completed) != 1 {
+		t.Fatal(report, err)
+	}
+	pending, err := k.PendingWakeNotifications(ctx, b.ID, 10)
+	if err != nil || len(pending) != 1 || pending[0].OperationID != opID {
+		t.Fatal("undelivered completion was lost during recovery", pending, err)
+	}
+}
