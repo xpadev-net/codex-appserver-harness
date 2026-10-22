@@ -381,6 +381,10 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 				return m, err
 			}
 			if result.TaskID != task.ID || result.Target != task.Target() {
+				if b.Kind == "orchestrator" {
+					m.UnavailableResults = append(m.UnavailableResults, unavailableInputResult{TaskID: task.ID, ResultID: application.ResultID, RunID: runID, Reason: "invalid_result_binding"})
+					continue
+				}
 				return m, errors.New("input result binding conflict")
 			}
 			if err = result.Validate(); err != nil {

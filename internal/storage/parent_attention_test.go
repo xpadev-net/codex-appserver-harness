@@ -409,7 +409,7 @@ func TestTaskPauseKeepsAttentionReservationUntilResume(t *testing.T) {
 	}
 }
 func TestParentAttentionMissingOrInvalidResultHasExplicitContext(t *testing.T) {
-	for _, mode := range []string{"missing", "json", "shape", "invalid"} {
+	for _, mode := range []string{"missing", "json", "shape", "invalid", "binding", "target"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			k, w, review, _ := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, nil)
@@ -424,12 +424,19 @@ func TestParentAttentionMissingOrInvalidResultHasExplicitContext(t *testing.T) {
 				if mode == "shape" {
 					raw = []byte(`{"task_id":7}`)
 				}
-				if mode == "invalid" {
+				if mode == "invalid" || mode == "binding" || mode == "target" {
 					var result contract.TaskResult
 					if err = k.Record(ctx, "task_result", task.ResultID, &result); err != nil {
 						t.Fatal(err)
 					}
-					result.Outcome = "invented"
+					switch mode {
+					case "invalid":
+						result.Outcome = "invented"
+					case "binding":
+						result.TaskID = "foreign-task"
+					case "target":
+						result.Target.ScopeRevision++
+					}
 					raw, err = json.Marshal(result)
 					if err != nil {
 						t.Fatal(err)
