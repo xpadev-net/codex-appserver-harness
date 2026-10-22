@@ -47,7 +47,7 @@ func loadArtifact(ctx context.Context, q queryer, id string) (domain.Artifact, e
 		return a, err
 	}
 	if err = json.Unmarshal(raw, &a); err != nil {
-		return a, err
+		return a, fmt.Errorf("%w: %v", ErrArtifactIntegrity, err)
 	}
 	if err = a.Validate(); err != nil {
 		return a, fmt.Errorf("%w: %v", ErrArtifactIntegrity, err)

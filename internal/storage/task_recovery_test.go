@@ -191,7 +191,7 @@ func TestWaitingTaskCannotResumeWithoutItsReservedWake(t *testing.T) {
 	}
 }
 func TestReadinessPropagatesOperationalFailuresAndClassifiesEvidence(t *testing.T) {
-	for _, condition := range []string{"db", "io", "integrity"} {
+	for _, condition := range []string{"db", "io", "integrity", "manifest_json", "manifest_type"} {
 		t.Run(condition, func(t *testing.T) {
 			ctx := context.Background()
 			k, w, tasks := readyFixture(t)
@@ -209,9 +209,20 @@ func TestReadinessPropagatesOperationalFailuresAndClassifiesEvidence(t *testing.
 				if err := os.WriteFile(filepath.Join(k.Root, "objects", a.ID), []byte("tampered evidence"), 0600); err != nil {
 					t.Fatal(err)
 				}
+			case "manifest_json", "manifest_type":
+				raw := []byte(`{"id":`)
+				if condition == "manifest_type" {
+					raw = []byte(`{"id":7}`)
+				}
+				if _, err := k.DB.Exec("UPDATE kernel_artifacts SET payload=? WHERE id=?", raw, a.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.Artifact(ctx, a.ID); !errors.Is(err, ErrArtifactIntegrity) {
+					t.Fatal(err)
+				}
 			}
 			set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()})
-			if condition == "integrity" {
+			if condition != "db" && condition != "io" {
 				if err != nil || len(set.Tasks) != 0 || set.Reason != "drain_and_block" {
 					t.Fatal(set, err)
 				}
