@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/control"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -25,11 +26,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch")
+		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch":
+	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -38,6 +39,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	root := fs.String("root", "", "absolute private kernel root")
 	session := fs.String("session", "main", "logical main session ID (init)")
 	model := fs.String("model", "", "configured model (init)")
+	runtimeFile := fs.String("runtime", "", "private runtime launch-policy JSON (run)")
 	file := fs.String("file", "", "direct request or versioned operator JSON")
 	id := fs.String("id", "", "Wave ID (inspect)")
 	after := fs.String("after", "", "last Wave/Task ID from a previous page")
@@ -65,6 +67,8 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["after"], allowed["limit"] = true, true
 	case "inspect":
 		allowed["id"], allowed["after"], allowed["after-phase"], allowed["limit"] = true, true, true, true
+	case "run":
+		allowed["runtime"] = true
 	case "watch":
 		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
@@ -91,6 +95,16 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	defer k.Close()
 	switch command {
+	case "run":
+		config, err := loadRuntime(*runtimeFile, *root, c.Model)
+		if err != nil {
+			return err
+		}
+		runtime, err := control.NewIsolatedRuntime(k, config)
+		if err != nil {
+			return err
+		}
+		return runDaemon(ctx, k, runtime, errOut)
 	case "watch":
 		return watchEvents(ctx, k, *root, *cursor, *limit, *once, out)
 	case "pause", "resume", "cancel", "steer", "interrupt":
