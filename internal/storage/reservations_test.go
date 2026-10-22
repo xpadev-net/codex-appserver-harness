@@ -28,6 +28,12 @@ func TestProcessCapacityIsReservedBeforeRPCAndReleasedOnlyByStoppingProof(t *tes
 	k, request := waveStoreFixture(t)
 	a := capacityMain(t, k, "a", t.TempDir())
 	b := capacityMain(t, k, "b", t.TempDir())
+	aRequest := request
+	aRequest.OrchestratorSessionID, aRequest.SourceID = a.ID, "a-budget"
+	wave, err := k.CreateWave(ctx, aRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a = reserveSessionFixture(t, k, a)
 	b = reserveSessionFixture(t, k, b)
 	main, err := k.SessionBinding(ctx, request.OrchestratorSessionID)
@@ -52,7 +58,7 @@ func TestProcessCapacityIsReservedBeforeRPCAndReleasedOnlyByStoppingProof(t *tes
 		t.Fatal(err)
 	}
 	run := contract.SessionRun{ID: "run", ThreadID: a.ThreadID, State: "starting", BaselineKnown: true, Started: k.clock()}
-	if err = k.ReserveSessionRun(ctx, a, sessionSnapshot(), run); err != nil {
+	if err = k.ReserveSessionRun(ctx, a, mainBudgetSnapshot(t, "capacity-input", a.ID, wave.Target()), run); err != nil {
 		t.Fatal(err)
 	}
 	run.State = "unknown"

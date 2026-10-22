@@ -162,6 +162,10 @@ func TestKernelThreadCreationAndIdentityAreExclusive(t *testing.T) {
 func TestKernelMainRebindingRequiresQuiescentAppliedRunAndSavedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	store, request := waveStoreFixture(t)
+	wave, err := store.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binding, err := store.SessionBinding(ctx, request.OrchestratorSessionID)
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +181,7 @@ func TestKernelMainRebindingRequiresQuiescentAppliedRunAndSavedSnapshot(t *testi
 	if err = store.RebindMainThread(ctx, binding, "new-main", "missing", "history unavailable"); err == nil {
 		t.Fatal("snapshotless recovery")
 	}
-	snapshot := sessionSnapshot()
+	snapshot := mainBudgetSnapshot(t, "main-rebind-input", binding.ID, wave.Target())
 	run := contract.SessionRun{ID: "main-run", ThreadID: binding.ThreadID, State: "starting", Started: time.Now(), BaselineKnown: true, BaselineTurnIDs: []string{}}
 	if err = store.ReserveSessionRun(ctx, binding, snapshot, run); err != nil {
 		t.Fatal(err)
