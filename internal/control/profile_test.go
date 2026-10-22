@@ -1,0 +1,121 @@
+package control
+
+import (
+	"os"
+	"path/filepath"
+	"syscall"
+	"testing"
+)
+
+func TestSessionProfilesSeparateThreadStoresAndRestoreApprovedConfiguration(t *testing.T) {
+	template, homeA, homeB := t.TempDir(), t.TempDir(), t.TempDir()
+	write := func(path, body string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(template, "auth.json"), "fixture-source-auth", 0600)
+	write(filepath.Join(template, "config.toml"), `model_reasoning_effort = "high"`, 0600)
+	if err := os.MkdirAll(filepath.Join(template, "skills", "approved"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(template, "skills", "approved", "run.sh"), "#!/bin/sh\nexit 0\n", 0700)
+	a, err := sessionProfile(template, homeA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(a, "auth.json"), "fixture-refreshed-session-auth", 0600)
+	write(filepath.Join(a, "config.toml"), "worker-mutated", 0600)
+	write(filepath.Join(a, "thread-history"), "private session A history", 0600)
+	b, err := sessionProfile(template, homeB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(b, "thread-history")); !os.IsNotExist(err) {
+		t.Fatal("session A history reached session B", err)
+	}
+	if _, err = sessionProfile(template, homeA); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct{ path, want string }{
+		{filepath.Join(template, "auth.json"), "fixture-source-auth"},
+		{filepath.Join(a, "auth.json"), "fixture-refreshed-session-auth"},
+		{filepath.Join(b, "auth.json"), "fixture-source-auth"},
+		{filepath.Join(a, "config.toml"), `model_reasoning_effort = "high"`},
+		{filepath.Join(b, "config.toml"), `model_reasoning_effort = "high"`},
+		{filepath.Join(a, "thread-history"), "private session A history"},
+	} {
+		data, err := os.ReadFile(check.path)
+		if err != nil || string(data) != check.want {
+			t.Fatal("profile authority/history changed", check.path, err)
+		}
+	}
+	info, err := os.Stat(filepath.Join(a, "skills", "approved", "run.sh"))
+	if err != nil || info.Mode().Perm()&0100 == 0 {
+		t.Fatal("approved executable skill lost its mode", info, err)
+	}
+	if err = os.Remove(filepath.Join(template, "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(filepath.Join(template, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sessionProfile(template, homeA); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config.toml", "skills"} {
+		if _, err = os.Lstat(filepath.Join(a, name)); !os.IsNotExist(err) {
+			t.Fatal("removed approval persisted in session profile", name, err)
+		}
+	}
+}
+
+func TestSessionProfileRejectsRedirectsSpecialFilesAndOversizeInput(t *testing.T) {
+	for _, kind := range []string{"profile-redirect", "source-redirect", "auth-oversize", "asset-redirect", "asset-fifo", "asset-oversize"} {
+		t.Run(kind, func(t *testing.T) {
+			template, home := t.TempDir(), t.TempDir()
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("unchanged"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch kind {
+			case "profile-redirect":
+				err = os.Symlink(filepath.Dir(outside), filepath.Join(home, "codex"))
+			case "source-redirect":
+				err = os.Symlink(outside, filepath.Join(template, "config.toml"))
+			case "auth-oversize":
+				err = os.WriteFile(filepath.Join(template, "auth.json"), make([]byte, (1<<20)+1), 0600)
+			default:
+				if err = os.Mkdir(filepath.Join(template, "skills"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(template, "skills", "asset")
+				switch kind {
+				case "asset-redirect":
+					err = os.Symlink(outside, path)
+				case "asset-fifo":
+					err = syscall.Mkfifo(path, 0600)
+				case "asset-oversize":
+					var file *os.File
+					file, err = os.Create(path)
+					if err == nil {
+						err = file.Truncate((16 << 20) + 1)
+						file.Close()
+					}
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sessionProfile(template, home); err == nil {
+				t.Fatal("unsafe profile was accepted")
+			}
+			data, err := os.ReadFile(outside)
+			if err != nil || string(data) != "unchanged" {
+				t.Fatal("profile preparation modified another path", err)
+			}
+		})
+	}
+}

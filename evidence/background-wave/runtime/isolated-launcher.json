@@ -1,0 +1,33 @@
+{
+  "authentication": "empty template",
+  "credential_values_recorded": false,
+  "k_workflow_acceptance": false,
+  "launcher_sha256": "13d738b10f13a37c472f499c7c6e05317311796802bdad36faa5261c7bff75c9",
+  "model_calls": 0,
+  "native_version": "codex-cli 0.163.0",
+  "observations": [
+    {
+      "group_stopped": true,
+      "initialize_nanos": 472480963,
+      "initialized": true,
+      "probe_nanos": 263147698,
+      "role": "orchestrator",
+      "rss_method": "linux_proc_tree_rss_sampled_sum",
+      "rss_sample_bytes": 109256704,
+      "stop_nanos": 10569924
+    },
+    {
+      "group_stopped": true,
+      "initialize_nanos": 501096346,
+      "initialized": true,
+      "probe_nanos": 259659679,
+      "role": "task",
+      "rss_method": "linux_proc_tree_rss_sampled_sum",
+      "rss_sample_bytes": 109355008,
+      "stop_nanos": 9692168
+    }
+  ],
+  "observed_at": "2026-10-22T13:40:41.496259012Z",
+  "stage": "Task_5 model-free process probe",
+  "thread_or_turn_started": false
+}

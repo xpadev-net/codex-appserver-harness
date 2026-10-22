@@ -1,0 +1,265 @@
+package control
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+)
+
+// This launcher is deliberately a stub. It tests runtime configuration and
+// protocol ownership, and supplies no evidence of actual OS containment.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "_isolated_fixture" {
+		isolatedFixture(os.Args[2:])
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+type isolatedObservation struct {
+	Arguments            []string `json:"arguments"`
+	Home                 string   `json:"home"`
+	CodexHome            string   `json:"codex_home"`
+	Workspace            string   `json:"workspace"`
+	GitDirectory         string   `json:"git_directory"`
+	ForbiddenEnvironment bool     `json:"forbidden_environment"`
+	Sandbox              string   `json:"sandbox"`
+	Model                string   `json:"model"`
+	Tools                []string `json:"tools"`
+}
+
+func isolatedFixture(args []string) {
+	if len(args) < 2 {
+		os.Exit(20)
+	}
+	mode := args[0]
+	args = args[1:]
+	if args[0] == "sh" {
+		if mode == "expose" {
+			os.Exit(21)
+		}
+		return
+	}
+	if len(args) == 2 && args[1] == "--version" {
+		if mode == "wrong-version" {
+			fmt.Println("codex-cli unsupported")
+			return
+		}
+		fmt.Println("codex-cli 0.163.0")
+		return
+	}
+	if len(args) < 4 || args[1] != "app-server" {
+		os.Exit(22)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		os.Exit(23)
+	}
+	home := os.Getenv("HOME")
+	obs := isolatedObservation{Arguments: args[1:], Home: home, CodexHome: os.Getenv("CODEX_HOME"), Workspace: os.Getenv("HARNESS_WORKSPACE"), GitDirectory: os.Getenv("HARNESS_GIT_DIR")}
+	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "HARNESS_CONTROLLER_SOCKET", "HARNESS_WEBHOOK_SECRET", "GIT_CONFIG_COUNT"} {
+		if _, present := os.LookupEnv(key); present {
+			obs.ForbiddenEnvironment = true
+		}
+	}
+	threadID := fmt.Sprintf("fixture-%x", sha256.Sum256([]byte(cwd)))
+	out := json.NewEncoder(os.Stdout)
+	scan := bufio.NewScanner(os.Stdin)
+	for scan.Scan() {
+		var msg codex.Message
+		if json.Unmarshal(scan.Bytes(), &msg) != nil {
+			os.Exit(24)
+		}
+		if len(msg.ID) == 0 {
+			continue
+		}
+		var reply any
+		switch msg.Method {
+		case "initialize":
+			reply = map[string]any{}
+		case "thread/start":
+			var p struct {
+				Sandbox      string `json:"sandbox"`
+				Model        string `json:"model"`
+				DynamicTools []struct {
+					Name string `json:"name"`
+				} `json:"dynamicTools"`
+			}
+			if json.Unmarshal(msg.Params, &p) != nil {
+				os.Exit(25)
+			}
+			obs.Sandbox, obs.Model = p.Sandbox, p.Model
+			for _, tool := range p.DynamicTools {
+				obs.Tools = append(obs.Tools, tool.Name)
+			}
+			data, err := json.Marshal(obs)
+			if err != nil {
+				os.Exit(26)
+			}
+			if os.WriteFile(filepath.Join(home, "observed.json"), data, 0600) != nil {
+				os.Exit(27)
+			}
+			reply = map[string]any{"thread": map[string]any{"id": threadID, "cwd": cwd, "turns": []any{}}, "model": p.Model}
+		case "turn/start":
+			reply = map[string]any{"turn": map[string]any{"id": "turn"}}
+		default:
+			os.Exit(28)
+		}
+		if out.Encode(map[string]any{"id": msg.ID, "result": reply}) != nil {
+			os.Exit(29)
+		}
+		if msg.Method == "turn/start" {
+			if out.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}}}) != nil {
+				os.Exit(30)
+			}
+		}
+	}
+}
+
+func isolatedConfig(t *testing.T, root string) IsolatedConfig {
+	t.Helper()
+	program, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := t.TempDir()
+	if err = os.Chmod(auth, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return IsolatedConfig{PrivateRoot: root, Model: "configured", CodexBinary: program, WorkerCodexHome: auth, Launcher: []string{program, "_isolated_fixture", "accept"}, LauncherContract: "argv_passthrough_v1", IsolationVerified: true}
+}
+func isolatedHome(c IsolatedConfig, id string) string {
+	key := sha256.Sum256([]byte(id))
+	return filepath.Join(c.PrivateRoot, "worker-homes", fmt.Sprintf("session-%x", key[:16]))
+}
+
+func TestIsolatedFactoryCommonParentTaskConfigurationAndNoGitWorkspace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	k, task := taskFixture(t)
+	main, err := k.SessionBinding(ctx, task.ParentSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := isolatedConfig(t, k.Root)
+	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "HARNESS_CONTROLLER_SOCKET", "HARNESS_WEBHOOK_SECRET", "GIT_CONFIG_COUNT"} {
+		t.Setenv(name, "fixture-private-value")
+	}
+	runtime, err := NewIsolatedRuntime(k, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Launcher[2] = "expose" // Constructor must freeze the approved arguments.
+	var observations []isolatedObservation
+	for _, binding := range []contract.SessionBinding{main, task} {
+		r := request(binding)
+		r.RunID = "run-" + binding.ID
+		r.Snapshot.ID = "snapshot-" + binding.ID
+		if binding.Kind == "orchestrator" {
+			raw, err := json.Marshal(map[string]any{"schema_version": 1, "session_id": binding.ID, "targets": []contract.Target{task.Target}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Snapshot.Input, r.Snapshot.Digest = raw, fmt.Sprintf("%x", sha256.Sum256(raw))
+		}
+		out, err := runtime.Execute(ctx, r)
+		if err != nil || !out.Stopped || out.Run.State != "completed" {
+			t.Fatal(out, err)
+		}
+		data, err := os.ReadFile(filepath.Join(isolatedHome(config, binding.ID), "observed.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var obs isolatedObservation
+		if err = json.Unmarshal(data, &obs); err != nil {
+			t.Fatal(err)
+		}
+		if obs.ForbiddenEnvironment || obs.Model != config.Model || obs.Sandbox != binding.Sandbox || obs.Workspace != binding.CWD || obs.CodexHome == config.WorkerCodexHome || !pathContains(obs.Home, obs.CodexHome) || !pathContains(obs.Home, obs.GitDirectory) || !slices.Contains(obs.Tools, "state_get") {
+			t.Fatal(obs)
+		}
+		observations = append(observations, obs)
+	}
+	if !reflect.DeepEqual(observations[0].Arguments, observations[1].Arguments) || observations[0].Home == observations[1].Home || observations[0].CodexHome == observations[1].CodexHome {
+		t.Fatal("role changed native runtime flags or shared its scratch home", observations)
+	}
+	assertCapacity(t, k, 0)
+}
+
+func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *testing.T) {
+	for _, kind := range []string{"unverified", "model", "contract", "expose", "wrong-version", "auth-overlap", "workspace-alias"} {
+		t.Run(kind, func(t *testing.T) {
+			k, b := taskFixture(t)
+			config := isolatedConfig(t, k.Root)
+			switch kind {
+			case "unverified":
+				config.IsolationVerified = false
+			case "model":
+				config.Model = "other"
+			case "contract":
+				config.LauncherContract = "unknown"
+			case "expose", "wrong-version":
+				config.Launcher[2] = kind
+			case "auth-overlap":
+				config.WorkerCodexHome = b.CWD
+			case "workspace-alias":
+				alias := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(b.CWD, alias); err != nil {
+					t.Fatal(err)
+				}
+				b.CWD = alias
+			}
+			// The direct factory test has no reservation; it never initializes a
+			// model. Successful admission is covered through Runtime above.
+			p, err := (IsolatedFactory{Config: config}).Open(context.Background(), Launch{Binding: b})
+			if p != nil || !errors.Is(err, ErrNotStarted) {
+				t.Fatal(p, err)
+			}
+			if _, err = os.Stat(filepath.Join(isolatedHome(config, b.ID), "observed.json")); !os.IsNotExist(err) {
+				t.Fatal("app-server started after a failed probe", err)
+			}
+		})
+	}
+}
+
+func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
+	for _, setting := range []string{"remote.origin.url", "credential.helper", "http.https://github.com/.extraheader"} {
+		t.Run(setting, func(t *testing.T) {
+			k, b := taskFixture(t)
+			for _, args := range [][]string{{"init", "--quiet", b.CWD}, {"-C", b.CWD, "config", setting, "https://fixture-private-token@github.com/owner/repository"}} {
+				if err := exec.Command("git", args...).Run(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := isolatedConfig(t, k.Root)
+			p, err := (IsolatedFactory{Config: config}).Open(context.Background(), Launch{Binding: b})
+			if p != nil || !errors.Is(err, ErrNotStarted) {
+				t.Fatal(p, err)
+			}
+			if strings.Contains(err.Error(), "fixture-private-token") {
+				t.Fatal("configuration error exposed a credential")
+			}
+		})
+	}
+}
+
+func TestIsolatedRuntimeBindsTheActualPrivateRoot(t *testing.T) {
+	k, _ := taskFixture(t)
+	c := isolatedConfig(t, t.TempDir())
+	if _, err := NewIsolatedRuntime(k, c); err == nil {
+		t.Fatal("runtime used another controller's probe root")
+	}
+}
