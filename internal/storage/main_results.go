@@ -93,6 +93,10 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 	if budget.RunID != runID || budget.SessionID != b.ID || budget.ThreadID != thread || budget.SnapshotID != snapshotID || budget.SnapshotDigest != snapshot.Digest || !slices.Equal(budget.Targets, targets) {
 		return receipt, errors.New("main scope budget binding conflict")
 	}
+	targets, err = effectiveRunTargetsTx(ctx, tx, b, runID, snapshotID, targets)
+	if err != nil {
+		return receipt, err
+	}
 	receipt.ThreadID, receipt.SnapshotID = thread, snapshotID
 	receipt.Targets = targets
 	interrupted, err := runInterruptedTx(ctx, tx, b.ID, runID)

@@ -207,3 +207,182 @@ func TestMainAcknowledgesSameRunToolPlanWithoutReplanOrWaitingForTask(t *testing
 		t.Fatal(err)
 	}
 }
+
+func renamedWaveToolPlan(prefix string) contract.PlanProposal {
+	p := storagePlanFixture()
+	for i := range p.Phases {
+		phase := &p.Phases[i]
+		phase.ID = prefix + phase.ID
+		for j := range phase.Tasks {
+			task := &phase.Tasks[j]
+			task.ID = prefix + task.ID
+			for d := range task.DependsOn {
+				task.DependsOn[d].TaskID = prefix + task.DependsOn[d].TaskID
+			}
+		}
+		for j := range phase.Completion.RequiredTaskIDs {
+			phase.Completion.RequiredTaskIDs[j] = prefix + phase.Completion.RequiredTaskIDs[j]
+		}
+	}
+	return p
+}
+func existingWaveToolFixture(t *testing.T) (*KernelStore, domain.Wave, contract.SessionBinding, contract.SessionRun, contract.InputSnapshot) {
+	t.Helper()
+	ctx := context.Background()
+	k, request := waveStoreFixture(t)
+	w, err := k.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.AdoptPlan(ctx, w.Target(), "initial", storagePlanFixture()); err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := prepareWakeSession(t, k, "main")
+	snapshot, err := k.BuildSessionInput(ctx, b.ID, []contract.Target{w.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := contract.SessionRun{ID: "existing-wave-tool-run", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if err = k.ReserveSessionRun(ctx, b, snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	return k, w, b, run, snapshot
+}
+func TestWavePlanReplanPreservesSameRunToolsReplayAndFinalScope(t *testing.T) {
+	for _, action := range []string{"wait", "plan"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, b, run, snapshot := existingWaveToolFixture(t)
+			proposal := renamedWaveToolPlan("new-")
+			call := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: proposal})
+			call.CallID = "replan"
+			gateway := contract.KernelGateway{Backend: k}
+			accepted, err := gateway.Handle(ctx, call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var replyView struct {
+				Target contract.Target `json:"target"`
+			}
+			if err = json.Unmarshal([]byte(accepted.Content), &replyView); err != nil || replyView.Target.PlanRevision != w.PlanRevision+1 {
+				t.Fatal(replyView, err)
+			}
+			current := replyView.Target
+			replay, err := gateway.Handle(ctx, call)
+			if err != nil || !reflect.DeepEqual(accepted, replay) {
+				t.Fatal("accepted replan cannot replay", replay, err)
+			}
+			waitCall := kernelCall(t, b, run, "session_wait", contract.WaitRequest{SchemaVersion: 1, Target: current, SubscriptionIDs: accepted.SubscriptionIDs})
+			waitCall.CallID = "wait"
+			if _, err = gateway.Handle(ctx, waitCall); err != nil {
+				t.Fatal("replan invalidated its own wait", err)
+			}
+			stale := kernelCall(t, b, run, "state_get", contract.StateRequest{SchemaVersion: 1, Target: w.Target()})
+			stale.CallID = "stale-new-call"
+			if _, err = gateway.Handle(ctx, stale); err == nil {
+				t.Fatal("old scope authorized a new tool call")
+			}
+			stateCall := kernelCall(t, b, run, "state_get", contract.StateRequest{SchemaVersion: 1, Target: current})
+			stateCall.CallID = "current-state"
+			if _, err = gateway.Handle(ctx, stateCall); err != nil {
+				t.Fatal(err)
+			}
+			// Original judgment bytes keep their original version label even though
+			// access is authorized through this run's newly accepted current target.
+			var input struct {
+				Context SessionContext `json:"context"`
+			}
+			if err = json.Unmarshal(snapshot.Input, &input); err != nil {
+				t.Fatal(err)
+			}
+			ref := input.Context.Waves[0].Manifest
+			read := kernelCall(t, b, run, "context_read", contract.ContextReadRequest{SchemaVersion: 1, Target: current, Section: "manifest", ReferenceID: ref.ID, Limit: 2048})
+			read.CallID = "original-input"
+			result, err := gateway.Handle(ctx, read)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var slice contract.ContextSlice
+			if err = json.Unmarshal([]byte(result.Content), &slice); err != nil || slice.Target != w.Target() || slice.Digest != ref.Digest {
+				t.Fatal("immutable input was relabeled as current state", slice, err)
+			}
+			decision := contract.MainDecision{Target: current, Action: action, Summary: "accepted replan", SubscriptionIDs: []string{}, Remaining: []string{}, Blockers: []string{}}
+			if action == "wait" {
+				decision.SubscriptionIDs = accepted.SubscriptionIDs
+			} else {
+				decision.Plan = &proposal
+			}
+			final := contract.MainResult{SchemaVersion: 1, SessionID: b.ID, Decisions: []contract.MainDecision{decision}}
+			raw, err := json.Marshal(final)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.State = "completed"
+			run.TurnID = call.TurnID
+			run.Final = string(raw)
+			if err = k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+				t.Fatal(err)
+			}
+			if err = k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			application, err := k.ApplyMainResult(ctx, b.ID, run.ID)
+			if err != nil || application.State != "applied" || !reflect.DeepEqual(application.Targets, []contract.Target{current}) {
+				t.Fatal("authorized own replan archived final result", application, err)
+			}
+			var budget RunBudgetBinding
+			if err = k.Record(ctx, "run_budget", run.ID, &budget); err != nil || !reflect.DeepEqual(budget.Targets, []contract.Target{w.Target()}) || budget.SnapshotID != snapshot.ID {
+				t.Fatal("immutable budget input was rewritten", budget, err)
+			}
+			after, err := k.Wave(ctx, w.ID)
+			if err != nil || after.MainTurns != 1 || after.Replans != 1 || after.TasksCreated != 4 {
+				t.Fatal("replan acknowledgment duplicated budgets", after, err)
+			}
+		})
+	}
+}
+func TestWavePlanTransitionDoesNotAuthorizeAnotherControllersReplan(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run, _ := existingWaveToolFixture(t)
+	gateway := contract.KernelGateway{Backend: k}
+	accepted, err := gateway.Handle(ctx, kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: renamedWaveToolPlan("own-")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view struct {
+		Target contract.Target `json:"target"`
+	}
+	json.Unmarshal([]byte(accepted.Content), &view)
+	external, err := k.AdoptPlan(ctx, view.Target, "other-controller-decision", renamedWaveToolPlan("external-"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := kernelCall(t, b, run, "state_get", contract.StateRequest{SchemaVersion: 1, Target: external.Target})
+	call.CallID = "unapproved-latest"
+	if _, err = gateway.Handle(ctx, call); err == nil {
+		t.Fatal("another decision's revision was inferred into this run")
+	}
+}
+func TestReplanTransitionRollsBackWithItsOperationRecord(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run, _ := existingWaveToolFixture(t)
+	if _, err := k.DB.Exec("CREATE TRIGGER fail_replan_operation BEFORE INSERT ON kernel_tool_operations BEGIN SELECT RAISE(ABORT,'operation failure'); END"); err != nil {
+		t.Fatal(err)
+	}
+	call := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: renamedWaveToolPlan("new-")})
+	if _, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call); err == nil {
+		t.Fatal("unrecorded transition accepted")
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='run_plan_transition'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("rolled-back scope transition survived", count, err)
+	}
+	after, err := k.Wave(ctx, w.ID)
+	if err != nil || after.Target() != w.Target() || after.Replans != 0 || after.TasksCreated != 2 {
+		t.Fatal(after, err)
+	}
+}

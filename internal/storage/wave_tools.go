@@ -15,7 +15,7 @@ import (
 // The host already registered the immutable request and trusted policy when it
 // allocated the Wave. A model request ID can only select that run's own saved
 // input; it cannot invent requests, enlarge scope, or create a nested Wave.
-func (k *KernelStore) registeredToolWaveTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, snapshotID, requestID string) (domain.Wave, error) {
+func (k *KernelStore) registeredToolWaveTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, runID, snapshotID, requestID string) (domain.Wave, error) {
 	var out domain.Wave
 	if b.Kind != "orchestrator" {
 		return out, errors.New("Wave invocation requires main")
@@ -28,6 +28,10 @@ func (k *KernelStore) registeredToolWaveTx(ctx context.Context, tx *sql.Tx, b co
 		return out, errors.New("Wave request snapshot digest conflict")
 	}
 	targets, err := mainBudgetTargets(b, snapshot)
+	if err != nil {
+		return out, err
+	}
+	targets, err = effectiveRunTargetsTx(ctx, tx, b, runID, snapshotID, targets)
 	if err != nil {
 		return out, err
 	}
@@ -99,7 +103,7 @@ func acceptedRunPlanTx(ctx context.Context, tx *sql.Tx, b contract.SessionBindin
 	if err != nil {
 		return nil, err
 	}
-	if admission.RequestTarget != target || admission.Target != target || admission.Digest != digest {
+	if admission.Target != target || admission.Digest != digest {
 		return nil, nil
 	}
 	var op kernelToolOperation
@@ -113,11 +117,11 @@ func acceptedRunPlanTx(ctx context.Context, tx *sql.Tx, b contract.SessionBindin
 	if err = json.Unmarshal(raw, &op); err != nil {
 		return nil, err
 	}
-	requestDigest, err := contentDigest(&contract.PlanWaveRequest{SchemaVersion: 1, Target: target, Plan: proposal})
+	requestDigest, err := contentDigest(&contract.PlanWaveRequest{SchemaVersion: 1, Target: admission.RequestTarget, Plan: proposal})
 	if err != nil {
 		return nil, err
 	}
-	if op.ID != admission.Key || op.SessionID != b.ID || op.RunID != runID || op.ThreadID != b.ThreadID || op.Target != target || op.ArgumentDigest != requestDigest {
+	if op.ID != admission.Key || op.SessionID != b.ID || op.RunID != runID || op.ThreadID != b.ThreadID || op.Target != admission.RequestTarget || op.ArgumentDigest != requestDigest {
 		return nil, nil
 	}
 	return &admission, nil

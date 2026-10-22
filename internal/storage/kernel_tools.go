@@ -135,15 +135,29 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 		if err = json.Unmarshal(raw, &scope); err != nil || scope.SchemaVersion != 1 || scope.SessionID != b.ID {
 			return a, b, "", errors.New("main tool requires a controller-scoped snapshot")
 		}
+		effective, err := effectiveRunTargetsTx(ctx, tx, b, call.RunID, snapshotID, scope.Targets)
+		if err != nil {
+			return a, b, "", err
+		}
 		if call.Name != "wave_create" {
 			wave, err := loadWaveToolScope(ctx, tx, target.WaveID)
 			if err != nil {
 				return a, b, "", err
 			}
-			if wave.OrchestratorSessionID != b.ID || !slices.Contains(scope.Targets, wave.Target()) {
+			if wave.OrchestratorSessionID != b.ID || !slices.Contains(effective, wave.Target()) {
 				return a, b, "", errors.New("main tool target is outside this run's Wave scope")
 			}
 			a.Target, a.Paused = wave.Target(), wave.DispatchPaused()
+			if target != wave.Target() {
+				replay, err := acceptedPlanReplayTargetTx(ctx, tx, b, call, target)
+				if err != nil {
+					return a, b, "", err
+				}
+				if replay {
+					a.Target = target
+				}
+			}
+
 			if !k.clock().Before(wave.Deadline) {
 				return a, b, "", errors.New("tool target Wave deadline exceeded")
 			}
@@ -179,7 +193,7 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 		return reply, err
 	}
 	if request, ok := command.(*contract.CreateWaveRequest); ok {
-		wave, err := k.registeredToolWaveTx(ctx, tx, b, snapshotID, request.RequestID)
+		wave, err := k.registeredToolWaveTx(ctx, tx, b, call.RunID, snapshotID, request.RequestID)
 		if err != nil {
 			return reply, err
 		}
@@ -222,6 +236,9 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 		}
 		admission, err := k.adoptPlanTx(ctx, tx, target, op.ID, r.Plan)
 		if err != nil {
+			return reply, err
+		}
+		if err = saveRunPlanTransitionTx(ctx, tx, op, admission); err != nil {
 			return reply, err
 		}
 		reply, err = k.acceptWaveToolTx(ctx, tx, op, b, admission.Target, &admission)

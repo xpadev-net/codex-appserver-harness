@@ -210,39 +210,66 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 	return state, refs, nil
 }
 
-func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, r contract.ContextReadRequest) ([]byte, string, error) {
-	var snapshotID string
-	if err := tx.QueryRowContext(ctx, "SELECT r.snapshot_id FROM kernel_sessions s JOIN kernel_run_bindings r ON r.run_id=s.active_run_id AND r.session_id=s.id WHERE s.id=? AND r.applied=0", b.ID).Scan(&snapshotID); err != nil {
-		return nil, "", err
+func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, r contract.ContextReadRequest) ([]byte, string, contract.Target, error) {
+	var snapshotID, runID string
+	if err := tx.QueryRowContext(ctx, "SELECT r.snapshot_id,r.run_id FROM kernel_sessions s JOIN kernel_run_bindings r ON r.run_id=s.active_run_id AND r.session_id=s.id WHERE s.id=? AND r.applied=0", b.ID).Scan(&snapshotID, &runID); err != nil {
+		return nil, "", contract.Target{}, err
 	}
 	var grant inputReferenceGrant
 	if err := completionRecord(ctx, tx, "session_input_references", snapshotID, &grant); err != nil {
-		return nil, "", err
+		return nil, "", contract.Target{}, err
+	}
+	var effective []contract.Target
+	var budget RunBudgetBinding
+	if b.Kind == "orchestrator" {
+		if err := completionRecord(ctx, tx, "run_budget", runID, &budget); err != nil {
+			return nil, "", contract.Target{}, err
+		}
+		if budget.SessionID != b.ID || budget.ThreadID != b.ThreadID || budget.SnapshotID != snapshotID {
+			return nil, "", contract.Target{}, errors.New("manifest scope budget conflict")
+		}
+		var err error
+		effective, err = effectiveRunTargetsTx(ctx, tx, b, runID, snapshotID, budget.Targets)
+		if err != nil {
+			return nil, "", contract.Target{}, err
+		}
 	}
 	var ref InputReference
 	found := false
 	for _, candidate := range grant.References {
-		if candidate.ID == r.ReferenceID && candidate.Target == r.Target {
+		authorized := candidate.Target == r.Target
+		if b.Kind == "orchestrator" && candidate.Target != r.Target {
+			original := false
+			for _, target := range budget.Targets {
+				original = original || target == candidate.Target
+			}
+			current := false
+			for _, target := range effective {
+				current = current || target == r.Target && target.WaveID == candidate.Target.WaveID
+			}
+			authorized = original && current
+		}
+		if candidate.ID == r.ReferenceID && authorized {
 			ref = candidate
 			found = true
 			break
 		}
 	}
 	if grant.SessionID != b.ID || !found {
-		return nil, "", errors.New("manifest not granted by the active run snapshot")
+		return nil, "", contract.Target{}, errors.New("manifest not granted by the active run snapshot")
 	}
 	if data, ok := k.inputCache.get(ref); ok {
-		return data, ref.Digest, nil
+		return data, ref.Digest, ref.Target, nil
 	}
 	var saved savedInputManifest
 	if err := completionRecord(ctx, tx, "session_input_manifest", ref.ID, &saved); err != nil {
-		return nil, "", err
+		return nil, "", contract.Target{}, err
 	}
 	if saved.SessionID != b.ID || saved.Reference != ref || int64(len(saved.Data)) != ref.Bytes || fmt.Sprintf("%x", sha256.Sum256(saved.Data)) != ref.Digest {
-		return nil, "", errors.New("input manifest integrity conflict")
+		return nil, "", contract.Target{}, errors.New("input manifest integrity conflict")
 	}
 	k.inputCache.put(ref, saved.Data)
-	return saved.Data, ref.Digest, nil
+	return saved.Data, ref.Digest, ref.Target, nil
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
