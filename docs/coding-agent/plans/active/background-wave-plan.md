@@ -373,6 +373,8 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_7: 検証・レビュー・fix PhaseとTask引き渡し
 
+- status: in_progress
+- split: Task_2/6で追加した構造化review・template展開・fresh fix/reviewへの引き渡しに続き、Kの汎用成果の受入証拠を通常コードで構成する。元criterionと選択出力の明示対応、現在planの必須Task実行、適用/停止済みの正常出力、原本digestに対応する独立read-only review、残作業なしを照合する。CheckだけではWaveを完了せず、GitHub承認も生成しない。Wave終端transactionとmain提案、PのCandidate/gate接続、CLIと実model受入は後続。
 - type: impl
 - owns:
   - internal/localreview/**
