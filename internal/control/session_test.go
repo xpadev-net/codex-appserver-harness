@@ -36,7 +36,9 @@ func taskFixture(t *testing.T) (*storage.KernelStore, contract.SessionBinding) {
 		t.Fatal(err)
 	}
 	task := contract.TaskSpec{ID: "work", Kind: "work", Instruction: "research", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{}}
-	p, err := k.AdoptPlan(ctx, w.Target(), "initial", contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "research", Tasks: []contract.TaskSpec{task}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"work"}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}})
+	other := task
+	other.ID = "other"
+	p, err := k.AdoptPlan(ctx, w.Target(), "initial", contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "research", Tasks: []contract.TaskSpec{task, other}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"work", "other"}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +74,14 @@ type fakeProcess struct {
 	queue                                     chan codex.Message
 	methods                                   []string
 	binding                                   contract.SessionBinding
+	threadID                                  string
+	manualCompletion                          bool
+	turnStarted                               chan struct{}
 	stopped, closed, initializeFail, turnFail bool
 }
 
 func fake(b contract.SessionBinding) *fakeProcess {
-	return &fakeProcess{binding: b, queue: make(chan codex.Message, 16), stopped: true}
+	return &fakeProcess{binding: b, queue: make(chan codex.Message, 16), stopped: true, threadID: "thread"}
 }
 func (p *fakeProcess) ProcessIdentity() process.Identity {
 	return process.Identity{PID: 12345, BootID: "fixture", StartTicks: 12345}
@@ -116,21 +121,27 @@ func (p *fakeProcess) Send(value any) error {
 		}
 		result = map[string]any{}
 	case "thread/start", "thread/resume":
-		result = map[string]any{"thread": map[string]any{"id": "thread", "cwd": p.binding.CWD, "turns": []any{}}, "model": p.binding.Model}
+		result = map[string]any{"thread": map[string]any{"id": p.threadID, "cwd": p.binding.CWD, "turns": []any{}}, "model": p.binding.Model}
 	case "turn/start":
 		if p.turnFail {
 			return errors.New("lost turn reply")
 		}
 		result = map[string]any{"turn": map[string]any{"id": "turn", "status": "inProgress"}}
 	case "thread/read":
-		result = map[string]any{"thread": map[string]any{"id": "thread", "cwd": p.binding.CWD, "turns": []any{map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}}}}
+		result = map[string]any{"thread": map[string]any{"id": p.threadID, "cwd": p.binding.CWD, "turns": []any{map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}}}}
 	default:
 		return fmt.Errorf("unexpected method %s", m.Method)
 	}
 	reply, _ := json.Marshal(result)
 	p.queue <- codex.Message{ID: m.ID, Result: reply}
 	if m.Method == "turn/start" {
-		params, _ := json.Marshal(map[string]any{"threadId": "thread", "turn": map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}})
+		if p.turnStarted != nil {
+			close(p.turnStarted)
+		}
+		if p.manualCompletion {
+			return nil
+		}
+		params, _ := json.Marshal(map[string]any{"threadId": p.threadID, "turn": map[string]any{"id": "turn", "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": `{"ok":true}`}}}})
 		p.queue <- codex.Message{Method: "turn/completed", Params: params}
 	}
 	return nil
