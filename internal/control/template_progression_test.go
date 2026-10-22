@@ -12,7 +12,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
-func TestKernelSourceAutomaticallyRunsSavedFixReviewWithoutMain(t *testing.T) {
+func TestKernelSourceAutomaticallyRunsSavedFixReviewWithoutIntermediateMain(t *testing.T) {
 	ctx := context.Background()
 	k, err := storage.OpenKernel(filepath.Join(t.TempDir(), "private", "state.db"))
 	if err != nil {
@@ -44,11 +44,28 @@ func TestKernelSourceAutomaticallyRunsSavedFixReviewWithoutMain(t *testing.T) {
 	var sourceErrors []error
 	source.Report = func(err error) { sourceErrors = append(sourceErrors, err) }
 	subject := ""
+	finalArtifact, finalReviewer := "", ""
+	mainLaunches := 0
 	launched := []string{}
 	sessions := map[string]bool{}
 	factory := factoryFunc(func(ctx context.Context, l Launch) (Process, error) {
-		if l.Binding.Kind != "task" {
-			return nil, fmt.Errorf("unexpected main launch: %s", l.Binding.ID)
+		if l.Binding.Kind == "orchestrator" {
+			mainLaunches++
+			current, err := k.Wave(ctx, wave.ID)
+			if err != nil {
+				return nil, err
+			}
+			proposal := contract.ArtifactAcceptance{Outputs: []string{finalArtifact}, Evaluations: []contract.ArtifactCriterionEvaluation{{CriterionID: "AC", ArtifactID: finalArtifact, ReviewTaskID: finalReviewer}}}
+			result := contract.MainResult{SchemaVersion: 1, SessionID: l.Binding.ID, Decisions: []contract.MainDecision{{Target: current.Target(), Action: "accept", Acceptance: &proposal, Summary: "all original requirements independently evaluated", SubscriptionIDs: []string{}, Remaining: []string{}, Blockers: []string{}}}}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				return nil, err
+			}
+			p := fake(l.Binding)
+			p.threadID = "final-main-thread"
+			p.turnID = l.Process.Request.RunID + "-turn"
+			p.final = string(raw)
+			return p, nil
 		}
 		if sessions[l.Binding.ID] {
 			return nil, fmt.Errorf("completed session reused: %s", l.Binding.ID)
@@ -70,8 +87,14 @@ func TestKernelSourceAutomaticallyRunsSavedFixReviewWithoutMain(t *testing.T) {
 				result.Review.Verdict = "findings"
 				result.Review.Findings = []contract.ReviewFinding{{ID: "defect", Classification: "artifact_defect", TargetDigest: subject, Basis: "original requirement", Description: "fix the report"}}
 			}
+			if task.LocalID != "review" {
+				finalReviewer = task.ID
+			}
 		} else {
 			subject = a.Digest
+			if task.Spec.Kind == "fix" {
+				finalArtifact = a.ID
+			}
 		}
 		raw, err := json.Marshal(result)
 		if err != nil {
@@ -110,15 +133,40 @@ func TestKernelSourceAutomaticallyRunsSavedFixReviewWithoutMain(t *testing.T) {
 	if fmt.Sprint(launched) != fmt.Sprint(expected) {
 		t.Fatal(launched)
 	}
+	if mainLaunches != 0 {
+		t.Fatal("ordinary template progress launched main", mainLaunches)
+	}
+	var final SessionWork
 	for i := 0; i < 3; i++ {
 		page, err := source.Ready(ctx, "", 128)
-		if err != nil || len(page.Work) != 0 {
-			t.Fatal("idle polling launched a model", page, err)
+		if err != nil || len(page.Work) != 1 || page.Work[0].Execute == nil || page.Work[0].Execute.SessionID != "main" {
+			t.Fatal("final acceptance was not selected", page, err)
 		}
+		if i > 0 && page.Work[0].Execute.RunID != final.Execute.RunID {
+			t.Fatal("polling changed final judgment run")
+		}
+		final = page.Work[0]
 	}
 	current, err := k.Wave(ctx, wave.ID)
-	if err != nil || current.MainTurns != 0 || current.Replans != 0 || current.FixRounds != 1 || current.State == domain.WaveCompleted || len(sourceErrors) != 0 {
+	if err != nil || current.MainTurns != 0 || current.Replans != 0 || current.FixRounds != 1 || current.State == domain.WaveCompleted || mainLaunches != 0 || len(sourceErrors) != 0 {
 		t.Fatal(current, err, sourceErrors)
+	}
+	outcome, err := runtime.Execute(ctx, *final.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Complete(ctx, Completion{SessionID: "main", RunID: final.Execute.RunID, Outcome: outcome}); err != nil {
+		t.Fatal(err)
+	}
+	current, err = k.Wave(ctx, wave.ID)
+	if err != nil || current.State != domain.WaveCompleted || current.MainTurns != 1 || mainLaunches != 1 || current.Replans != 0 || current.FixRounds != 1 {
+		t.Fatal(current, mainLaunches, err)
+	}
+	for i := 0; i < 3; i++ {
+		page, err := source.Ready(ctx, "", 128)
+		if err != nil || len(page.Work) != 0 || mainLaunches != 1 {
+			t.Fatal("final judgment repeated", page, mainLaunches, err)
+		}
 	}
 	assertCapacity(t, k, 0)
 }
