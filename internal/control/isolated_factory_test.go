@@ -36,6 +36,7 @@ type isolatedObservation struct {
 	CodexHome            string   `json:"codex_home"`
 	Workspace            string   `json:"workspace"`
 	GitDirectory         string   `json:"git_directory"`
+	Path                 string   `json:"path"`
 	ForbiddenEnvironment bool     `json:"forbidden_environment"`
 	Sandbox              string   `json:"sandbox"`
 	Model                string   `json:"model"`
@@ -70,7 +71,7 @@ func isolatedFixture(args []string) {
 		os.Exit(23)
 	}
 	home := os.Getenv("HOME")
-	obs := isolatedObservation{Arguments: args[1:], Home: home, CodexHome: os.Getenv("CODEX_HOME"), Workspace: os.Getenv("HARNESS_WORKSPACE"), GitDirectory: os.Getenv("HARNESS_GIT_DIR")}
+	obs := isolatedObservation{Arguments: args[1:], Home: home, CodexHome: os.Getenv("CODEX_HOME"), Workspace: os.Getenv("HARNESS_WORKSPACE"), GitDirectory: os.Getenv("HARNESS_GIT_DIR"), Path: os.Getenv("PATH")}
 	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "HARNESS_CONTROLLER_SOCKET", "HARNESS_WEBHOOK_SECRET", "GIT_CONFIG_COUNT"} {
 		if _, present := os.LookupEnv(key); present {
 			obs.ForbiddenEnvironment = true
@@ -188,7 +189,7 @@ func TestIsolatedFactoryCommonParentTaskConfigurationAndNoGitWorkspace(t *testin
 		if err = json.Unmarshal(data, &obs); err != nil {
 			t.Fatal(err)
 		}
-		if obs.ForbiddenEnvironment || obs.Model != config.Model || obs.Sandbox != binding.Sandbox || obs.Workspace != binding.CWD || obs.CodexHome == config.WorkerCodexHome || !pathContains(obs.Home, obs.CodexHome) || !pathContains(obs.Home, obs.GitDirectory) || !slices.Contains(obs.Tools, "state_get") {
+		if obs.ForbiddenEnvironment || obs.Path != isolatedPath || obs.Model != config.Model || obs.Sandbox != binding.Sandbox || obs.Workspace != binding.CWD || obs.CodexHome == config.WorkerCodexHome || !pathContains(obs.Home, obs.CodexHome) || !pathContains(obs.Home, obs.GitDirectory) || !slices.Contains(obs.Tools, "state_get") {
 			t.Fatal(obs)
 		}
 		observations = append(observations, obs)
@@ -236,7 +237,7 @@ func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *t
 }
 
 func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
-	for _, setting := range []string{"remote.origin.url", "multi-remote", "remote.origin.proxy", "credential.helper", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
+	for _, setting := range []string{"remote.origin.url", "remote.backup\u00a0mirror.url", "multi-remote", "remote.origin.proxy", "core.askpass", "core.gitproxy", "credential.helper", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
 		t.Run(setting, func(t *testing.T) {
 			k, b := taskFixture(t)
 			key := setting
@@ -283,7 +284,7 @@ func TestIsolatedFactoryRequiresApprovedExternalWorktreeMetadata(t *testing.T) {
 	defer cancel()
 	k, b := taskFixture(t)
 	repo := t.TempDir()
-	for _, args := range [][]string{{"init", "--quiet", repo}, {"-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"}, {"-C", repo, "worktree", "add", "--quiet", "--detach", b.CWD}} {
+	for _, args := range [][]string{{"init", "--quiet", repo}, {"-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "--allow-empty", "-m", "fixture"}, {"-C", repo, "worktree", "add", "--quiet", "--detach", b.CWD}} {
 		if err := exec.CommandContext(ctx, "git", args...).Run(); err != nil {
 			t.Fatal("prepare linked worktree fixture", err)
 		}
@@ -325,10 +326,66 @@ func TestIsolatedFactoryRequiresApprovedExternalWorktreeMetadata(t *testing.T) {
 	}
 }
 
+func TestIsolatedGitValidatesNestedSubmoduleConfigurations(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprint(nested), func(t *testing.T) {
+			k, b := taskFixture(t)
+			if err := exec.Command("git", "init", "--quiet", b.CWD).Run(); err != nil {
+				t.Fatal(err)
+			}
+			module := filepath.Join(b.CWD, ".git", "modules", "group", "module")
+			if err := os.MkdirAll(module, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if nested {
+				if err := os.WriteFile(filepath.Join(module, "config"), []byte("[core]\nbare=false\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				module = filepath.Join(module, "modules", "child")
+				if err := os.MkdirAll(module, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(module, "config"), []byte("[remote \"origin\"]\nurl=https://fixture-private-token@github.com/owner/repository\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			c := isolatedConfig(t, k.Root)
+			home := isolatedHome(c, b.ID)
+			if err := os.MkdirAll(home, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := isolatedGitDirectory(context.Background(), b.CWD, home, c.PrivateRoot, c.WorkerCodexHome, nil); err == nil {
+				t.Fatal("submodule credential was mounted")
+			}
+		})
+	}
+}
+
 func TestIsolatedRuntimeBindsTheActualPrivateRoot(t *testing.T) {
 	k, _ := taskFixture(t)
 	c := isolatedConfig(t, t.TempDir())
 	if _, err := NewIsolatedRuntime(k, c); err == nil {
 		t.Fatal("runtime used another controller's probe root")
+	}
+}
+
+func TestIsolatedGitProbeDoesNotExecuteInheritedPathPrograms(t *testing.T) {
+	k, b := taskFixture(t)
+	poison := t.TempDir()
+	marker := filepath.Join(poison, "executed")
+	if err := os.WriteFile(filepath.Join(poison, "git"), []byte("#!/bin/sh\n: > \""+marker+"\"\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", poison+string(os.PathListSeparator)+os.Getenv("PATH"))
+	config := isolatedConfig(t, k.Root)
+	home := isolatedHome(config, b.ID)
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := isolatedGitDirectory(context.Background(), b.CWD, home, config.PrivateRoot, config.WorkerCodexHome, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("controller executed a mutable PATH Git helper", err)
 	}
 }

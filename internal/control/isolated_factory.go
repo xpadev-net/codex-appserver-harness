@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -30,6 +31,10 @@ type IsolatedConfig struct {
 }
 
 type IsolatedFactory struct{ Config IsolatedConfig }
+
+// Host probes and the namespace launcher must not resolve helpers from mutable
+// repository/node_modules directories inherited through the controller's PATH.
+const isolatedPath = "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 // NewIsolatedRuntime binds the private-path probe policy to the actual database
 // root and freezes launcher arguments. Per-session path/version/isolation checks
@@ -154,7 +159,7 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	if err != nil {
 		return fail(err)
 	}
-	environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "HARNESS_SANDBOX_HOME=" + home, "HARNESS_LAUNCH_MODE=worker", "CODEX_HOME=" + profile, "HARNESS_WORKSPACE=" + workspace, "HARNESS_CODEX_BINARY=" + binary, "HARNESS_GIT_DIR=" + gitdir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false", "SSH_ASKPASS=/bin/false"}
+	environment := []string{"PATH=" + isolatedPath, "HOME=" + home, "HARNESS_SANDBOX_HOME=" + home, "HARNESS_LAUNCH_MODE=worker", "CODEX_HOME=" + profile, "HARNESS_WORKSPACE=" + workspace, "HARNESS_CODEX_BINARY=" + binary, "HARNESS_GIT_DIR=" + gitdir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false", "SSH_ASKPASS=/bin/false"}
 	for _, name := range []string{"OPENAI_API_KEY", "OPENAI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if value, ok := os.LookupEnv(name); ok {
 			environment = append(environment, name+"="+value)
@@ -230,11 +235,14 @@ func isolatedProbe(ctx context.Context, program string, args, environment []stri
 }
 
 func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth string, approved []string) (string, error) {
-	git, err := exec.LookPath("git")
+	git, err := existingAbsolute("/usr/bin/git")
 	if err != nil {
 		return "", err
 	}
-	environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
+	if info, err := os.Stat(git); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Mode().Perm()&0022 != 0 || pathContains(root, git) || pathContains(workspace, git) || pathContains(auth, git) {
+		return "", errors.New("trusted system Git executable required")
+	}
+	environment := []string{"PATH=" + isolatedPath, "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 	inside, err := isolatedProbe(ctx, git, []string{"rev-parse", "--is-inside-work-tree"}, environment, workspace)
 	if err != nil {
 		// A repository marker that cannot be resolved is uncertainty, never a
@@ -312,6 +320,9 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 			return "", err
 		}
 	}
+	if err = validateSubmoduleAuthentication(ctx, git, environment, workspace, filepath.Join(canonical, "modules")); err != nil {
+		return "", err
+	}
 	return canonical, nil
 }
 
@@ -320,11 +331,14 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 	// authentication configuration instead of mounting controller credentials.
 	// Host/global inputs are suppressed in environment. Omitting --local keeps
 	// extensions.worktreeConfig in the effective view, alongside common config.
-	names, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--includes", "--name-only", "--list"), environment, workspace)
+	names, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--name-only", "--list"), environment, workspace)
 	if err != nil {
 		return errors.New("Git configuration cannot be checked")
 	}
-	for _, rawName := range strings.Fields(names) {
+	for _, rawName := range strings.Split(names, "\x00") {
+		if rawName == "" {
+			continue
+		}
 		name := strings.ToLower(rawName)
 		if strings.HasPrefix(name, "http.") {
 			if split := strings.LastIndex(rawName, "."); split > len("http.") {
@@ -337,15 +351,18 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 				}
 			}
 		}
-		if strings.HasPrefix(name, "credential.") || strings.HasPrefix(name, "url.") || name == "core.sshcommand" || strings.HasPrefix(name, "remote.") && strings.HasSuffix(name, ".proxy") || strings.HasPrefix(name, "http.") && (strings.HasSuffix(name, "extraheader") || strings.HasSuffix(name, "cookiefile") || strings.HasSuffix(name, "proxy") || strings.HasSuffix(name, "sslkey") || strings.HasSuffix(name, "sslcert")) {
+		if strings.HasPrefix(name, "credential.") || strings.HasPrefix(name, "url.") || name == "core.sshcommand" || name == "core.askpass" || name == "core.gitproxy" || strings.HasPrefix(name, "remote.") && strings.HasSuffix(name, ".proxy") || strings.HasPrefix(name, "http.") && (strings.HasSuffix(name, "extraheader") || strings.HasSuffix(name, "cookiefile") || strings.HasSuffix(name, "proxy") || strings.HasSuffix(name, "sslkey") || strings.HasSuffix(name, "sslcert")) {
 			return errors.New("Git authentication settings cannot be mounted in a worker")
 		}
 		if strings.HasPrefix(name, "remote.") && (strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl")) {
-			value, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--includes", "--get-all", rawName), environment, workspace)
+			value, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--get-all", rawName), environment, workspace)
 			if err != nil {
 				return errors.New("Git remote configuration cannot be checked")
 			}
-			for _, remote := range strings.Split(strings.TrimSpace(value), "\n") {
+			for _, remote := range strings.Split(value, "\x00") {
+				if remote == "" {
+					continue
+				}
 				if strings.Contains(remote, "://") {
 					u, err := url.Parse(remote)
 					if err != nil || u.RawQuery != "" || u.Fragment != "" || u.User != nil && (u.Scheme != "ssh" || u.User.Username() != "git") {
@@ -363,4 +380,79 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 		}
 	}
 	return nil
+}
+
+// Nested submodules carry independent configs inside the mounted common
+// directory. Descend module-name containers, but skip object stores once an
+// actual Git metadata root is identified. Enumeration and nesting are bounded.
+func validateSubmoduleAuthentication(ctx context.Context, git string, environment []string, workspace, modules string) error {
+	visited := 0
+	var inspect func(string, int) error
+	inspect = func(root string, depth int) error {
+		if depth > 32 {
+			return errors.New("submodule metadata exceeds nesting bound")
+		}
+		if _, err := os.Lstat(root); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			visited++
+			if visited > 4096 {
+				return errors.New("submodule metadata exceeds entry bound")
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				return errors.New("submodule metadata must not redirect")
+			}
+			if !entry.IsDir() {
+				return nil
+			}
+			isGitRoot := false
+			for _, name := range []string{"HEAD", "config", "config.worktree"} {
+				if info, err := os.Lstat(filepath.Join(path, name)); err == nil && info.Mode().IsRegular() {
+					isGitRoot = true
+				}
+			}
+			if !isGitRoot {
+				return nil
+			}
+			configs := []string{filepath.Join(path, "config"), filepath.Join(path, "config.worktree")}
+			worktrees, err := os.ReadDir(filepath.Join(path, "worktrees"))
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if len(worktrees) > 2048 {
+				return errors.New("too many submodule worktree configurations")
+			}
+			for _, worktree := range worktrees {
+				if worktree.IsDir() {
+					configs = append(configs, filepath.Join(path, "worktrees", worktree.Name(), "config.worktree"))
+				}
+			}
+			for _, config := range configs {
+				info, err := os.Lstat(config)
+				if os.IsNotExist(err) {
+					continue
+				}
+				if err != nil || !info.Mode().IsRegular() {
+					return errors.New("submodule config must be regular")
+				}
+				if err = validateGitAuthentication(ctx, git, environment, workspace, []string{"--file", config}); err != nil {
+					return err
+				}
+			}
+			if err := inspect(filepath.Join(path, "modules"), depth+1); err != nil {
+				return err
+			}
+			return filepath.SkipDir
+		})
+	}
+	return inspect(modules, 0)
 }
