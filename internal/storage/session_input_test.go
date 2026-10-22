@@ -532,7 +532,7 @@ func TestTemplateFixInputRetainsItsFindingAssignment(t *testing.T) {
 		}
 		found[assignment.TemplateID] = assignment.FindingIDs
 	}
-	if !reflect.DeepEqual(found[first.ID], []string{"finding-0"}) || !reflect.DeepEqual(found[second.ID], []string{"finding-1"}) {
+	if !reflect.DeepEqual(found[first.ID], []string{source.ID + ":finding-0"}) || !reflect.DeepEqual(found[second.ID], []string{source.ID + ":finding-1"}) {
 		t.Fatal("template responsibilities lost", found)
 	}
 }
