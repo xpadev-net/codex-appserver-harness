@@ -191,6 +191,11 @@ func (o *owner) Call(ctx context.Context, method string, params, result any) err
 			return err
 		}
 	}
+	if method == "turn/start" {
+		if err = o.store.CheckManagedRunSend(ctx, o.id); err != nil {
+			return err
+		}
+	}
 	return rpc.Call(ctx, method, params, result)
 }
 func (o *owner) Next(ctx context.Context) (codex.Message, error) {

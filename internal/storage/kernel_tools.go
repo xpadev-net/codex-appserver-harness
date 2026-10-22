@@ -71,6 +71,10 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 	if call.RunID == "" || active != call.RunID || stopped != 0 || call.ThreadID != b.ThreadID {
 		return a, b, "", errors.New("tool source is not the active prepared session/run")
 	}
+	interrupted, err := runInterruptedTx(ctx, tx, b.ID, call.RunID)
+	if err != nil || interrupted {
+		return a, b, "", errors.Join(ErrInterruptionHeld, err)
+	}
 	if err = tx.QueryRowContext(ctx, "SELECT session_id,thread_id,state,snapshot_id,process_stopped,applied FROM kernel_run_bindings WHERE run_id=?", call.RunID).Scan(&runSession, &runThread, &state, &snapshotID, &stopped, &applied); err != nil {
 		return a, b, "", err
 	}

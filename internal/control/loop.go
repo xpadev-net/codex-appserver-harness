@@ -124,7 +124,7 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 	results := make(chan Completion, 1)
 	abandon := make(chan struct{})
 	flights := map[string]*flight{}
-	var workCursor, processCursor, waveCursor, actionCursor, directionCursor string
+	var workCursor, processCursor, waveCursor, actionCursor, directionCursor, interruptCursor string
 	// Always scan on startup. Loss of every hint merely defers a scan to ticker.
 	scan := true
 	defer func() {
@@ -167,6 +167,9 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 			}
 			e = l.maintain(ctx, flights, &processCursor, &actionCursor)
 			if e != nil {
+				l.report(e)
+			}
+			if e = l.maintainInterrupts(ctx, flights, &interruptCursor); e != nil {
 				l.report(e)
 			}
 			finish()
@@ -378,58 +381,86 @@ func (l *Loop) maintainAction(ctx context.Context, a storage.DeadlineAction, fli
 	if a.Kind != "stop_process" || a.OperationID != "" {
 		return nil
 	} // runner/Git use a separate operation adapter.
-	k := l.Runtime.Store
-	if f := flights[a.SessionID]; f != nil && f.completion == nil {
-		_, run, _ := f.work.identity()
-		var ownerID string
-		err := k.Record(ctx, "managed_run_claim", run, &ownerID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if err == nil {
-			p, e := k.ManagedProcess(ctx, ownerID)
-			if e != nil {
-				return e
-			}
-			if p.Request.Binding.ID == a.SessionID && p.PreparationID == a.PreparationID {
-				f.cancel()
-			}
-		}
+	if err := l.requestPreparationStop(ctx, a, flights); err != nil {
+		return err
 	}
-	if f := flights[a.SessionID]; f == nil || f.completion != nil {
-		var ownerID string
-		e := k.Record(ctx, "managed_preparation", a.PreparationID, &ownerID)
-		if e != nil && !errors.Is(e, sql.ErrNoRows) {
-			return e
-		}
-		if e == nil {
-			p, e := k.ManagedProcess(ctx, ownerID)
-			if e != nil {
-				return e
-			}
-			if p.PreparationID != a.PreparationID || p.Request.Binding.ID != a.SessionID || (a.RunID != "" && p.Request.RunID != a.RunID) {
-				return errors.New("deadline managed source conflict")
-			}
-			if p.State != "stopped" && p.Identity.Valid() {
-				if e = process.RequestGroupStop(p.Identity); e != nil {
-					return e
-				}
-				alive, e := process.GroupAlive(p.Identity)
-				if e != nil {
-					return e
-				}
-				if !alive {
-					if e = k.ConfirmManagedProcessStopped(ctx, storage.ManagedStopProof{OwnerID: ownerID, Disposition: "group_stopped", Identity: p.Identity}); e != nil {
-						return e
-					}
-				}
-			}
-		}
-	}
-	if err := k.CompleteDeadlineAction(ctx, a.ID); err != nil && !errors.Is(err, storage.ErrDeadlineHeld) {
+	if err := l.Runtime.Store.CompleteDeadlineAction(ctx, a.ID); err != nil && !errors.Is(err, storage.ErrDeadlineHeld) {
 		return err
 	}
 	return nil
+}
+
+// Deadline and explicit operator stops share the physical generation fence.
+func (l *Loop) requestPreparationStop(ctx context.Context, a storage.DeadlineAction, flights map[string]*flight) error {
+	k := l.Runtime.Store
+	var ownerID string
+	err := k.Record(ctx, "managed_preparation", a.PreparationID, &ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} // Legacy stop proof is reconciled separately.
+	if err != nil {
+		return err
+	}
+	p, err := k.ManagedProcess(ctx, ownerID)
+	if err != nil {
+		return err
+	}
+	if p.PreparationID != a.PreparationID || p.Request.Binding.ID != a.SessionID || a.RunID != "" && p.Request.RunID != a.RunID {
+		return errors.New("process stop source conflict")
+	}
+	if f := flights[a.SessionID]; f != nil && f.completion == nil {
+		_, run, _ := f.work.identity()
+		b, err := k.SessionBinding(ctx, a.SessionID)
+		if err != nil {
+			return err
+		}
+		// Read-only recovery reuses a run ID with a NEW preparation. A historical
+		// intent must never cancel that newer local owner merely by matching run ID.
+		if b.PreparationID == a.PreparationID && run == p.Request.RunID && (a.RunID == "" || run == a.RunID) {
+			f.cancel()
+			return nil
+		}
+	}
+	if p.State == "stopped" {
+		return nil
+	}
+	if p.State == "admitted" {
+		return k.ConfirmManagedProcessStopped(ctx, storage.ManagedStopProof{OwnerID: ownerID, Disposition: "not_started"})
+	}
+	if !p.Identity.Valid() {
+		return process.ErrUnconfirmed
+	}
+	if err = process.RequestGroupStop(p.Identity); err != nil {
+		return err
+	}
+	alive, err := process.GroupAlive(p.Identity)
+	if err != nil {
+		return err
+	}
+	if alive {
+		return nil
+	}
+	return k.ConfirmManagedProcessStopped(ctx, storage.ManagedStopProof{OwnerID: ownerID, Disposition: "group_stopped", Identity: p.Identity})
+}
+
+func (l *Loop) maintainInterrupts(ctx context.Context, flights map[string]*flight, cursor *string) error {
+	page, err := l.Runtime.Store.PendingSessionInterrupts(ctx, *cursor, 128)
+	if err != nil {
+		return err
+	}
+	*cursor = page.NextAfter
+	var errs []error
+	for _, i := range page.Interruptions {
+		a := storage.DeadlineAction{Kind: "stop_process", SessionID: i.Request.SessionID, PreparationID: i.Request.PreparationID, RunID: i.Request.RunID}
+		if err := l.requestPreparationStop(ctx, a, flights); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := l.Runtime.Store.CompleteSessionInterrupt(ctx, i.ID); err != nil && !errors.Is(err, storage.ErrInterruptionHeld) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Archived completion callbacks do not own physical quiescence. Scan the durable

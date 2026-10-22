@@ -85,6 +85,15 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		receipt.State = task.State
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 	}
+	interrupted, err := runInterruptedTx(ctx, tx, b.ID, runID)
+	if err != nil {
+		return receipt, err
+	}
+	if interrupted {
+		task.State, task.Reason = contract.TaskBlocked, "operator_interrupt: completed history retained without accepting success"
+		receipt.State, receipt.Reason, receipt.Archived = task.State, task.Reason, true
+		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
+	}
 	var result contract.TaskResult
 	validationErr := contract.DecodeStrict([]byte(run.Final), &result)
 	if validationErr == nil {
@@ -331,6 +340,11 @@ func (k *KernelStore) finishTaskResultTx(ctx context.Context, tx *sql.Tx, b cont
 		return err
 	}
 	wakeOutcome := "archived"
+	if receipt.Archived && receipt.State == contract.TaskBlocked {
+		// Interrupted work did not consume its inbox successfully. Keep inputs
+		// pending; a blocked Task still requires explicit recovery authorization.
+		wakeOutcome = "failed"
+	}
 	if result != nil && !receipt.Archived {
 		wakeOutcome = "applied"
 	}
