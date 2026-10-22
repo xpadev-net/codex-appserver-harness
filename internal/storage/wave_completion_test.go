@@ -289,11 +289,7 @@ func TestMainAcceptanceWaitsForRunnerAndGitReservationRelease(t *testing.T) {
 			if _, err = k.ApplyMainResult(ctx, b.ID, run.ID); !errors.Is(err, ErrMainResultHeld) {
 				t.Fatal("unknown response permitted completion", err)
 			}
-			disposition := "completed"
-			if kind == "runner" {
-				disposition = "process_stopped"
-			}
-			releaseOperation(t, k, request.ID, disposition)
+			releaseOperation(t, k, request.ID, "process_stopped")
 			result, err := k.ApplyMainResult(ctx, b.ID, run.ID)
 			if err != nil || len(result.Completions) != 1 {
 				t.Fatal(result, err)
