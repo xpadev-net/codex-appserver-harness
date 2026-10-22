@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -135,5 +136,36 @@ func TestWaveCLIEntrypointCreatesAndInspectsDirectRequestWithoutExternalPrograms
 	var page storage.WaveSummaryPage
 	if err = json.Unmarshal(invoke("list", "--root", root), &page); err != nil || len(page.Waves) != 1 {
 		t.Fatal(page, err)
+	}
+}
+
+func TestWaveCLIConcurrentProcessesShareOneInitialization(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "kernel")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	jobs := make([]*exec.Cmd, 6)
+	outputs := make([]bytes.Buffer, 6)
+	for i := range jobs {
+		jobs[i] = exec.CommandContext(ctx, executable, "wave", "init", "--root", root, "--model", "unavailable-model")
+		jobs[i].Env = []string{"PATH=/nonexistent"}
+		jobs[i].Stdout = &outputs[i]
+		jobs[i].Stderr = &outputs[i]
+		if err = jobs[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, job := range jobs {
+		if err = job.Wait(); err != nil {
+			t.Fatal("concurrent CLI init", i, err, outputs[i].String())
+		}
+	}
+	command := exec.CommandContext(ctx, executable, "wave", "list", "--root", root)
+	command.Env = []string{"PATH=/nonexistent"}
+	if raw, err := command.CombinedOutput(); err != nil {
+		t.Fatal("successful init left unusable root", err, string(raw))
 	}
 }

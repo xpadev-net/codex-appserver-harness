@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,5 +164,77 @@ func TestKernelCLIRejectsPolicyInjectionUnsafeConfigurationAndAccidentalInitiali
 	k.Close()
 	if _, err = cliCall(t, "init", "--root", existing, "--model", "unavailable-model"); err == nil {
 		t.Fatal("init adopted an unconfigured database")
+	}
+}
+
+func TestKernelCLIConcurrentInitializationPreservesSuccessfulConfiguration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kernel")
+	errorsCh := make(chan error, 12)
+	for i := 0; i < 12; i++ {
+		go func() {
+			var out, errOut bytes.Buffer
+			errorsCh <- Run(context.Background(), []string{"init", "--root", root, "--model", "unavailable-model"}, &out, &errOut)
+		}()
+	}
+	for i := 0; i < 12; i++ {
+		if err := <-errorsCh; err != nil {
+			t.Fatal("concurrent init failed", err)
+		}
+	}
+	if _, err := cliCall(t, "list", "--root", root); err != nil {
+		t.Fatal("successful init lost configuration", err)
+	}
+	if _, err := loadConfig(root); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestKernelCLIOpenWaitsForInitializerAndReadNeverCreatesSchema(t *testing.T) {
+	root := cliRoot(t)
+	unlock, err := lockRoot(context.Background(), root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err = openKernel(ctx, root); !errors.Is(err, context.Canceled) {
+		unlock()
+		t.Fatal("opener ignored init lock/cancellation", err)
+	}
+	unlock()
+	if err = os.Remove(filepath.Join(root, databaseName)); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, databaseName), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cliCall(t, "list", "--root", root); err == nil {
+		t.Fatal("read initialized an incomplete database")
+	}
+	info, err := os.Stat(filepath.Join(root, databaseName))
+	if err != nil || info.Size() != 0 {
+		t.Fatal("read changed empty database", info, err)
+	}
+	if _, err = cliCall(t, "init", "--root", root, "--model", "unavailable-model"); err == nil {
+		t.Fatal("init silently reset previously initialized missing state")
+	}
+	partial := filepath.Join(t.TempDir(), "partial")
+	if err = os.Mkdir(partial, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{SchemaVersion: ConfigVersion, SessionID: "main", Model: "unavailable-model", Limits: domain.DefaultKernelLimits()}
+	if _, err = writeConfigExclusive(partial, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(partial, databaseName), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cliCall(t, "list", "--root", partial); err == nil {
+		t.Fatal("read initialized partial setup")
+	}
+	if _, err = cliCall(t, "init", "--root", partial, "--model", "unavailable-model"); err != nil {
+		t.Fatal("explicit init could not resume unfinished first setup", err)
+	}
+	if _, err = cliCall(t, "list", "--root", partial); err != nil {
+		t.Fatal(err)
 	}
 }

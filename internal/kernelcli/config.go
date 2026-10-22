@@ -21,6 +21,7 @@ import (
 const ConfigVersion = 2
 const configName = "kernel.json"
 const databaseName = "state.db"
+const initializedName = ".kernel-initialized"
 
 // K configuration intentionally needs no GitHub repository or write identity.
 type Config struct {
@@ -94,6 +95,11 @@ func loadConfig(root string) (Config, error) {
 	return c, c.validate()
 }
 func openKernel(ctx context.Context, root string) (*storage.KernelStore, Config, error) {
+	unlock, err := lockRoot(ctx, root, false)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	defer unlock()
 	c, err := loadConfig(root)
 	if err != nil {
 		return nil, c, err
@@ -106,7 +112,7 @@ func openKernel(ctx context.Context, root string) (*storage.KernelStore, Config,
 	if !info.Mode().IsRegular() {
 		return nil, c, errors.New("existing kernel database required")
 	}
-	k, err := storage.OpenKernel(path)
+	k, err := storage.OpenExistingKernel(path)
 	if err != nil {
 		return nil, c, err
 	}
@@ -193,6 +199,11 @@ func initialize(ctx context.Context, root, session, model string) (Config, error
 	if info.Mode().Perm()&0077 != 0 {
 		return c, errors.New("private kernel root required")
 	}
+	unlock, err := lockRoot(ctx, root, true)
+	if err != nil {
+		return c, err
+	}
+	defer unlock()
 	if _, err := os.Lstat(filepath.Join(root, configName)); errors.Is(err, os.ErrNotExist) {
 		if _, dbErr := os.Lstat(filepath.Join(root, databaseName)); dbErr == nil {
 			return c, errors.New("existing database without kernel configuration requires explicit recovery/migration")
@@ -206,7 +217,14 @@ func initialize(ctx context.Context, root, session, model string) (Config, error
 	if err != nil {
 		return c, err
 	}
-	k, err := storage.OpenKernel(filepath.Join(root, databaseName))
+	var k *storage.KernelStore
+	if _, markerErr := os.Lstat(filepath.Join(root, initializedName)); markerErr == nil {
+		k, err = storage.OpenExistingKernel(filepath.Join(root, databaseName))
+	} else if errors.Is(markerErr, os.ErrNotExist) {
+		k, err = storage.OpenKernel(filepath.Join(root, databaseName))
+	} else {
+		return c, markerErr
+	}
 	if err != nil {
 		if created {
 			_ = os.Remove(filepath.Join(root, configName))
@@ -224,5 +242,36 @@ func initialize(ctx context.Context, root, session, model string) (Config, error
 	if _, err = k.CreateOrchestrator(ctx, session, model, workspace, "read-only"); err != nil {
 		return c, err
 	}
+	if err = markInitialized(root); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// This receipt prevents a later init from replacing missing/corrupt state with
+// a new empty DB. Only a never-completed first setup may create schema.
+func markInitialized(root string) error {
+	f, err := os.OpenFile(filepath.Join(root, initializedName), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = f.WriteString("kernel-schema-2\n"); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	directory, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }

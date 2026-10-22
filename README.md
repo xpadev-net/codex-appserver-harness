@@ -31,7 +31,7 @@ JSON
 ./harness wave inspect --root /absolute/private/kernel --id WAVE_ID --limit 64
 ```
 
-`kernel.json`は設定version 2、`state.db`はkernel schema 2です。同じinit/request IDは同じ内容で再実行でき、設定や依頼を上書きしません。既存の未設定DB・v1 DBは明示移行/復旧が必要です。既存のPR用rootと混ぜずに使用してください。
+`kernel.json`は設定version 2、`state.db`はkernel schema 2です。同じinit/request IDは同じ内容で再実行でき、設定や依頼を上書きしません。同じrootへの初期化はprocess間で排他し、初期化済みDBの欠損時は再作成しません。既存の未設定DB・v1 DBは明示移行/復旧が必要です。既存のPR用rootと混ぜずに使用してください。
 
 この4コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 

@@ -27,13 +27,21 @@ type KernelStore struct {
 	ControllerArtifactBytes int64
 }
 
-func OpenKernel(path string) (*KernelStore, error) {
+func OpenKernel(path string) (*KernelStore, error) { return openKernel(path, true) }
+
+// OpenExistingKernel rejects missing/empty databases and never creates schema.
+// CLI/daemon openers use this after explicit initialization or migration.
+func OpenExistingKernel(path string) (*KernelStore, error) { return openKernel(path, false) }
+
+func openKernel(path string, create bool) (*KernelStore, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("kernel DB requires an absolute private path")
 	}
 	root := filepath.Dir(path)
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, err
+	if create {
+		if err := os.MkdirAll(root, 0700); err != nil {
+			return nil, err
+		}
 	}
 	info, err := os.Stat(root)
 	if err != nil || info.Mode().Perm()&0077 != 0 {
@@ -57,10 +65,17 @@ func OpenKernel(path string) (*KernelStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !create && inspected != KernelSchemaVersion {
+		return nil, errors.New("existing initialized kernel database required")
+	}
 	if inspected != 0 && inspected != KernelSchemaVersion {
 		return nil, fmt.Errorf("kernel refuses schema %d; explicit offline migration required", inspected)
 	}
-	dsn, err := sqliteFileDSN(path, "rwc")
+	mode := "rwc"
+	if !create {
+		mode = "rw"
+	}
+	dsn, err := sqliteFileDSN(path, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +96,9 @@ func OpenKernel(path string) (*KernelStore, error) {
 	}
 	if version != 0 && version != KernelSchemaVersion {
 		return nil, fmt.Errorf("kernel refuses schema %d; explicit offline migration required", version)
+	}
+	if version == 0 && !create {
+		return nil, errors.New("kernel initialization is incomplete")
 	}
 	if version == 0 {
 		tx, err := db.Begin()
