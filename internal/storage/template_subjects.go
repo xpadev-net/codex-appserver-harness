@@ -35,7 +35,7 @@ type templateReviewTarget struct {
 
 func (k *KernelStore) TemplateSubject(ctx context.Context, taskID string) (TemplateSubject, error) {
 	var subject TemplateSubject
-	err := k.Record(ctx, "template_subject", taskID, &subject)
+	err := taskEvidenceRecord(ctx, k.DB, "template_subject", taskID, &subject)
 	return subject, err
 }
 func (k *KernelStore) recordTemplateSubjectTx(ctx context.Context, tx *sql.Tx, task domain.Task, result contract.TaskResult) error {
@@ -43,7 +43,7 @@ func (k *KernelStore) recordTemplateSubjectTx(ctx context.Context, tx *sql.Tx, t
 		return nil
 	}
 	var input templateTaskInput
-	err := completionRecord(ctx, tx, "template_task_context", task.ID, &input)
+	err := taskEvidenceRecord(ctx, tx, "template_task_context", task.ID, &input)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -51,12 +51,12 @@ func (k *KernelStore) recordTemplateSubjectTx(ctx context.Context, tx *sql.Tx, t
 		return err
 	}
 	if len(input.InputDigest) != 64 || strings.Trim(input.InputDigest, "0123456789abcdef") != "" {
-		return errors.New("template subject context is missing its original digest")
+		return fmt.Errorf("%w: template subject context is missing its original digest", ErrTaskEvidence)
 	}
 	subject := TemplateSubject{TaskID: task.ID, Target: task.Target(), ResultID: task.ResultID, State: "ambiguous", ReplacedDigest: input.InputDigest}
 	var previous TemplateSubject
 	if input.PreviousFixLocalID != "" {
-		if err = completionRecord(ctx, tx, "template_subject", structureID("task-", task.WaveID, input.PreviousFixLocalID), &previous); err != nil {
+		if err = taskEvidenceRecord(ctx, tx, "template_subject", structureID("task-", task.WaveID, input.PreviousFixLocalID), &previous); err != nil {
 			return err
 		}
 	}
@@ -102,13 +102,13 @@ func (k *KernelStore) templateReviewSubjectTx(ctx context.Context, tx *sql.Tx, t
 		return nil, nil
 	}
 	var input templateTaskInput
-	err := completionRecord(ctx, tx, "template_task_context", task.ID, &input)
+	err := taskEvidenceRecord(ctx, tx, "template_task_context", task.ID, &input)
 	if errors.Is(err, sql.ErrNoRows) {
 		if task.Spec.Kind == "fix" {
 			return nil, nil
 		}
 		var lineage templateReviewLineage
-		if err = completionRecord(ctx, tx, "template_review_lineage", task.ID, &lineage); errors.Is(err, sql.ErrNoRows) {
+		if err = taskEvidenceRecord(ctx, tx, "template_review_lineage", task.ID, &lineage); errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		if err != nil {
@@ -118,6 +118,9 @@ func (k *KernelStore) templateReviewSubjectTx(ctx context.Context, tx *sql.Tx, t
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(input.InputDigest) != 64 || strings.Trim(input.InputDigest, "0123456789abcdef") != "" {
+		return nil, fmt.Errorf("%w: template subject context is missing its original digest", ErrTaskEvidence)
 	}
 	sourceLocal := input.InputTaskLocalID
 	if task.Spec.Kind == "fix" {
@@ -134,14 +137,14 @@ func (k *KernelStore) templateReviewSubjectTx(ctx context.Context, tx *sql.Tx, t
 		return nil, err
 	}
 	var subject TemplateSubject
-	if err = completionRecord(ctx, tx, "template_subject", source.ID, &subject); err != nil {
+	if err = taskEvidenceRecord(ctx, tx, "template_subject", source.ID, &subject); err != nil {
 		return nil, err
 	}
 	if subject.State != "bound" {
 		return nil, fmt.Errorf("%w: replacement subject is %s", ErrTemplateNeedsMain, subject.State)
 	}
 	if source.State != contract.TaskCompleted || source.ResultID != subject.ResultID || subject.TaskID != source.ID || subject.Target != source.Target() || source.ScopeRevision != task.ScopeRevision || source.PolicyRevision != task.PolicyRevision {
-		return nil, errors.New("replacement subject/result binding conflict")
+		return nil, fmt.Errorf("%w: replacement subject/result binding conflict", ErrTaskEvidence)
 	}
 	wave, err := loadWave(ctx, tx, task.WaveID)
 	if err != nil {
@@ -156,14 +159,14 @@ func (k *KernelStore) templateReviewSubjectTx(ctx context.Context, tx *sql.Tx, t
 		found = found || id == subject.ArtifactID
 	}
 	if !found {
-		return nil, errors.New("replacement is not a bound output Artifact")
+		return nil, fmt.Errorf("%w: replacement is not a bound output Artifact", ErrTaskEvidence)
 	}
 	a, err := k.currentArtifactTx(ctx, tx, wave, subject.ArtifactID)
 	if err != nil {
 		return nil, err
 	}
 	if a.Digest != subject.Digest || subject.Digest == subject.ReplacedDigest {
-		return nil, errors.New("replacement subject digest conflict")
+		return nil, fmt.Errorf("%w: replacement subject digest conflict", ErrTaskEvidence)
 	}
 	return &subject, nil
 }

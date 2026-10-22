@@ -94,6 +94,7 @@ func TestReadyPhaseSelectsIndependentTasksAndAdvancesOnlyOnAllSuccess(t *testing
 	if err != nil || !reflect.DeepEqual(readyIDs(recovery), []string{tasks[0].ID}) {
 		t.Fatal(recovery, err)
 	}
+	authorizeRecoveryFixture(t, k, b.TaskID, "a-retry", sessionSnapshot())
 	// Complete the authorized second Attempt on the existing unfinished thread.
 	b = prepareWakeSession(t, k, b.ID)
 	a := mustImport(t, k, ArtifactImport{SessionID: b.ID, Target: b.Target, Key: "retry-output", Kind: "report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: b.TaskID}}, "recovered observation")
@@ -153,7 +154,9 @@ func TestReadyDrainAndBlockHoldsNewTasksButAllowsExplicitRecovery(t *testing.T) 
 				t.Fatal("drain bypassed during dispatch")
 			}
 			var count int
-			k.DB.QueryRow("SELECT count(*) FROM kernel_run_bindings WHERE run_id='forbidden'").Scan(&count)
+			if err = k.DB.QueryRow("SELECT count(*) FROM kernel_run_bindings WHERE run_id='forbidden'").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
 			if count != 0 {
 				t.Fatal("rejected dispatch changed ledger")
 			}
@@ -199,7 +202,9 @@ func TestReadyRechecksPhaseAndInputAtDispatchWithoutChargingRun(t *testing.T) {
 		t.Fatal("future Phase began before all_success")
 	}
 	var count int
-	k.DB.QueryRow("SELECT count(*) FROM kernel_budget_ledger WHERE operation_key='future'").Scan(&count)
+	if err := k.DB.QueryRow("SELECT count(*) FROM kernel_budget_ledger WHERE operation_key='future'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
 	if count != 0 {
 		t.Fatal("future Phase charged a run")
 	}

@@ -216,6 +216,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 		if err = k.checkTaskDispatchTx(ctx, tx, task); err != nil {
 			return err
 		}
+		if err = consumeTaskRecoveryTx(ctx, tx, task, snapshot, run); err != nil {
+			return err
+		}
 		subject, err := k.templateReviewSubjectTx(ctx, tx, task)
 		if err != nil {
 			return err

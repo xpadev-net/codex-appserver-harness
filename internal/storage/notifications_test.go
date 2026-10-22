@@ -513,6 +513,7 @@ func TestOldNonterminalIntentObservesCurrentSnapshotWithCorrectBoundary(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	authorizeRecoveryFixture(t, store, b.TaskID, "second", sessionSnapshot())
 	b = reserveSessionFixture(t, store, b)
 	result.Outcome, result.Blockers = "result", nil
 	recordAndStopTaskResult(t, store, b, "second", result)

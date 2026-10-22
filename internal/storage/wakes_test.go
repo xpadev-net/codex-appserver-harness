@@ -259,6 +259,7 @@ func TestWakeUnknownStartHoldsInputsButStoppedFailureMayRetry(t *testing.T) {
 				if err != nil || retry.Intent.RunID == run.ID {
 					t.Fatal(retry, err)
 				}
+				authorizeRecoveryFixture(t, k, b.TaskID, retry.Intent.RunID, retry.Snapshot)
 				b = prepareWakeSession(t, k, b.ID)
 				if err = k.ReserveSessionRun(ctx, b, retry.Snapshot, wakeStartingRun(k, b, retry)); err != nil {
 					t.Fatal(err)

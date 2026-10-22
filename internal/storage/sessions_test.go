@@ -101,6 +101,7 @@ func TestKernelSessionReservesSnapshotsRunsAndPreservesUnknownStarts(t *testing.
 	}
 	another = run
 	another.ID, another.State, another.TurnID, another.Final = "retry", "starting", "", ""
+	authorizeRecoveryFixture(t, store, current.TaskID, another.ID, snapshot)
 	current = reserveSessionFixture(t, store, current)
 	if err = store.ReserveSessionRun(ctx, current, snapshot, another); err != nil {
 		t.Fatal(err)

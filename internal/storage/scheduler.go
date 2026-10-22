@@ -38,6 +38,10 @@ type ReadySet struct {
 	Held    []TaskHold      `json:"held"`
 }
 
+func readinessHoldError(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrTaskBinding) || errors.Is(err, ErrArtifactUnavailable) || errors.Is(err, ErrArtifactScope) || errors.Is(err, ErrArtifactIntegrity) || errors.Is(err, ErrTemplateNeedsMain)
+}
+
 // ReadyTasks evaluates only saved facts. Selection reserves no process or run;
 // dispatch must check the same conditions again in its write transaction.
 func (k *KernelStore) ReadyTasks(ctx context.Context, request ReadyRequest) (ReadySet, error) {
@@ -121,6 +125,9 @@ func (k *KernelStore) ReadyTasks(ctx context.Context, request ReadyRequest) (Rea
 		}
 		input, err := k.taskInputDigestTx(ctx, tx, wave, task.Spec)
 		if err != nil {
+			if !readinessHoldError(err) {
+				return set, err
+			}
 			set.Held = append(set.Held, TaskHold{task.ID, "input_unavailable"})
 			continue
 		}
@@ -207,6 +214,9 @@ func (k *KernelStore) activePhaseTx(ctx context.Context, tx *sql.Tx, target cont
 			tasks = append(tasks, task)
 			if task.State == contract.TaskCompleted {
 				if _, err = k.completedTaskResultTx(ctx, tx, wave, task); err != nil {
+					if !readinessHoldError(err) {
+						return set, nil, false, err
+					}
 					complete, drain = false, true
 				}
 			} else {
@@ -272,16 +282,28 @@ func (k *KernelStore) taskReadyTx(ctx context.Context, tx *sql.Tx, wave domain.W
 			return "", err
 		}
 		if err = currentObservedTaskTx(ctx, tx, wave, prior); err != nil {
+			if !readinessHoldError(err) {
+				return "", err
+			}
 			return "dependency_unavailable", nil
 		}
 		if _, err = k.completedTaskResultTx(ctx, tx, wave, prior); err != nil {
+			if !readinessHoldError(err) {
+				return "", err
+			}
 			return "dependency_unavailable", nil
 		}
 	}
 	if _, err := k.templateReviewSubjectTx(ctx, tx, task); err != nil {
+		if !readinessHoldError(err) {
+			return "", err
+		}
 		return "template_subject_unavailable", nil
 	}
 	if _, err := k.taskInputDigestTx(ctx, tx, wave, task.Spec); err != nil {
+		if !readinessHoldError(err) {
+			return "", err
+		}
 		return "input_unavailable", nil
 	}
 	return "", nil
