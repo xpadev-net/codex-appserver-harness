@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
 	"github.com/xpadev-net/codex-appserver-harness/internal/policy"
 	"github.com/xpadev-net/codex-appserver-harness/internal/review"
@@ -25,35 +26,36 @@ type Limits struct {
 	ReviewSeconds  int   `json:"review_seconds"`
 }
 type Config struct {
-	LauncherContract  string               `json:"launcher_contract"`
-	CIRefMode         string               `json:"ci_ref_mode"`
-	PriorityLabels    []string             `json:"priority_labels"`
-	LogRetentionDays  int                  `json:"log_retention_days"`
-	MaxArtifactBytes  int64                `json:"max_artifact_bytes"`
-	Version           int                  `json:"version"`
-	Repository        string               `json:"repository"`
-	RepositoryID      int64                `json:"repository_id"`
-	RepositoryPath    string               `json:"repository_path"`
-	BaseBranch        string               `json:"base_branch"`
-	Root              string               `json:"root"`
-	Model             string               `json:"model"`
-	CodexBinary       string               `json:"codex_binary"`
-	WorkerCodexHome   string               `json:"worker_codex_home"`
-	Launcher          []string             `json:"launcher"`
-	IsolationVerified bool                 `json:"isolation_verified"`
-	CapabilitiesPath  string               `json:"capabilities_path"`
-	ReadyLabel        string               `json:"ready_label"`
-	HoldLabel         string               `json:"hold_label"`
-	Verification      policy.Verification  `json:"verification"`
-	VerifierPaths     []string             `json:"verifier_paths"`
-	Review            review.Policy        `json:"review"`
-	ReviewTrigger     string               `json:"review_trigger"`
-	RequesterID       int64                `json:"requester_id"`
-	RequiredChecks    []gate.RequiredCheck `json:"required_checks"`
-	MergeEnabled      bool                 `json:"merge_enabled"`
-	MergeMethod       string               `json:"merge_method"`
-	Limits            Limits               `json:"limits"`
-	ReconcileSeconds  int                  `json:"reconcile_seconds"`
+	LauncherContract  string                  `json:"launcher_contract"`
+	CIRefMode         string                  `json:"ci_ref_mode"`
+	PriorityLabels    []string                `json:"priority_labels"`
+	LogRetentionDays  int                     `json:"log_retention_days"`
+	MaxArtifactBytes  int64                   `json:"max_artifact_bytes"`
+	Version           int                     `json:"version"`
+	Repository        string                  `json:"repository"`
+	RepositoryID      int64                   `json:"repository_id"`
+	RepositoryPath    string                  `json:"repository_path"`
+	BaseBranch        string                  `json:"base_branch"`
+	Root              string                  `json:"root"`
+	Model             string                  `json:"model"`
+	CodexBinary       string                  `json:"codex_binary"`
+	WorkerCodexHome   string                  `json:"worker_codex_home"`
+	Launcher          []string                `json:"launcher"`
+	IsolationVerified bool                    `json:"isolation_verified"`
+	CapabilitiesPath  string                  `json:"capabilities_path"`
+	ReadyLabel        string                  `json:"ready_label"`
+	HoldLabel         string                  `json:"hold_label"`
+	Verification      policy.Verification     `json:"verification"`
+	VerifierPaths     []string                `json:"verifier_paths"`
+	Review            review.Policy           `json:"review"`
+	ReviewTrigger     string                  `json:"review_trigger"`
+	RequesterID       int64                   `json:"requester_id"`
+	RequiredChecks    []gate.RequiredCheck    `json:"required_checks"`
+	MergeEnabled      bool                    `json:"merge_enabled"`
+	MergeMethod       string                  `json:"merge_method"`
+	Limits            Limits                  `json:"limits"`
+	Execution         *domain.ExecutionLimits `json:"execution,omitempty"`
+	ReconcileSeconds  int                     `json:"reconcile_seconds"`
 }
 
 func Load(path string) (Config, error) {
@@ -99,6 +101,11 @@ func within(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 func (c Config) Validate() error {
+	if c.Execution != nil {
+		if err := c.Execution.Validate(); err != nil {
+			return err
+		}
+	}
 	if within(c.Root, c.WorkerCodexHome) || within(c.WorkerCodexHome, c.Root) || within(c.WorkerCodexHome, c.RepositoryPath) || within(c.Root, c.CodexBinary) || within(c.WorkerCodexHome, c.CodexBinary) || (len(c.Launcher) > 0 && (within(c.Root, c.Launcher[0]) || within(c.WorkerCodexHome, c.Launcher[0]))) {
 		return errors.New("trusted executable/auth/state paths must not overlap worker-writable paths")
 	}
@@ -118,6 +125,15 @@ func (c Config) Validate() error {
 		return errors.New("verifier path policy required")
 	}
 	return c.Verification.Validate()
+}
+
+// Existing trusted configuration keeps serial capacities unless the operator
+// explicitly saves the new execution settings. New init writes new defaults.
+func (c Config) ExecutionLimits() domain.ExecutionLimits {
+	if c.Execution == nil {
+		return domain.LegacyExecutionLimits()
+	}
+	return *c.Execution
 }
 
 func canonical(path string) string {

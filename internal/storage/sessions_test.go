@@ -150,7 +150,7 @@ func TestKernelThreadCreationAndIdentityAreExclusive(t *testing.T) {
 	if err = store.BindSessionThread(ctx, current, "replacement"); err == nil {
 		t.Fatal("normal binding changed thread")
 	}
-	second, err := store.CreateOrchestrator(ctx, "other", first.Model, first.CWD, first.Sandbox)
+	second, err := store.CreateOrchestrator(ctx, "other", first.Model, t.TempDir(), first.Sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}

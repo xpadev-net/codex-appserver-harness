@@ -235,6 +235,9 @@ func (k *KernelStore) createWaveTx(ctx context.Context, tx *sql.Tx, request Wave
 	if err = request.Policy.Limits.Validate(); err != nil {
 		return domain.Wave{}, err
 	}
+	if err = checkWaveCapacityTx(ctx, tx); err != nil {
+		return domain.Wave{}, err
+	}
 	id, err = opaqueID("wave-")
 	if err != nil {
 		return domain.Wave{}, err
