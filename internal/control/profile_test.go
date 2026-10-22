@@ -72,7 +72,7 @@ func TestSessionProfilesSeparateThreadStoresAndRestoreApprovedConfiguration(t *t
 }
 
 func TestSessionProfileRejectsRedirectsSpecialFilesAndOversizeInput(t *testing.T) {
-	for _, kind := range []string{"profile-redirect", "source-redirect", "auth-oversize", "asset-redirect", "asset-fifo", "asset-oversize"} {
+	for _, kind := range []string{"profile-redirect", "source-redirect", "auth-oversize", "stored-auth-oversize", "stored-auth-fifo", "stored-auth-redirect", "asset-redirect", "asset-fifo", "asset-oversize"} {
 		t.Run(kind, func(t *testing.T) {
 			template, home := t.TempDir(), t.TempDir()
 			outside := filepath.Join(t.TempDir(), "outside")
@@ -87,6 +87,20 @@ func TestSessionProfileRejectsRedirectsSpecialFilesAndOversizeInput(t *testing.T
 				err = os.Symlink(outside, filepath.Join(template, "config.toml"))
 			case "auth-oversize":
 				err = os.WriteFile(filepath.Join(template, "auth.json"), make([]byte, (1<<20)+1), 0600)
+			case "stored-auth-oversize", "stored-auth-fifo", "stored-auth-redirect":
+				profile := filepath.Join(home, "codex")
+				if err = os.Mkdir(profile, 0700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(profile, "auth.json")
+				switch kind {
+				case "stored-auth-oversize":
+					err = os.WriteFile(path, make([]byte, (1<<20)+1), 0600)
+				case "stored-auth-fifo":
+					err = syscall.Mkfifo(path, 0600)
+				case "stored-auth-redirect":
+					err = os.Symlink(outside, path)
+				}
 			default:
 				if err = os.Mkdir(filepath.Join(template, "skills"), 0700); err != nil {
 					t.Fatal(err)

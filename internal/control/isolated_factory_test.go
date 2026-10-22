@@ -236,11 +236,33 @@ func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *t
 }
 
 func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
-	for _, setting := range []string{"remote.origin.url", "credential.helper", "http.https://github.com/.extraheader"} {
+	for _, setting := range []string{"remote.origin.url", "multi-remote", "remote.origin.proxy", "credential.helper", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
 		t.Run(setting, func(t *testing.T) {
 			k, b := taskFixture(t)
-			for _, args := range [][]string{{"init", "--quiet", b.CWD}, {"-C", b.CWD, "config", setting, "https://fixture-private-token@github.com/owner/repository"}} {
+			key := setting
+			if setting == "multi-remote" {
+				key = "remote.origin.url"
+			}
+			if setting == "worktree-header" {
+				key = "http.https://github.com/.extraheader"
+			}
+			value := "https://fixture-private-token@github.com/owner/repository"
+			if strings.HasSuffix(setting, ".sslverify") {
+				value = "false"
+			}
+			commands := [][]string{{"init", "--quiet", b.CWD}}
+			if setting == "worktree-header" {
+				commands = append(commands, []string{"-C", b.CWD, "config", "extensions.worktreeConfig", "true"}, []string{"-C", b.CWD, "config", "--worktree", key, "fixture-private-token"})
+			} else {
+				commands = append(commands, []string{"-C", b.CWD, "config", key, value})
+			}
+			for _, args := range commands {
 				if err := exec.Command("git", args...).Run(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if setting == "multi-remote" {
+				if err := exec.Command("git", "-C", b.CWD, "config", "--add", key, "https://github.com/owner/repository").Run(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -253,6 +275,53 @@ func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
 				t.Fatal("configuration error exposed a credential")
 			}
 		})
+	}
+}
+
+func TestIsolatedFactoryRequiresApprovedExternalWorktreeMetadata(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	k, b := taskFixture(t)
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "--quiet", repo}, {"-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"}, {"-C", repo, "worktree", "add", "--quiet", "--detach", b.CWD}} {
+		if err := exec.CommandContext(ctx, "git", args...).Run(); err != nil {
+			t.Fatal("prepare linked worktree fixture", err)
+		}
+	}
+	config := isolatedConfig(t, k.Root)
+	if p, err := (IsolatedFactory{Config: config}).Open(ctx, Launch{Binding: b}); p != nil || !errors.Is(err, ErrNotStarted) {
+		t.Fatal("unapproved external Git metadata was mounted", p, err)
+	}
+	approved := filepath.Join(repo, ".git")
+	config.GitDirectories = []string{approved}
+	runtime, err := NewIsolatedRuntime(k, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.GitDirectories[0] = t.TempDir() // Freeze approval as well as argv.
+	out, err := runtime.Execute(ctx, request(b))
+	if err != nil || !out.Stopped {
+		t.Fatal(out, err)
+	}
+	data, err := os.ReadFile(filepath.Join(isolatedHome(config, b.ID), "observed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed isolatedObservation
+	if err = json.Unmarshal(data, &observed); err != nil || observed.GitDirectory != approved {
+		t.Fatal(observed, err)
+	}
+	// Other worktree configs are physically readable in the same common mount,
+	// even when they are not effective settings for the current checkout.
+	other := filepath.Join(approved, "worktrees", "other", "config.worktree")
+	if err = os.MkdirAll(filepath.Dir(other), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(other, []byte("[http \"https://github.com/\"]\nextraHeader = fixture-private-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = isolatedGitDirectory(ctx, b.CWD, isolatedHome(config, b.ID), config.PrivateRoot, config.WorkerCodexHome, []string{approved}); err == nil || !strings.Contains(err.Error(), "authentication") {
+		t.Fatal("another worktree's credential was exposed", err)
 	}
 }
 

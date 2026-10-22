@@ -26,6 +26,7 @@ type IsolatedConfig struct {
 	Launcher          []string
 	LauncherContract  string
 	IsolationVerified bool
+	GitDirectories    []string // Canonical approved metadata roots for linked worktrees.
 }
 
 type IsolatedFactory struct{ Config IsolatedConfig }
@@ -43,6 +44,7 @@ func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runt
 	}
 	config.PrivateRoot = root
 	config.Launcher = append([]string{}, config.Launcher...)
+	config.GitDirectories = append([]string{}, config.GitDirectories...)
 	return Runtime{Store: store, Factory: IsolatedFactory{Config: config}}, nil
 }
 
@@ -148,7 +150,7 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	if err != nil {
 		return fail(err)
 	}
-	gitdir, err := isolatedGitDirectory(ctx, workspace, home, root, auth)
+	gitdir, err := isolatedGitDirectory(ctx, workspace, home, root, auth, c.GitDirectories)
 	if err != nil {
 		return fail(err)
 	}
@@ -227,7 +229,7 @@ func isolatedProbe(ctx context.Context, program string, args, environment []stri
 	return string(output.bytes), nil
 }
 
-func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth string) (string, error) {
+func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth string, approved []string) (string, error) {
 	git, err := exec.LookPath("git")
 	if err != nil {
 		return "", err
@@ -267,37 +269,98 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 	if pathContains(auth, canonical) || pathContains(canonical, root) || pathContains(canonical, auth) || pathContains(root, canonical) && !pathContains(workspace, canonical) {
 		return "", errors.New("Git metadata overlaps private controller/auth paths")
 	}
-	// Read-only metadata is still readable by the worker. Refuse effective Git
-	// authentication configuration instead of mounting controller credentials.
-	names, err := isolatedProbe(ctx, git, []string{"config", "--local", "--includes", "--name-only", "--list"}, environment, workspace)
-	if err != nil {
-		return "", errors.New("Git configuration cannot be checked")
-	}
-	for _, rawName := range strings.Fields(names) {
-		name := strings.ToLower(rawName)
-		if strings.HasPrefix(name, "credential.") || strings.HasPrefix(name, "url.") || name == "core.sshcommand" || strings.HasPrefix(name, "http.") && (strings.HasSuffix(name, "extraheader") || strings.HasSuffix(name, "cookiefile") || strings.HasSuffix(name, "proxy") || strings.HasSuffix(name, "sslkey") || strings.HasSuffix(name, "sslcert")) {
-			return "", errors.New("Git authentication settings cannot be mounted in a worker")
+	if !pathContains(workspace, canonical) {
+		matched := false
+		for _, path := range approved {
+			resolved, err := existingAbsolute(path)
+			if err != nil || resolved != path {
+				return "", errors.New("approved Git metadata must use a canonical existing path")
+			}
+			matched = matched || resolved == canonical
 		}
-		if strings.HasPrefix(name, "remote.") && (strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl")) {
-			value, err := isolatedProbe(ctx, git, []string{"config", "--local", "--includes", "--get", rawName}, environment, workspace)
-			if err != nil {
-				return "", errors.New("Git remote configuration cannot be checked")
-			}
-			remote := strings.TrimSpace(value)
-			if strings.Contains(remote, "://") {
-				u, err := url.Parse(remote)
-				if err != nil || u.RawQuery != "" || u.Fragment != "" || u.User != nil && (u.Scheme != "ssh" || u.User.Username() != "git") {
-					return "", errors.New("Git remote carries unsupported inline authentication")
-				}
-				if u.User != nil {
-					if _, set := u.User.Password(); set {
-						return "", errors.New("Git remote carries inline authentication")
-					}
-				}
-			} else if user, _, found := strings.Cut(remote, "@"); found && user != "git" {
-				return "", errors.New("Git remote carries unsupported inline authentication")
-			}
+		if !matched {
+			return "", errors.New("external Git metadata has not been approved for this runtime")
+		}
+	}
+	if err = validateGitAuthentication(ctx, git, environment, workspace, nil); err != nil {
+		return "", err
+	}
+	// The entire approved common directory is readable, including configuration
+	// belonging to OTHER linked worktrees. Validate those standard files too.
+	configs := []string{filepath.Join(canonical, "config"), filepath.Join(canonical, "config.worktree")}
+	entries, err := os.ReadDir(filepath.Join(canonical, "worktrees"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", errors.New("linked worktree configuration cannot be inspected")
+	}
+	if len(entries) > 2048 {
+		return "", errors.New("too many linked worktree configurations")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			configs = append(configs, filepath.Join(canonical, "worktrees", entry.Name(), "config.worktree"))
+		}
+	}
+	for _, path := range configs {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() {
+			return "", errors.New("Git configuration must be regular")
+		}
+		if err = validateGitAuthentication(ctx, git, environment, workspace, []string{"--file", path}); err != nil {
+			return "", err
 		}
 	}
 	return canonical, nil
+}
+
+func validateGitAuthentication(ctx context.Context, git string, environment []string, workspace string, selector []string) error {
+	// Read-only metadata is still readable by the worker. Refuse effective Git
+	// authentication configuration instead of mounting controller credentials.
+	// Host/global inputs are suppressed in environment. Omitting --local keeps
+	// extensions.worktreeConfig in the effective view, alongside common config.
+	names, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--includes", "--name-only", "--list"), environment, workspace)
+	if err != nil {
+		return errors.New("Git configuration cannot be checked")
+	}
+	for _, rawName := range strings.Fields(names) {
+		name := strings.ToLower(rawName)
+		if strings.HasPrefix(name, "http.") {
+			if split := strings.LastIndex(rawName, "."); split > len("http.") {
+				scope := rawName[len("http."):split]
+				if strings.Contains(scope, "://") {
+					u, err := url.Parse(scope)
+					if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+						return errors.New("Git HTTP scope carries inline authentication")
+					}
+				}
+			}
+		}
+		if strings.HasPrefix(name, "credential.") || strings.HasPrefix(name, "url.") || name == "core.sshcommand" || strings.HasPrefix(name, "remote.") && strings.HasSuffix(name, ".proxy") || strings.HasPrefix(name, "http.") && (strings.HasSuffix(name, "extraheader") || strings.HasSuffix(name, "cookiefile") || strings.HasSuffix(name, "proxy") || strings.HasSuffix(name, "sslkey") || strings.HasSuffix(name, "sslcert")) {
+			return errors.New("Git authentication settings cannot be mounted in a worker")
+		}
+		if strings.HasPrefix(name, "remote.") && (strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl")) {
+			value, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--includes", "--get-all", rawName), environment, workspace)
+			if err != nil {
+				return errors.New("Git remote configuration cannot be checked")
+			}
+			for _, remote := range strings.Split(strings.TrimSpace(value), "\n") {
+				if strings.Contains(remote, "://") {
+					u, err := url.Parse(remote)
+					if err != nil || u.RawQuery != "" || u.Fragment != "" || u.User != nil && (u.Scheme != "ssh" || u.User.Username() != "git") {
+						return errors.New("Git remote carries unsupported inline authentication")
+					}
+					if u.User != nil {
+						if _, set := u.User.Password(); set {
+							return errors.New("Git remote carries inline authentication")
+						}
+					}
+				} else if user, _, found := strings.Cut(remote, "@"); found && user != "git" {
+					return errors.New("Git remote carries unsupported inline authentication")
+				}
+			}
+		}
+	}
+	return nil
 }

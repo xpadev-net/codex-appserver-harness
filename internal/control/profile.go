@@ -32,10 +32,17 @@ func sessionProfile(template, home string) (string, error) {
 		return "", err
 	}
 	defer destination.Close()
-	for _, name := range []string{"auth.json", "config.toml"} {
+	if info, err := destination.Lstat("auth.json"); err == nil {
+		if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			return "", errors.New("session authentication must be regular and bounded")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	for _, name := range []string{"auth.json", "config.toml", "AGENTS.md", "AGENTS.override.md"} {
 		info, err := source.Lstat(name)
 		if os.IsNotExist(err) {
-			if name == "config.toml" {
+			if name != "auth.json" {
 				if err = destination.RemoveAll(name); err != nil {
 					return "", err
 				}
