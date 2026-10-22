@@ -264,3 +264,44 @@ func TestMainAcceptanceMultipleWavesCommitOrRollbackTogether(t *testing.T) {
 		})
 	}
 }
+
+func TestMainAcceptanceWaitsForRunnerAndGitReservationRelease(t *testing.T) {
+	for _, kind := range []string{"runner", "git"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, b, run, _ := waveCompletionFixture(t)
+			request := OperationCapacityRequest{ID: "outstanding-" + kind, Kind: kind, SessionID: b.ID, Target: w.Target()}
+			if kind == "runner" {
+				request.Worktree = t.TempDir()
+			} else {
+				request.Repository = operationRepo(t)
+			}
+			reservation, err := k.ReserveOperationCapacity(ctx, request)
+			if err != nil || reservation.State != "held" {
+				t.Fatal(reservation, err)
+			}
+			if _, err = k.ApplyMainResult(ctx, b.ID, run.ID); !errors.Is(err, ErrMainResultHeld) {
+				t.Fatal("unsettled operation permitted completion", err)
+			}
+			if err = k.ReleaseOperationCapacity(ctx, OperationReleaseProof{OperationID: request.ID, ProofID: "unknown-response", Disposition: "unknown", Reason: "outcome is still unresolved"}); err == nil {
+				t.Fatal("unknown operation released")
+			}
+			if _, err = k.ApplyMainResult(ctx, b.ID, run.ID); !errors.Is(err, ErrMainResultHeld) {
+				t.Fatal("unknown response permitted completion", err)
+			}
+			disposition := "completed"
+			if kind == "runner" {
+				disposition = "process_stopped"
+			}
+			releaseOperation(t, k, request.ID, disposition)
+			result, err := k.ApplyMainResult(ctx, b.ID, run.ID)
+			if err != nil || len(result.Completions) != 1 {
+				t.Fatal(result, err)
+			}
+			actual, err := k.Wave(ctx, w.ID)
+			if err != nil || actual.State != domain.WaveCompleted || actual.MainTurns != 1 {
+				t.Fatal(actual, err)
+			}
+		})
+	}
+}

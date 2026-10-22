@@ -37,6 +37,15 @@ func (k *KernelStore) completeGenericWaveTx(ctx context.Context, tx *sql.Tx, b c
 	if pending {
 		return completion, ErrMainResultHeld
 	}
+	// Capacity intents also own runner/Git/external operations. Their trusted
+	// release port requires terminal/stop proof; a live or unknown reservation
+	// cannot be hidden by completing the Wave before its deadline stops it.
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE wave_id=? AND state<>'released')", wave.ID).Scan(&pending); err != nil {
+		return completion, err
+	}
+	if pending {
+		return completion, ErrMainResultHeld
+	}
 	var creating, stopped bool
 	if err = tx.QueryRowContext(ctx, "SELECT creating,process_stopped FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating, &stopped); err != nil {
 		return completion, err
