@@ -328,13 +328,17 @@ func TestInterruptMainUsesCommittedSameRunReplanTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := managedReserve(t, k, b, "main-owner", "main-run", "execute")
-	managedStart(t, k, owner, 88)
-	b = managedBind(t, k, owner)
 	snapshot, err := k.BuildSessionInput(ctx, b.ID, []contract.Target{w.Target()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	b, err = k.SessionBinding(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := managedReserve(t, k, b, "main-owner", "main-run", "execute")
+	managedStart(t, k, owner, 88)
+	b = managedBind(t, k, owner)
 	run := contract.SessionRun{ID: "main-run", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true}
 	if err = k.ReserveSessionRun(ctx, b, snapshot, run); err != nil {
 		t.Fatal(err)
@@ -367,8 +371,11 @@ func TestInterruptMainUsesCommittedSameRunReplanTarget(t *testing.T) {
 	if replay, err := k.RequestSessionInterrupt(ctx, stop); err != nil || !reflect.DeepEqual(replay, accepted) {
 		t.Fatal(replay, err)
 	}
-	if err = k.CheckManagedRunSend(ctx, "main-owner"); !errors.Is(err, ErrInterruptionHeld) {
+	if err = k.CheckManagedRunSend(ctx, "main-owner"); err == nil {
 		t.Fatal("interruption did not fence active run", err)
+	}
+	if interrupted, err := k.RunWasInterrupted(ctx, b.ID, run.ID); err != nil || !interrupted {
+		t.Fatal("interruption lost logical run fence", interrupted, err)
 	}
 	managedCapacity(t, k, 1)
 	var budget RunBudgetBinding
