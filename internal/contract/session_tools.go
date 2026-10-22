@@ -333,8 +333,9 @@ type SendMessageRequest struct {
 	ReplyTo       string `json:"reply_to"`
 }
 type ToolInvocation struct {
-	SessionID, ThreadID, TurnID, CallID, Name, Namespace string
-	Arguments                                            json.RawMessage
+	// RunID is supplied by the trusted process owner, never tool arguments.
+	SessionID, RunID, ThreadID, TurnID, CallID, Name, Namespace string
+	Arguments                                                   json.RawMessage
 }
 type SessionAuthority struct {
 	SessionID, ThreadID, ActiveTurnID, Kind, TaskID, ParentSessionID string

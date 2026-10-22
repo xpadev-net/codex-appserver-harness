@@ -10,7 +10,7 @@
 
 大きな依頼をWave→Phase→Taskへ分解し、各Taskに使い捨てsessionを割り当てる。Taskは親と共通runtimeを使ってWave呼び出しだけを禁止し、実行中は親子メッセージと通知で再開する。完了後のfix・再レビューは新Task/sessionへ引き渡す。
 本計画を含むPRの範囲は要件・差分・設計・計画の改訂までとする。
-Task_0/1/2は完了（PR #54〜60）。Task_3はPR #61で永続購読・終端通知を実装し、PR #62で親子受信箱を実装し、wake/run入力bindingを実装中。runtimeの自動分岐・品質gate接続はTask_7で行う。Task_4〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
+Task_0/1/2は完了（PR #54〜60）。Task_3はPR #61で永続購読・終端通知を実装し、PR #62で親子受信箱を実装し、PR #63でwake/run入力bindingを実装し、kernel toolの永続認可・操作履歴を実装中。runtimeの自動分岐・品質gate接続はTask_7で行う。Task_4〜13はpending。依頼者の実装・逐次PR/review/mergeの指示に基づいて進める。Task_1〜10の既存番号は保持し、役割分割は下記の追跡表へ記録する。
 
 ## Definition of Done
 
@@ -184,7 +184,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_3: 永続購読・親子受信箱・再開intent
 
 - status: in_progress
-- split: PR #61でKのTask/Wave終端購読・原子的通知fanout・登録時snapshot・再照合・配送ackを実装。PR #62で親子受信箱・双方向自動購読・返信とmessage通知を追加。次のPRでwake/run binding・Task判断適用と未起動intentの復旧を追加する。kernel tool認可・登録とmain判断は後続へ接続し、Task_3全体完了とはしない。
+- split: PR #61でKのTask/Wave終端購読・原子的通知fanout・登録時snapshot・再照合・配送ackを実装。PR #62で親子受信箱・双方向自動購読・返信とmessage通知を追加。PR #63でwake/run binding・Task判断適用・未起動intent復旧を追加。次のPRでkernel tool認可・操作履歴・RPC handlerを接続する。Artifact公開transactionとmain判断は後続へ接続し、Task_3全体完了とはしない。
 - type: impl
 - owns:
   - internal/storage/notifications.go
@@ -198,6 +198,9 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/storage/messages_test.go
   - internal/service/messages.go
   - internal/service/messages_test.go
+  - internal/storage/kernel_tools.go、internal/storage/kernel_tools_test.go（SQLite内の認可・操作transaction）
+  - internal/worker/kernel_tools.go、internal/worker/kernel_tools_test.go（信頼されたprocess識別子でのRPC登録port）
+  - internal/contract/session_tools.go（内部run識別子。公開tool引数には追加しない）
   - internal/service/kernel_tools.go
   - internal/service/kernel_tools_test.go
 - depends_on: [Task_1, Task_2]
