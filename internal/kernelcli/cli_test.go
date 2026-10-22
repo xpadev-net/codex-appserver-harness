@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,5 +237,65 @@ func TestKernelCLIOpenWaitsForInitializerAndReadNeverCreatesSchema(t *testing.T)
 	}
 	if _, err = cliCall(t, "list", "--root", partial); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestKernelCLIConcurrentCreateDeduplicatesAndPreservesDistinctRequests(t *testing.T) {
+	for _, same := range []bool{true, false} {
+		t.Run(map[bool]string{true: "same_request", false: "distinct_requests"}[same], func(t *testing.T) {
+			root := cliRoot(t)
+			body := strings.Repeat("research evidence ", 120000)
+			count := 6
+			if !same {
+				count = 2
+			}
+			files := make([]string, count)
+			for i := range files {
+				id := "shared"
+				if !same {
+					id = fmt.Sprint("request-", i)
+				}
+				files[i] = requestFile(t, id, body)
+			}
+			type result struct {
+				raw []byte
+				err error
+			}
+			results := make(chan result, 6)
+			for _, file := range files {
+				go func(file string) {
+					var out, errOut bytes.Buffer
+					err := Run(context.Background(), []string{"create", "--root", root, "--file", file}, &out, &errOut)
+					results <- result{out.Bytes(), err}
+				}(file)
+			}
+			ids := map[string]bool{}
+			for range files {
+				r := <-results
+				if r.err != nil {
+					t.Fatal("valid concurrent submission failed", r.err)
+				}
+				var w domain.Wave
+				if err := json.Unmarshal(r.raw, &w); err != nil {
+					t.Fatal(err)
+				}
+				ids[w.ID] = true
+			}
+			want := len(files)
+			if same {
+				want = 1
+			}
+			if len(ids) != want {
+				t.Fatal("concurrent requests lost or duplicated", ids)
+			}
+			raw, err := cliCall(t, "list", "--root", root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var page storage.WaveSummaryPage
+			if err = json.Unmarshal(raw, &page); err != nil || len(page.Waves) != want {
+				t.Fatal(page, err)
+			}
+		})
 	}
 }

@@ -78,7 +78,13 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if r.SchemaVersion != 1 || r.RequestID == "" || len(r.RequestID) > contract.MaxInline {
 			return errors.New("versioned stable request_id required")
 		}
-		w, err := k.CreateWave(ctx, storage.WaveRequest{OrchestratorSessionID: c.SessionID, Source: "direct", SourceID: r.RequestID, OriginalRequest: r.Request, Criteria: r.Criteria, Policy: domain.WavePolicy{Revision: 1, Stage: "K", Limits: c.Limits}})
+		request := storage.WaveRequest{OrchestratorSessionID: c.SessionID, Source: "direct", SourceID: r.RequestID, OriginalRequest: r.Request, Criteria: r.Criteria, Policy: domain.WavePolicy{Revision: 1, Stage: "K", Limits: c.Limits}}
+		var w domain.Wave
+		err = retryMutation(ctx, func(attempt context.Context) error {
+			var createErr error
+			w, createErr = k.CreateWave(attempt, request)
+			return createErr
+		})
 		if err != nil {
 			return err
 		}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,5 +168,53 @@ func TestWaveCLIConcurrentProcessesShareOneInitialization(t *testing.T) {
 	command.Env = []string{"PATH=/nonexistent"}
 	if raw, err := command.CombinedOutput(); err != nil {
 		t.Fatal("successful init left unusable root", err, string(raw))
+	}
+}
+
+func TestWaveCLIConcurrentCreateProcessesCommitOneStableRequest(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "kernel")
+	command := exec.Command(executable, "wave", "init", "--root", root, "--model", "unavailable-model")
+	command.Env = []string{"PATH=/nonexistent"}
+	if raw, err := command.CombinedOutput(); err != nil {
+		t.Fatal(err, string(raw))
+	}
+	request := filepath.Join(t.TempDir(), "request.json")
+	raw, err := json.Marshal(map[string]any{"schema_version": 1, "request_id": "concurrent", "request": strings.Repeat("observed evidence ", 120000), "criteria": []map[string]string{{"id": "AC", "requirement": "traceable output"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(request, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	jobs := make([]*exec.Cmd, 4)
+	outputs := make([]bytes.Buffer, 4)
+	for i := range jobs {
+		jobs[i] = exec.CommandContext(ctx, executable, "wave", "create", "--root", root, "--file", request)
+		jobs[i].Env = []string{"PATH=/nonexistent"}
+		jobs[i].Stdout = &outputs[i]
+		jobs[i].Stderr = &outputs[i]
+		if err = jobs[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := ""
+	for i, job := range jobs {
+		if err = job.Wait(); err != nil {
+			t.Fatal("concurrent create", i, err, outputs[i].String())
+		}
+		var w domain.Wave
+		if err = json.Unmarshal(outputs[i].Bytes(), &w); err != nil {
+			t.Fatal(err)
+		}
+		if id != "" && id != w.ID {
+			t.Fatal("same request created two Waves")
+		}
+		id = w.ID
 	}
 }
