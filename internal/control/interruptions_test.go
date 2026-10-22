@@ -106,6 +106,15 @@ func TestStaleInterruptionDoesNotCancelNewRecoveryPreparationForSameRun(t *testi
 	if old.err != nil || !old.out.Stopped {
 		t.Fatal(old)
 	}
+	// A queued recovery has no new reservation yet. Mutable session metadata
+	// still names the stopped owner and must not identify the queued flight.
+	l := NewLoop(Runtime{Store: k}, nil)
+	queuedCanceled := false
+	queued := map[string]*flight{b.ID: {work: SessionWork{Recovery: &RecoveryRequest{SessionID: b.ID, Run: old.out.Run}}, cancel: func() { queuedCanceled = true }}}
+	action := storage.DeadlineAction{Kind: "stop_process", SessionID: b.ID, RunID: "run", PreparationID: i.Request.PreparationID}
+	if err = l.requestPreparationStop(ctx, action, queued); err != nil || queuedCanceled {
+		t.Fatal("old interruption canceled an unreserved recovery flight", queuedCanceled, err)
+	}
 	current, err = k.SessionBinding(ctx, b.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +132,7 @@ func TestStaleInterruptionDoesNotCancelNewRecoveryPreparationForSameRun(t *testi
 	}
 	canceled := false
 	flights := map[string]*flight{b.ID: {work: SessionWork{Recovery: &RecoveryRequest{SessionID: b.ID, Run: old.out.Run}}, cancel: func() { canceled = true }}}
-	l := NewLoop(Runtime{Store: k}, nil)
+	flights[b.ID].physical.Store(&flightGeneration{owner: "recovery", preparation: recovery.Binding.PreparationID})
 	cursor := ""
 	if err = l.maintainInterrupts(ctx, flights, &cursor); err != nil || canceled {
 		t.Fatal("historical stop canceled read-only recovery", canceled, err)

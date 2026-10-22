@@ -63,6 +63,22 @@ type flight struct {
 	work       SessionWork
 	cancel     context.CancelFunc
 	completion *Completion
+	physical   atomic.Pointer[flightGeneration]
+}
+
+type flightGeneration struct{ owner, preparation string }
+
+// Capture this flight's own launch generation before invoking its factory.
+// Queued/rejected recovery work has no physical generation and cannot inherit
+// an old owner's stop solely from a shared persistent run ID.
+type flightFactory struct {
+	Factory
+	flight *flight
+}
+
+func (f flightFactory) Open(ctx context.Context, launch Launch) (Process, error) {
+	f.flight.physical.Store(&flightGeneration{owner: launch.Process.Request.OwnerID, preparation: launch.Process.PreparationID})
+	return f.Factory.Open(ctx, launch)
 }
 
 // Loop owns one controller's session dispatch. Durable storage remains the
@@ -218,13 +234,15 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 						child, cancel := context.WithCancel(ctx)
 						f := &flight{work: work, cancel: cancel}
 						flights[sid] = f
-						go func(w SessionWork, sid, run string) {
+						go func(w SessionWork, sid, run string, flight *flight) {
+							runtime := l.Runtime
+							runtime.Factory = flightFactory{Factory: runtime.Factory, flight: flight}
 							var out Outcome
 							var e error
 							if w.Execute != nil {
-								out, e = l.Runtime.Execute(child, *w.Execute)
+								out, e = runtime.Execute(child, *w.Execute)
 							} else {
-								out, e = l.Runtime.Reconcile(child, w.Recovery.SessionID, w.Recovery.Run, w.Recovery.Validate)
+								out, e = runtime.Reconcile(child, w.Recovery.SessionID, w.Recovery.Run, w.Recovery.Validate)
 							}
 							completion := Completion{SessionID: sid, RunID: run, Outcome: out, Err: e}
 							// Shutdown drains this channel until each process owner has returned.
@@ -232,7 +250,7 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 							case results <- completion:
 							case <-abandon:
 							}
-						}(work, sid, run)
+						}(work, sid, run, f)
 					}
 					// Continue a bounded page immediately, rather than waiting 60 seconds
 					// when a source page has only busy or rejected entries.
@@ -408,21 +426,18 @@ func (l *Loop) requestPreparationStop(ctx context.Context, a storage.DeadlineAct
 	if p.PreparationID != a.PreparationID || p.Request.Binding.ID != a.SessionID || a.RunID != "" && p.Request.RunID != a.RunID {
 		return errors.New("process stop source conflict")
 	}
+	if p.State == "stopped" {
+		return nil
+	}
 	if f := flights[a.SessionID]; f != nil && f.completion == nil {
 		_, run, _ := f.work.identity()
-		b, err := k.SessionBinding(ctx, a.SessionID)
-		if err != nil {
-			return err
-		}
 		// Read-only recovery reuses a run ID with a NEW preparation. A historical
 		// intent must never cancel that newer local owner merely by matching run ID.
-		if b.PreparationID == a.PreparationID && run == p.Request.RunID && (a.RunID == "" || run == a.RunID) {
+		generation := f.physical.Load()
+		if generation != nil && generation.owner == ownerID && generation.preparation == a.PreparationID && run == p.Request.RunID && (a.RunID == "" || run == a.RunID) {
 			f.cancel()
 			return nil
 		}
-	}
-	if p.State == "stopped" {
-		return nil
 	}
 	if p.State == "admitted" {
 		return k.ConfirmManagedProcessStopped(ctx, storage.ManagedStopProof{OwnerID: ownerID, Disposition: "not_started"})
