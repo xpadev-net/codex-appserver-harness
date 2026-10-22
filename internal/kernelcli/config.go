@@ -16,6 +16,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
+	"golang.org/x/sys/unix"
 )
 
 const ConfigVersion = 2
@@ -148,7 +149,7 @@ func writeConfigExclusive(root string, c Config) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err = os.Link(f.Name(), filepath.Join(root, configName)); err != nil {
+	if err = unix.Renameat2(unix.AT_FDCWD, f.Name(), unix.AT_FDCWD, filepath.Join(root, configName), unix.RENAME_NOREPLACE); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			existing, err := loadConfig(root)
 			if err != nil {
@@ -159,9 +160,6 @@ func writeConfigExclusive(root string, c Config) (bool, error) {
 			}
 			return false, nil
 		}
-		return false, err
-	}
-	if err = os.Remove(f.Name()); err != nil {
 		return false, err
 	}
 	directory, err := os.Open(root)
@@ -204,6 +202,9 @@ func initialize(ctx context.Context, root, session, model string) (Config, error
 		return c, err
 	}
 	defer unlock()
+	if err = recoverConfigPublication(root); err != nil {
+		return c, err
+	}
 	if _, err := os.Lstat(filepath.Join(root, configName)); errors.Is(err, os.ErrNotExist) {
 		if _, dbErr := os.Lstat(filepath.Join(root, databaseName)); dbErr == nil {
 			return c, errors.New("existing database without kernel configuration requires explicit recovery/migration")

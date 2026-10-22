@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -297,5 +298,78 @@ func TestKernelCLIConcurrentCreateDeduplicatesAndPreservesDistinctRequests(t *te
 				t.Fatal(page, err)
 			}
 		})
+	}
+}
+
+func TestKernelCLIRecoversOnlyKnownInterruptedConfigurationLinks(t *testing.T) {
+	for _, known := range []bool{true, false} {
+		t.Run(map[bool]string{true: "initializer_temporary", false: "unknown_link"}[known], func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "kernel")
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := Config{SchemaVersion: ConfigVersion, SessionID: "main", Model: "unavailable-model", Limits: domain.DefaultKernelLimits()}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := ".kernel-config-interrupted"
+			if !known {
+				name = "unrecognized-copy"
+			}
+			held := filepath.Join(root, name)
+			if err = os.WriteFile(held, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Link(held, filepath.Join(root, configName)); err != nil {
+				t.Fatal(err)
+			}
+			_, err = cliCall(t, "init", "--root", root, "--model", "unavailable-model")
+			if !known {
+				if err == nil {
+					t.Fatal("unknown hardlink accepted")
+				}
+				if _, err = os.Stat(held); err != nil {
+					t.Fatal("unknown link removed", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("interrupted publication could not resume", err)
+			}
+			if _, err = os.Stat(held); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("initializer link not recovered", err)
+			}
+			if _, err = cliCall(t, "list", "--root", root); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+func TestKernelCLIConfigurationPublicationHasOneLinkAndNeverOverwrites(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kernel")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{SchemaVersion: ConfigVersion, SessionID: "main", Model: "unavailable-model", Limits: domain.DefaultKernelLimits()}
+	if created, err := writeConfigExclusive(root, cfg); err != nil || !created {
+		t.Fatal(created, err)
+	}
+	info, err := os.Stat(filepath.Join(root, configName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		t.Fatal("publication left hard links")
+	}
+	changed := cfg
+	changed.Model = "changed"
+	if _, err = writeConfigExclusive(root, changed); err == nil {
+		t.Fatal("publication replaced existing config")
+	}
+	actual, err := loadConfig(root)
+	if err != nil || actual.Model != cfg.Model {
+		t.Fatal(actual, err)
 	}
 }
