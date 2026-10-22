@@ -187,6 +187,7 @@ func (k *KernelStore) CreateOrchestrator(ctx context.Context, id, model, cwd, sa
 }
 
 type WaveRequest struct {
+	OperationLimits       *WaveOperationLimits   `json:"operation_limits,omitempty"`
 	OrchestratorSessionID string                 `json:"orchestrator_session_id"`
 	Source                string                 `json:"source"`
 	SourceID              string                 `json:"source_id"`
@@ -235,6 +236,13 @@ func (k *KernelStore) createWaveTx(ctx context.Context, tx *sql.Tx, request Wave
 	if err = request.Policy.Limits.Validate(); err != nil {
 		return domain.Wave{}, err
 	}
+	limits := DefaultWaveOperationLimits()
+	if request.OperationLimits != nil {
+		limits = *request.OperationLimits
+	}
+	if err = limits.Validate(); err != nil {
+		return domain.Wave{}, err
+	}
 	if err = checkWaveCapacityTx(ctx, tx); err != nil {
 		return domain.Wave{}, err
 	}
@@ -252,6 +260,9 @@ func (k *KernelStore) createWaveTx(ctx context.Context, tx *sql.Tx, request Wave
 		return wave, err
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_waves(id,source,source_id,input_digest,payload) VALUES(?,?,?,?,?)", wave.ID, wave.Source, wave.SourceID, digest, raw); err != nil {
+		return wave, err
+	}
+	if err = kernelRecordTx(ctx, tx, "wave_operation_limits", wave.ID, wave.ID, limits); err != nil {
 		return wave, err
 	}
 	if err = k.waveEventTx(ctx, tx, wave, "wave_created", "", wave.ID+":created", wave.Target()); err != nil {

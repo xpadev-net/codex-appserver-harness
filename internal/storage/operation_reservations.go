@@ -19,19 +19,22 @@ import (
 // These are trusted dispatch inputs, after business authorization and outbox
 // admission. Capacity admission executes no command or external request.
 type OperationCapacityRequest struct {
-	ID          string          `json:"id"`
-	Kind        string          `json:"kind"` // runner, pr, cloud_review, git
-	SessionID   string          `json:"session_id"`
-	Target      contract.Target `json:"target"`
-	Worktree    string          `json:"worktree"`
-	Repository  string          `json:"repository"`
-	ResourceKey string          `json:"resource_key"`
+	RetryOf      string          `json:"retry_of,omitempty"`
+	CandidateSHA string          `json:"candidate_sha,omitempty"`
+	ID           string          `json:"id"`
+	Kind         string          `json:"kind"` // runner, pr, cloud_review, git
+	SessionID    string          `json:"session_id"`
+	Target       contract.Target `json:"target"`
+	Worktree     string          `json:"worktree"`
+	Repository   string          `json:"repository"`
+	ResourceKey  string          `json:"resource_key"`
 }
 type OperationReleaseProof struct {
-	OperationID string `json:"operation_id"`
-	ProofID     string `json:"proof_id"`
-	Disposition string `json:"disposition"`
-	Reason      string `json:"reason"`
+	RetryableInfrastructureFailure bool   `json:"retryable_infrastructure_failure,omitempty"`
+	OperationID                    string `json:"operation_id"`
+	ProofID                        string `json:"proof_id"`
+	Disposition                    string `json:"disposition"`
+	Reason                         string `json:"reason"`
 }
 type OperationReservation struct {
 	Kind           string                   `json:"kind"`
@@ -52,13 +55,23 @@ func validOperationCapacityKind(kind string) bool {
 	return kind == "runner" || kind == "pr" || kind == "cloud_review" || kind == "git"
 }
 func validateOperationCapacityRequest(r OperationCapacityRequest) error {
-	for _, value := range []string{r.ID, r.SessionID, r.Worktree, r.Repository, r.ResourceKey} {
+	for _, value := range []string{r.ID, r.SessionID, r.Worktree, r.Repository, r.ResourceKey, r.RetryOf, r.CandidateSHA} {
 		if !utf8.ValidString(value) || len(value) > contract.MaxInline {
 			return errors.New("operation capacity strings must be bounded UTF-8")
 		}
 	}
 	if !validOperationCapacityKind(r.Kind) || r.ID == "" || r.SessionID == "" || !r.Target.Valid() {
 		return errors.New("versioned operation capacity identity required")
+	}
+	if r.RetryOf != "" && r.Kind != "runner" {
+		return errors.New("only runner work has infrastructure retries")
+	}
+	if r.Kind == "cloud_review" {
+		if len(r.CandidateSHA) != 40 || strings.Trim(r.CandidateSHA, "0123456789abcdef") != "" {
+			return errors.New("review capacity requires the fixed candidate SHA")
+		}
+	} else if r.CandidateSHA != "" {
+		return errors.New("only Cloud review has a candidate SHA")
 	}
 	switch r.Kind {
 	case "runner":
@@ -284,6 +297,9 @@ func (k *KernelStore) reserveOperationCapacityTx(ctx context.Context, tx *sql.Tx
 			return r, ErrExecutionCapacity
 		}
 	}
+	if err = reserveOperationBudgetTx(ctx, tx, request); err != nil {
+		return r, err
+	}
 	r = OperationReservation{Kind: request.Kind, ID: request.ID, SessionID: request.SessionID, WaveID: request.Target.WaveID, State: "held", Request: request, PolicyRevision: p.Revision, Resources: []ResourceLease{}, CreatedAt: k.clock()}
 	r.RequestDigest, err = contentDigest(request)
 	if err != nil {
@@ -346,6 +362,9 @@ func (k *KernelStore) ReleaseOperationCapacity(ctx context.Context, proof Operat
 	r, err := loadOperationReservationTx(ctx, tx, proof.OperationID)
 	if err != nil {
 		return err
+	}
+	if proof.RetryableInfrastructureFailure && (r.Kind != "runner" || proof.Disposition != "process_stopped") {
+		return errors.New("retry classification requires a stopped runner")
 	}
 	allowed := proof.Disposition == "not_started"
 	switch r.Kind {
