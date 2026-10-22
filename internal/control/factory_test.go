@@ -11,6 +11,7 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
 // This model-free fixture checks the real launcher, stdio and process owner. It
@@ -81,6 +82,10 @@ func TestCommandRuntimeOwnsRealProcessAndFixedCWD(t *testing.T) {
 	}
 	if alive, err := process.GroupAlive(managed.Identity); err != nil || alive {
 		t.Fatal(alive, err)
+	}
+	metrics, err := k.ProcessMetrics(ctx, out.PreparationID)
+	if err != nil || metrics.PeakRSSBytes == nil || *metrics.PeakRSSBytes <= 0 || metrics.RSSMethod != storage.RSSProcTree || metrics.RSSIntervalNanos != int64(RSSSampleInterval) {
+		t.Fatal("real owned process RSS was not recorded", metrics, err)
 	}
 }
 func TestCommandFactoryRefusesUnverifiedOrInheritedLaunch(t *testing.T) {

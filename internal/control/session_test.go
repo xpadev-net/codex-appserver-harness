@@ -185,6 +185,9 @@ func TestRuntimeLazilyReservesBeforeSpawnAndReleasesAfterStop(t *testing.T) {
 	if metrics.PID == nil || metrics.SpawnedAt == nil || metrics.ReadyAt == nil || metrics.StoppedAt == nil {
 		t.Fatal(metrics)
 	}
+	if metrics.PeakRSSBytes != nil || metrics.RSSMethod != "" || metrics.RSSIntervalNanos != 0 {
+		t.Fatal("fake identity produced a memory measurement", metrics)
+	}
 	task, err := k.Task(ctx, b.TaskID)
 	if err != nil || task.Attempts != 1 {
 		t.Fatal(task, err)

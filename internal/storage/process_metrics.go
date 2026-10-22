@@ -11,15 +11,22 @@ import (
 // Only trusted process owners submit these facts. Unknown measurements stay nil;
 // recording an exit does not itself authorize release of a resource generation.
 type ProcessObservation struct {
-	ReservationID   string     `json:"reservation_id"`
-	SessionID       string     `json:"session_id"`
-	PID             *int64     `json:"pid,omitempty"`
-	SpawnedAt       *time.Time `json:"spawned_at,omitempty"`
-	ReadyAt         *time.Time `json:"ready_at,omitempty"`
-	StopRequestedAt *time.Time `json:"stop_requested_at,omitempty"`
-	StoppedAt       *time.Time `json:"stopped_at,omitempty"`
-	PeakRSSBytes    *int64     `json:"peak_rss_bytes,omitempty"`
+	ReservationID    string     `json:"reservation_id"`
+	SessionID        string     `json:"session_id"`
+	PID              *int64     `json:"pid,omitempty"`
+	SpawnedAt        *time.Time `json:"spawned_at,omitempty"`
+	ReadyAt          *time.Time `json:"ready_at,omitempty"`
+	StopRequestedAt  *time.Time `json:"stop_requested_at,omitempty"`
+	StoppedAt        *time.Time `json:"stopped_at,omitempty"`
+	PeakRSSBytes     *int64     `json:"peak_rss_bytes,omitempty"`
+	RSSMethod        string     `json:"rss_method,omitempty"`
+	RSSIntervalNanos int64      `json:"rss_interval_nanos,omitempty"`
 }
+
+// RSSProcTree is a sampled sum, including shared pages once per process and
+// only descendants visible during the scan. It is not a memory limit guarantee.
+const RSSProcTree = "linux_proc_tree_rss_sampled_sum"
+
 type ProcessMetrics struct {
 	ProcessObservation
 	Kind                 string     `json:"kind"`
@@ -152,6 +159,12 @@ func (k *KernelStore) ObserveProcess(ctx context.Context, observation ProcessObs
 		}
 	}
 	if observation.PeakRSSBytes != nil {
+		if m.PeakRSSBytes != nil && m.RSSMethod == "" && observation.RSSMethod != "" {
+			return errors.New("cannot assign sampling provenance to an earlier RSS measurement")
+		}
+		if m.RSSMethod != "" && observation.RSSMethod != m.RSSMethod {
+			return errors.New("RSS measurement requires its existing method")
+		}
 		if *observation.PeakRSSBytes < 0 {
 			return errors.New("negative process RSS")
 		}
@@ -159,6 +172,15 @@ func (k *KernelStore) ObserveProcess(ctx context.Context, observation ProcessObs
 			value := *observation.PeakRSSBytes
 			m.PeakRSSBytes = &value
 		}
+	}
+	if observation.RSSMethod != "" || observation.RSSIntervalNanos != 0 {
+		if observation.RSSMethod != RSSProcTree || observation.RSSIntervalNanos <= 0 || observation.PeakRSSBytes == nil {
+			return errors.New("RSS sampling requires a known method, interval and measurement")
+		}
+		if m.RSSMethod != "" && (m.RSSMethod != observation.RSSMethod || m.RSSIntervalNanos != observation.RSSIntervalNanos) {
+			return errors.New("conflicting RSS sampling method")
+		}
+		m.RSSMethod, m.RSSIntervalNanos = observation.RSSMethod, observation.RSSIntervalNanos
 	}
 	if m.ObservedAt == nil || now.After(*m.ObservedAt) {
 		m.ObservedAt = &now
