@@ -117,8 +117,15 @@ func TestKernelSourceParentPlanHandsBlockedWorkToFreshTaskAndReview(t *testing.T
 		}
 	}
 	page, err := source.Ready(ctx, "", 128)
-	if err != nil || len(page.Work) != 0 {
-		t.Fatal(page, err)
+	if err != nil || len(page.Work) != 1 || page.Work[0].Execute == nil || page.Work[0].Execute.SessionID != original.ParentSessionID {
+		t.Fatal("fresh fix/review did not request final judgment", page, err)
+	}
+	finalRun := page.Work[0].Execute.RunID
+	for i := 0; i < 2; i++ {
+		page, err = source.Ready(ctx, "", 128)
+		if err != nil || len(page.Work) != 1 || page.Work[0].Execute.RunID != finalRun || calls[original.ParentSessionID] != 1 {
+			t.Fatal("final readiness retried parent planning", page, calls, err)
+		}
 	}
 	assertCapacity(t, k, 0)
 }
