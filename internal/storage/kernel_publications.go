@@ -86,6 +86,9 @@ func (k *KernelStore) applyKernelPublication(ctx context.Context, call contract.
 			if err = json.Unmarshal(result, &reply); err != nil {
 				return reply, err
 			}
+			if err = k.bindCompletedPublicationReplyTx(ctx, tx, op); err != nil {
+				return reply, err
+			}
 			return reply, tx.Commit()
 		}
 		if state != "accepted" && state != "unknown" {
@@ -141,9 +144,9 @@ func (k *KernelStore) applyKernelPublication(ctx context.Context, call contract.
 	// reservation, input grants and capacity have committed. Every retry uses
 	// these same bytes/identity. Already admitted facts keep their original target.
 	_, writeErr := k.ImportArtifact(ctx, pub.Import, []byte(pub.Content))
-	return k.kernelPublicationReply(ctx, pub, writeErr)
+	return k.kernelPublicationReply(ctx, pub, writeErr, true)
 }
-func (k *KernelStore) kernelPublicationReply(ctx context.Context, pub kernelPublication, writeErr error) (contract.ToolReply, error) {
+func (k *KernelStore) kernelPublicationReply(ctx context.Context, pub kernelPublication, writeErr error, direct bool) (contract.ToolReply, error) {
 	var reply contract.ToolReply
 	var state string
 	var raw []byte
@@ -154,17 +157,50 @@ func (k *KernelStore) kernelPublicationReply(ctx context.Context, pub kernelPubl
 		if err := json.Unmarshal(raw, &reply); err != nil {
 			return reply, err
 		}
+		if direct {
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				return reply, err
+			}
+			defer tx.Rollback()
+			if err = k.bindCompletedPublicationReplyTx(ctx, tx, pub.Operation); err != nil {
+				return reply, err
+			}
+			if err = tx.Commit(); err != nil {
+				return reply, err
+			}
+		}
 		return reply, nil
 	}
 	if writeErr != nil {
-		if err := k.awaitKernelPublication(context.WithoutCancel(ctx), pub); err != nil {
+		completed, err := k.awaitKernelPublication(context.WithoutCancel(ctx), pub)
+		if err != nil {
 			return reply, err
+		}
+		if completed {
+			return k.kernelPublicationReply(ctx, pub, nil, direct)
 		}
 		// Errors may contain private host paths. The model gets only an immutable
 		// reconciliation ID and owned receive subscription, never those paths.
 		return contract.ToolReply{SchemaVersion: 1, State: "unknown", OperationID: pub.Operation.ID, SubscriptionIDs: []string{pub.SubscriptionID}, ResourceID: pub.ArtifactID, Content: "Publication is pending controller reconciliation."}, nil
 	}
 	return reply, errors.New("committed publication lacks its operation result")
+}
+
+func (k *KernelStore) bindCompletedPublicationReplyTx(ctx context.Context, tx *sql.Tx, op kernelToolOperation) error {
+	var active string
+	var stopped, applied int
+	if err := tx.QueryRowContext(ctx, "SELECT s.active_run_id,s.process_stopped,r.applied FROM kernel_sessions s JOIN kernel_run_bindings r ON r.run_id=? AND r.session_id=s.id WHERE s.id=?", op.RunID, op.SessionID).Scan(&active, &stopped, &applied); err != nil {
+		return err
+	}
+	if active != op.RunID || stopped != 0 || applied != 0 {
+		return nil // A recovery result is input, not delivery to a retired run.
+	}
+	if err := kernelRecordTx(ctx, tx, "kernel_publication_awaited", op.ID, op.SessionID, false); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE kernel_notifications SET state='bound_to_tool',run_id=? WHERE subscription_id=? AND session_id=? AND state='pending' AND run_id=''", op.RunID, kernelOperationSubscriptionID(op.SessionID, op.ID), op.SessionID)
+	return err
 }
 
 // Called with the immutable manifest transition. A publication is an admitted
@@ -284,25 +320,7 @@ func (k *KernelStore) ReconcileKernelPublications(ctx context.Context, limit int
 	if limit < 1 || limit > 1000 {
 		return report, errors.New("invalid publication reconciliation limit")
 	}
-	rows, err := k.DB.QueryContext(ctx, "SELECT p.payload FROM records p JOIN kernel_tool_operations o ON o.id=p.id WHERE p.kind='kernel_publication' AND o.state IN ('accepted','unknown') ORDER BY p.id LIMIT ?", limit)
-	if err != nil {
-		return report, err
-	}
-	publications := []kernelPublication{}
-	for rows.Next() {
-		var raw []byte
-		var pub kernelPublication
-		if err = rows.Scan(&raw); err == nil {
-			err = json.Unmarshal(raw, &pub)
-		}
-		if err != nil {
-			rows.Close()
-			return report, err
-		}
-		publications = append(publications, pub)
-	}
-	err = rows.Err()
-	rows.Close()
+	publications, err := k.nextKernelPublicationBatch(ctx, limit)
 	if err != nil {
 		return report, err
 	}
@@ -311,7 +329,7 @@ func (k *KernelStore) ReconcileKernelPublications(ctx context.Context, limit int
 			report.Pending = append(report.Pending, pub.Operation.ID)
 			continue
 		}
-		reply, err := k.kernelPublicationReply(ctx, pub, nil)
+		reply, err := k.kernelPublicationReply(ctx, pub, nil, false)
 		if err != nil {
 			return report, err
 		}
@@ -355,19 +373,26 @@ func (k *KernelStore) publicationNotificationStateTx(ctx context.Context, tx *sq
 	}
 	return "archived", pub.Operation.RunID, nil
 }
-func (k *KernelStore) awaitKernelPublication(ctx context.Context, pub kernelPublication) error {
+func (k *KernelStore) awaitKernelPublication(ctx context.Context, pub kernelPublication) (bool, error) {
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
+	var state string
+	if err = tx.QueryRowContext(ctx, "SELECT state FROM kernel_tool_operations WHERE id=?", pub.Operation.ID).Scan(&state); err != nil {
+		return false, err
+	}
+	if state == "completed" {
+		return true, tx.Commit()
+	}
 	if err = kernelRecordTx(ctx, tx, "kernel_publication_awaited", pub.Operation.ID, pub.Operation.SessionID, true); err != nil {
-		return err
+		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_notifications SET state='pending',run_id='' WHERE subscription_id=? AND state='bound_to_tool' AND run_id=?", pub.SubscriptionID, pub.Operation.RunID); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	return false, tx.Commit()
 }
 func (k *KernelStore) finishDirectOperationInputsTx(ctx context.Context, tx *sql.Tx, sessionID, runID, outcome string) error {
 	next, nextRun := outcome, runID
@@ -376,4 +401,55 @@ func (k *KernelStore) finishDirectOperationInputsTx(ctx context.Context, tx *sql
 	}
 	_, err := tx.ExecContext(ctx, "UPDATE kernel_notifications SET state=?,run_id=? WHERE session_id=? AND run_id=? AND state='bound_to_tool'", next, nextRun, sessionID, runID)
 	return err
+}
+
+// Persist selection progress before I/O. A stuck operation remains pending but
+// cannot monopolize the next bounded batch; a crash merely defers it one cycle.
+func (k *KernelStore) nextKernelPublicationBatch(ctx context.Context, limit int) ([]kernelPublication, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var after string
+	err = completionRecord(ctx, tx, "kernel_reconcile_cursor", "publications", &after)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	read := func(cursor string) ([]kernelPublication, error) {
+		rows, err := tx.QueryContext(ctx, "SELECT p.payload FROM records p JOIN kernel_tool_operations o ON o.id=p.id WHERE p.kind='kernel_publication' AND o.state IN ('accepted','unknown') AND o.id>? ORDER BY o.id LIMIT ?", cursor, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := []kernelPublication{}
+		for rows.Next() {
+			var raw []byte
+			var pub kernelPublication
+			if err = rows.Scan(&raw); err == nil {
+				err = json.Unmarshal(raw, &pub)
+			}
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, pub)
+		}
+		return out, rows.Err()
+	}
+	out, err := read(after)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 && after != "" {
+		out, err = read("")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(out) > 0 {
+		if err = kernelRecordTx(ctx, tx, "kernel_reconcile_cursor", "publications", "", out[len(out)-1].Operation.ID); err != nil {
+			return nil, err
+		}
+	}
+	return out, tx.Commit()
 }

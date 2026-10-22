@@ -352,3 +352,106 @@ func TestKernelPublicationCannotClaimUngrantedInputAndPendingIsReported(t *testi
 	}
 	restore()
 }
+
+func TestKernelPublicationSuccessfulRetryConsumesDeferredCompletion(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprint(cached), func(t *testing.T) {
+			ctx := context.Background()
+			k, wave, _, b, run := kernelToolFixture(t, "task")
+			restore := blockArtifactDirectory(t, k)
+			call := publicationCall(t, b, run, wave.Target(), "eventually delivered")
+			gateway := contract.KernelGateway{Backend: k}
+			first, err := gateway.Handle(ctx, call)
+			if err != nil || first.State != "unknown" {
+				t.Fatal(first, err)
+			}
+			restore()
+			if cached {
+				report, err := k.ReconcileKernelPublications(ctx, 10)
+				if err != nil || len(report.Completed) != 1 {
+					t.Fatal(report, err)
+				}
+				pending, err := k.PendingWakeNotifications(ctx, b.ID, 10)
+				if err != nil || len(pending) != 1 {
+					t.Fatal(pending, err)
+				}
+			}
+			retry, err := gateway.Handle(ctx, call)
+			if err != nil || retry.State != "completed" || retry.ResourceID != first.ResourceID || retry.OperationID != first.OperationID {
+				t.Fatal(retry, err)
+			}
+			items, err := k.Notifications(ctx, b.ID, 0, 10)
+			if err != nil || len(items) != 1 || items[0].State != "bound_to_tool" || items[0].RunID != run.ID {
+				t.Fatal("delivered retry remained new input", items, err)
+			}
+			result := contract.TaskResult{SchemaVersion: 1, Target: b.Target, TaskID: b.TaskID, PhaseID: b.PhaseID, Outcome: "blocked", Blockers: []string{"need parent"}}
+			savePublicationTaskOutcome(t, k, b, run, call.TurnID, result)
+			if pending, err := k.PendingWakeNotifications(ctx, b.ID, 10); err != nil || len(pending) != 0 {
+				t.Fatal("successful retry spent another model attempt", pending, err)
+			}
+		})
+	}
+}
+func TestKernelPublicationReconciliationRotatesPastPersistentFailure(t *testing.T) {
+	ctx := context.Background()
+	k, wave, _, b, run := kernelToolFixture(t, "task")
+	restore := blockArtifactDirectory(t, k)
+	gateway := contract.KernelGateway{Backend: k}
+	replies := []contract.ToolReply{}
+	for i := range 2 {
+		call := publicationCall(t, b, run, wave.Target(), fmt.Sprintf("publication %d", i))
+		call.CallID = fmt.Sprintf("publication-%d", i)
+		reply, err := gateway.Handle(ctx, call)
+		if err != nil || reply.State != "unknown" {
+			t.Fatal(reply, err)
+		}
+		replies = append(replies, reply)
+	}
+	restore()
+	if replies[0].OperationID > replies[1].OperationID {
+		replies[0], replies[1] = replies[1], replies[0]
+	}
+	if err := os.Mkdir(filepath.Join(k.Root, "objects", replies[0].ResourceID), 0700); err != nil {
+		t.Fatal(err)
+	}
+	first, err := k.ReconcileKernelPublications(ctx, 1)
+	if err != nil || len(first.Pending) != 1 || first.Pending[0] != replies[0].OperationID {
+		t.Fatal(first, err)
+	}
+	path := filepath.Join(k.Root, "state.db")
+	k.Close()
+	k, err = OpenKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	second, err := k.ReconcileKernelPublications(ctx, 1)
+	if err != nil || len(second.Completed) != 1 || second.Completed[0] != replies[1].OperationID {
+		t.Fatal("healthy operation starved behind earlier failure", second, err)
+	}
+	third, err := k.ReconcileKernelPublications(ctx, 1)
+	if err != nil || len(third.Pending) != 1 || third.Pending[0] != replies[0].OperationID {
+		t.Fatal("unresolved operation was lost when cursor wrapped", third, err)
+	}
+}
+
+func TestKernelPublicationLateUnknownCannotOverrideCompletedDelivery(t *testing.T) {
+	ctx := context.Background()
+	k, wave, _, b, run := kernelToolFixture(t, "task")
+	reply, err := (contract.KernelGateway{Backend: k}).Handle(ctx, publicationCall(t, b, run, wave.Target(), "completed before failed writer reported"))
+	if err != nil || reply.State != "completed" {
+		t.Fatal(reply, err)
+	}
+	var pub kernelPublication
+	if err = k.Record(ctx, "kernel_publication", reply.OperationID, &pub); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := k.awaitKernelPublication(ctx, pub)
+	if err != nil || !completed {
+		t.Fatal("late uncertainty ignored completed operation", completed, err)
+	}
+	items, err := k.Notifications(ctx, b.ID, 0, 10)
+	if err != nil || len(items) != 1 || items[0].State != "bound_to_tool" || items[0].RunID != run.ID {
+		t.Fatal("late unknown reply recreated completed input", items, err)
+	}
+}
