@@ -17,15 +17,16 @@ var ErrMainResultInvalid = errors.New("main result is outside its saved contract
 var ErrMainResultHeld = errors.New("main result is held by policy or unapplied Task work")
 
 type MainResultApplication struct {
-	SessionID  string               `json:"session_id"`
-	RunID      string               `json:"run_id"`
-	ThreadID   string               `json:"thread_id"`
-	SnapshotID string               `json:"snapshot_id"`
-	Targets    []contract.Target    `json:"targets"`
-	State      string               `json:"state"` // applied or archived
-	Reason     string               `json:"reason"`
-	Result     *contract.MainResult `json:"result"`
-	Plans      []PlanAdmission      `json:"plans"`
+	SessionID   string               `json:"session_id"`
+	RunID       string               `json:"run_id"`
+	ThreadID    string               `json:"thread_id"`
+	SnapshotID  string               `json:"snapshot_id"`
+	Targets     []contract.Target    `json:"targets"`
+	State       string               `json:"state"` // applied or archived
+	Reason      string               `json:"reason"`
+	Result      *contract.MainResult `json:"result"`
+	Plans       []PlanAdmission      `json:"plans"`
+	Completions []WaveCompletion     `json:"completions,omitempty"`
 }
 
 // ApplyMainResult applies one known normal main completion after stop proof.
@@ -180,6 +181,14 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 				return receipt, ErrMainResultHeld
 			}
 		}
+		if decision.Action == "accept" {
+			if _, err = k.checkArtifactAcceptanceTx(ctx, tx, decision.Target, *decision.Acceptance); err != nil {
+				if errors.Is(err, ErrArtifactAcceptanceHeld) {
+					return receipt, errors.Join(ErrMainResultInvalid, err)
+				}
+				return receipt, err
+			}
+		}
 		for _, id := range decision.SubscriptionIDs {
 			var session, waveID string
 			var scope, plan int
@@ -200,6 +209,13 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 	// Validate the whole batch before adopting any plan. The transaction also
 	// rolls back budgets, sessions and notification fanout if a later write fails.
 	for _, decision := range result.Decisions {
+		if decision.Action == "accept" {
+			completion, err := k.completeGenericWaveTx(ctx, tx, b, runID, decision.Target, *decision.Acceptance, decision.Summary)
+			if err != nil {
+				return receipt, err
+			}
+			receipt.Completions = append(receipt.Completions, completion)
+		}
 		if decision.Action == "plan" {
 			if accepted, ok := acceptedPlans[decision.Target.WaveID]; ok {
 				receipt.Plans = append(receipt.Plans, accepted)

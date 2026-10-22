@@ -6,21 +6,22 @@ const MaxMainWaves = 16
 const MaxMainListItems = 128
 
 // MainResult proposes actions within the controller's saved Wave input scope.
-// Completion/approval/policy changes are deliberately absent: ordinary code
-// owns those gates. A report records an explanation, never Wave acceptance.
+// Acceptance names evidence for ordinary code to verify; no model claim owns
+// completion, approval or policy gates. A report only records an explanation.
 type MainResult struct {
 	SchemaVersion int            `json:"schema_version"`
 	SessionID     string         `json:"session_id"`
 	Decisions     []MainDecision `json:"decisions"`
 }
 type MainDecision struct {
-	Target          Target        `json:"target"`
-	Action          string        `json:"action"` // plan, wait, report
-	Plan            *PlanProposal `json:"plan"`
-	SubscriptionIDs []string      `json:"subscription_ids"`
-	Summary         string        `json:"summary"`
-	Remaining       []string      `json:"remaining"`
-	Blockers        []string      `json:"blockers"`
+	Target          Target              `json:"target"`
+	Action          string              `json:"action"` // plan, wait, report, accept
+	Plan            *PlanProposal       `json:"plan"`
+	Acceptance      *ArtifactAcceptance `json:"acceptance,omitempty"`
+	SubscriptionIDs []string            `json:"subscription_ids"`
+	Summary         string              `json:"summary"`
+	Remaining       []string            `json:"remaining"`
+	Blockers        []string            `json:"blockers"`
 }
 
 func (r MainResult) Validate() error {
@@ -42,19 +43,26 @@ func (r MainResult) Validate() error {
 		}
 		switch d.Action {
 		case "plan":
-			if d.Plan == nil || len(d.SubscriptionIDs) != 0 {
+			if d.Plan == nil || d.Acceptance != nil || len(d.SubscriptionIDs) != 0 {
 				return errors.New("plan decision requires only a plan")
 			}
 			if err := d.Plan.Validate(); err != nil {
 				return err
 			}
 		case "wait":
-			if d.Plan != nil || len(d.SubscriptionIDs) == 0 {
+			if d.Plan != nil || d.Acceptance != nil || len(d.SubscriptionIDs) == 0 {
 				return errors.New("waiting requires durable subscriptions")
 			}
 		case "report":
-			if d.Plan != nil || len(d.SubscriptionIDs) != 0 {
+			if d.Plan != nil || d.Acceptance != nil || len(d.SubscriptionIDs) != 0 {
 				return errors.New("report cannot change a plan or waiting conditions")
+			}
+		case "accept":
+			if d.Acceptance == nil || d.Plan != nil || len(d.SubscriptionIDs) != 0 || len(d.Remaining) != 0 || len(d.Blockers) != 0 {
+				return errors.New("acceptance requires evidence references and no unresolved work")
+			}
+			if err := d.Acceptance.Validate(); err != nil {
+				return err
 			}
 		default:
 			return errors.New("unsupported main decision")
@@ -70,7 +78,8 @@ func MainResultSchema() map[string]any {
 	for _, name := range []string{"subscription_ids", "remaining", "blockers"} {
 		fields[name].(map[string]any)["maxItems"] = MaxMainListItems
 	}
-	fields["action"].(map[string]any)["enum"] = []string{"plan", "wait", "report"}
+	fields["action"].(map[string]any)["enum"] = []string{"plan", "wait", "report", "accept"}
 	fields["plan"].(map[string]any)["anyOf"] = []any{PlanSchema(), map[string]any{"type": "null"}}
+	fields["acceptance"].(map[string]any)["anyOf"] = []any{ArtifactAcceptanceSchema(), map[string]any{"type": "null"}}
 	return schema
 }

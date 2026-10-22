@@ -45,3 +45,13 @@ func (p ArtifactAcceptance) Validate() error {
 	}
 	return nil
 }
+
+func ArtifactAcceptanceSchema() map[string]any {
+	schema := Schema(ArtifactAcceptance{})
+	fields := schema["properties"].(map[string]any)
+	fields["outputs"].(map[string]any)["minItems"] = 1
+	fields["outputs"].(map[string]any)["maxItems"] = 128
+	fields["evaluations"].(map[string]any)["minItems"] = 1
+	fields["evaluations"].(map[string]any)["maxItems"] = 1024
+	return schema
+}

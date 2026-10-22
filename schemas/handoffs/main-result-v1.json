@@ -5,11 +5,66 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "evaluations": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "artifact_id": {
+                          "maxLength": 16384,
+                          "type": "string"
+                        },
+                        "criterion_id": {
+                          "maxLength": 16384,
+                          "type": "string"
+                        },
+                        "review_task_id": {
+                          "maxLength": 16384,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "criterion_id",
+                        "artifact_id",
+                        "review_task_id"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1024,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "outputs": {
+                    "items": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "outputs",
+                  "evaluations"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "action": {
             "enum": [
               "plan",
               "wait",
-              "report"
+              "report",
+              "accept"
             ],
             "maxLength": 16384,
             "type": "string"
