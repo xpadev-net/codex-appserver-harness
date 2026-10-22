@@ -306,6 +306,12 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 	if err = completionRecord(ctx, tx, "agent_run", id, &previous); err != nil {
 		return err
 	}
+	// Tool handlers can observe a turn while turn/start is failing. Merge its
+	// durable association under this same write transaction, then preserve the
+	// incoming failure state so no later tool is authorized as still running.
+	if run.TurnID == "" && previous.TurnID != "" && (run.State == "unknown" || run.State == "blocked") {
+		run.TurnID = previous.TurnID
+	}
 	if previous.TurnID != "" && run.TurnID != previous.TurnID {
 		return errors.New("run turn association changed")
 	}

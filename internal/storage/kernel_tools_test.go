@@ -443,3 +443,67 @@ func TestKernelStatePaginationKeepsLargeSupportedPlanRetrievable(t *testing.T) {
 		t.Fatal("old request shape could not retrieve overview", err)
 	}
 }
+
+type delayedToolStore struct {
+	*KernelStore
+	beforeFailure func() error
+}
+
+func (s *delayedToolStore) Put(ctx context.Context, kind, id, owner string, value any) error {
+	if run, ok := value.(contract.SessionRun); kind == "agent_run" && ok && (run.State == "unknown" || run.State == "blocked") && s.beforeFailure != nil {
+		hook := s.beforeFailure
+		s.beforeFailure = nil
+		if err := hook(); err != nil {
+			return err
+		}
+	}
+	return s.KernelStore.Put(ctx, kind, id, owner, value)
+}
+
+type failedStartRPC struct{ missingID bool }
+
+func (r failedStartRPC) Call(_ context.Context, method string, _ any, result any) error {
+	if method != "turn/start" {
+		return errors.New("unexpected RPC")
+	}
+	if r.missingID {
+		return json.Unmarshal([]byte(`{"turn":{}}`), result)
+	}
+	return errors.New("turn/start failed before delayed handler committed")
+}
+func (failedStartRPC) Next(context.Context) (codex.Message, error) {
+	return codex.Message{}, errors.New("unexpected wait")
+}
+func TestKernelDelayedToolCannotRaceFailedStartBackToRunning(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprint(missing), func(t *testing.T) {
+			ctx := context.Background()
+			k, wave, tasks := mailboxFixture(t)
+			b := prepareWakeSession(t, k, tasks[0].SessionID)
+			gateway := contract.KernelGateway{Backend: k}
+			call := kernelCall(t, b, contract.SessionRun{ID: "delayed-run"}, "state_get", contract.StateRequest{SchemaVersion: 1, Target: wave.Target()})
+			store := &delayedToolStore{KernelStore: k, beforeFailure: func() error {
+				_, err := gateway.Handle(ctx, call)
+				return err
+			}}
+			driver := worker.SessionDriver{Store: store, RPC: failedStartRPC{missingID: missing}}
+			prepared := worker.PreparedSession{Binding: b, BaselineKnown: true, BaselineTurnIDs: []string{"old-turn"}}
+			run, err := driver.Execute(ctx, prepared, call.RunID, sessionSnapshot(), contract.TaskResultSchema(), worker.ValidateTaskOutput)
+			if err == nil || run.State != "unknown" || run.TurnID != call.TurnID {
+				t.Fatal(run, err)
+			}
+			var saved contract.SessionRun
+			if err = k.Record(ctx, "agent_run", run.ID, &saved); err != nil || saved.State != "unknown" || saved.TurnID != call.TurnID {
+				t.Fatal("delayed tool overwrote failed-start outcome", saved, err)
+			}
+			var state string
+			if err = k.DB.QueryRow("SELECT state FROM kernel_run_bindings WHERE run_id=?", run.ID).Scan(&state); err != nil || state != "unknown" {
+				t.Fatal(state, err)
+			}
+			call.CallID = "after-failure"
+			if _, err = gateway.Handle(ctx, call); err == nil {
+				t.Fatal("delayed failure left tools authorized")
+			}
+		})
+	}
+}

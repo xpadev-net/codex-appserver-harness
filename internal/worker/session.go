@@ -21,6 +21,8 @@ type InputSnapshot = contract.InputSnapshot
 // saves a fresh PreparationID; the driver reloads it before any RPC. ReserveRun
 // atomically records the snapshot/start intent and exclusive active run; it must
 // not release a reservation for a process whose stopping is unconfirmed.
+// Journal.Put for unknown/blocked outcomes must atomically retain any turn
+// association observed by an early tool while preserving the failure outcome.
 type SessionPersistence interface {
 	Journal
 	SessionBinding(context.Context, string) (SessionBinding, error)

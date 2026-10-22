@@ -22,9 +22,9 @@ type Journal interface {
 	Record(context.Context, string, string, any) error
 }
 
-// A concurrently handled early tool may establish the reserved run's turn
-// before turn/start returns. Preserve that proof without converting an unknown
-// or blocked transport outcome back into a running outcome.
+// After the journal atomically records a failed start (merging any early turn
+// proof), return that association to the caller too. Reading it before the
+// write would race with tool handlers establishing the turn concurrently.
 func (w Worker) preserveObservedTurn(ctx context.Context, run *Run) error {
 	if run.TurnID != "" {
 		return nil
@@ -154,11 +154,11 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 				r.TurnID = ids.TurnID
 			}
 		}
-		if mergeErr := w.preserveObservedTurn(context.WithoutCancel(ctx), &r); mergeErr != nil {
-			return r, mergeErr
-		}
 		if saveErr := w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); saveErr != nil {
 			return r, saveErr
+		}
+		if mergeErr := w.preserveObservedTurn(context.WithoutCancel(ctx), &r); mergeErr != nil {
+			return r, mergeErr
 		}
 		return r, err
 	}
@@ -166,11 +166,11 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 	r.State = "running"
 	if r.TurnID == "" {
 		r.State = "unknown"
-		if mergeErr := w.preserveObservedTurn(context.WithoutCancel(ctx), &r); mergeErr != nil {
-			return r, mergeErr
-		}
 		if saveErr := w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); saveErr != nil {
 			return r, saveErr
+		}
+		if mergeErr := w.preserveObservedTurn(context.WithoutCancel(ctx), &r); mergeErr != nil {
+			return r, mergeErr
 		}
 		return r, errors.New("missing turn id")
 	}
