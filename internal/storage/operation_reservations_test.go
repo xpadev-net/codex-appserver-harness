@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -32,6 +33,9 @@ func operationRequest(t *testing.T, w domain.Wave, kind, id string) OperationCap
 		r.Worktree = t.TempDir()
 	} else {
 		r.ResourceKey = "repository/work-item"
+	}
+	if kind == "cloud_review" {
+		r.CandidateSHA = strings.Repeat("a", 40)
 	}
 	return r
 }

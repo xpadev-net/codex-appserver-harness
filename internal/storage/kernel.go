@@ -46,7 +46,10 @@ func OpenKernel(path string) (*KernelStore, error) {
 			if err := validateKernelSchema(db); err != nil {
 				return err
 			}
-			return validateKernelRunBudgetFormat(db)
+			if err := validateKernelRunBudgetFormat(db); err != nil {
+				return err
+			}
+			return validateKernelOperationBudgetFormat(db)
 		}
 		return nil
 	})
@@ -95,6 +98,9 @@ func OpenKernel(path string) (*KernelStore, error) {
 			return nil, err
 		}
 		if err = validateKernelRunBudgetFormat(db); err != nil {
+			return nil, err
+		}
+		if err = validateKernelOperationBudgetFormat(db); err != nil {
 			return nil, err
 		}
 	}
