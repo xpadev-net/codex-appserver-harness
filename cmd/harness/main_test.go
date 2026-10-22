@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 	"os"
@@ -137,6 +138,10 @@ func TestWaveCLIEntrypointCreatesAndInspectsDirectRequestWithoutExternalPrograms
 	var page storage.WaveSummaryPage
 	if err = json.Unmarshal(invoke("list", "--root", root), &page); err != nil || len(page.Waves) != 1 {
 		t.Fatal(page, err)
+	}
+	var events contract.StateEventPage
+	if err = json.Unmarshal(invoke("watch", "--root", root, "--once", "--cursor", "0"), &events); err != nil || len(events.Events) != 1 {
+		t.Fatal(events, err)
 	}
 }
 
