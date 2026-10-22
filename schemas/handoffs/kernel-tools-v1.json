@@ -3,7 +3,7 @@
     {
       "type": "function",
       "name": "wave_create",
-      "description": "Version 1 controller operation: wave_create. Accepted work is not completed work; wait on the returned subscription.",
+      "description": "Resolve this run's registered request_id to its controller-owned Wave. Use the Wave manifest's source_id as request_id. Scope/policy come from the saved request. Returns accepted Wave ID and a durable terminal subscription; acceptance is not completion. Task sessions cannot call this tool.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -27,7 +27,7 @@
     {
       "type": "function",
       "name": "wave_plan",
-      "description": "Version 1 controller operation: wave_plan. Accepted work is not completed work; wait on the returned subscription.",
+      "description": "Submit a bounded plan for this run's current owned Wave target. The controller validates scope, policy, budgets and quiescent Task history, then atomically accepts the plan and returns the resulting target and terminal subscription. Background Tasks may start before this turn ends. Finish with wait/report, or acknowledge the identical accepted plan; never claim Wave completion.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

@@ -178,6 +178,13 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	if err = guard(a); err != nil {
 		return reply, err
 	}
+	if request, ok := command.(*contract.CreateWaveRequest); ok {
+		wave, err := k.registeredToolWaveTx(ctx, tx, b, snapshotID, request.RequestID)
+		if err != nil {
+			return reply, err
+		}
+		target = wave.Target()
+	}
 	digest, err := contentDigest(command)
 	if err != nil {
 		return reply, err
@@ -204,6 +211,24 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	op := kernelToolOperation{ID: structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID), SessionID: b.ID, RunID: call.RunID, ThreadID: b.ThreadID, TurnID: call.TurnID, CallID: call.CallID, Name: call.Name, ArgumentDigest: digest, Target: target, SnapshotID: snapshotID, CreatedAt: k.clock()}
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
+	case *contract.CreateWaveRequest:
+		reply, err = k.acceptWaveToolTx(ctx, tx, op, b, target, nil)
+		if err != nil {
+			return reply, err
+		}
+	case *contract.PlanWaveRequest:
+		if b.Kind != "orchestrator" {
+			return reply, errors.New("Task cannot submit a Wave plan")
+		}
+		admission, err := k.adoptPlanTx(ctx, tx, target, op.ID, r.Plan)
+		if err != nil {
+			return reply, err
+		}
+		reply, err = k.acceptWaveToolTx(ctx, tx, op, b, admission.Target, &admission)
+		if err != nil {
+			return reply, err
+		}
+
 	case *contract.ContextReadRequest:
 		content, err := k.contextSliceTx(ctx, tx, b, *r)
 		if err != nil {

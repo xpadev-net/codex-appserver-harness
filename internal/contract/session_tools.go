@@ -412,6 +412,12 @@ func KernelTools(kind string) []ToolDefinition {
 			inputSchema["properties"].(map[string]any)["plan"] = PlanSchema()
 		}
 		description := "Version 1 controller operation: " + name + ". Accepted work is not completed work; wait on the returned subscription."
+		if name == "wave_create" {
+			description = "Resolve this run's registered request_id to its controller-owned Wave. Use the Wave manifest's source_id as request_id. Scope/policy come from the saved request. Returns accepted Wave ID and a durable terminal subscription; acceptance is not completion. Task sessions cannot call this tool."
+		}
+		if name == "wave_plan" {
+			description = "Submit a bounded plan for this run's current owned Wave target. The controller validates scope, policy, budgets and quiescent Task history, then atomically accepts the plan and returns the resulting target and terminal subscription. Background Tasks may start before this turn ends. Finish with wait/report, or acknowledge the identical accepted plan; never claim Wave completion."
+		}
 		if name == "context_read" {
 			description = "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction, manifest. For manifest use the reference_id from this run input; it reads the immutable saved judgment state, including task instructions/results. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path."
 			properties := inputSchema["properties"].(map[string]any)

@@ -145,16 +145,24 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 	for _, target := range targets {
 		selected[target.WaveID] = target
 	}
+	acceptedPlans := map[string]PlanAdmission{}
 	for _, decision := range result.Decisions {
 		if selected[decision.Target.WaveID] != decision.Target {
 			return receipt, ErrMainResultInvalid
 		}
 		wave := waves[decision.Target.WaveID]
 		if decision.Action == "plan" {
-			if wave.Paused {
+			accepted, err := acceptedRunPlanTx(ctx, tx, b, runID, decision.Target, *decision.Plan)
+			if err != nil {
+				return receipt, err
+			}
+			if accepted != nil {
+				acceptedPlans[wave.ID] = *accepted
+			}
+			if wave.Paused && accepted == nil {
 				return receipt, ErrMainResultHeld
 			}
-			if wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
+			if (wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline)) && accepted == nil {
 				return receipt, ErrMainResultInvalid
 			}
 			if err = domain.ValidateWavePlan(wave, *decision.Plan); err != nil {
@@ -164,7 +172,7 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 			if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM kernel_sessions s JOIN kernel_tasks t ON t.id=s.task_id WHERE t.wave_id=? AND (s.active_run_id<>'' OR s.process_stopped=0 OR s.creating<>0)", wave.ID).Scan(&active); err != nil {
 				return receipt, err
 			}
-			if active != 0 {
+			if active != 0 && accepted == nil {
 				return receipt, ErrMainResultHeld
 			}
 		}
@@ -189,6 +197,10 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 	// rolls back budgets, sessions and notification fanout if a later write fails.
 	for _, decision := range result.Decisions {
 		if decision.Action == "plan" {
+			if accepted, ok := acceptedPlans[decision.Target.WaveID]; ok {
+				receipt.Plans = append(receipt.Plans, accepted)
+				continue
+			}
 			plan, err := k.adoptPlanTx(ctx, tx, decision.Target, "main-result:"+runID, *decision.Plan)
 			if err != nil {
 				if errors.Is(err, ErrPlanAdmission) {
