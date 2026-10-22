@@ -354,3 +354,20 @@ func TestWorktreeLeaseCoversSubdirectoriesAndKeepsLinkedWorktreesIndependent(t *
 		t.Fatal(err)
 	}
 }
+
+func TestStandaloneWorkspaceBelowEmptyGitMarkerCanReserve(t *testing.T) {
+	ctx := context.Background()
+	k, _ := waveStoreFixture(t)
+	parent := t.TempDir()
+	if err := os.Mkdir(filepath.Join(parent, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cwd := filepath.Join(parent, "standalone")
+	if err := os.Mkdir(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	b := capacityMain(t, k, "standalone", cwd)
+	if err := k.ReserveSessionThread(ctx, b); err != nil {
+		t.Fatal("empty placeholder became a broken repository", err)
+	}
+}
