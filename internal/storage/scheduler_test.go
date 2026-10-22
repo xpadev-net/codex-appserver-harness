@@ -120,6 +120,12 @@ func TestReadyDrainAndBlockHoldsNewTasksButAllowsExplicitRecovery(t *testing.T) 
 			}
 			tasks[0].State = state
 			tasks[0].Attempts = 1
+			// Aggregate progress must not prevent this Task's authorized
+			// recovery; the actual Phase/Task conditions control eligibility.
+			w.State = domain.WaveBlocked
+			if err = saveWave(ctx, tx, w); err != nil {
+				t.Fatal(err)
+			}
 			if err = saveTask(ctx, tx, tasks[0]); err != nil {
 				t.Fatal(err)
 			}

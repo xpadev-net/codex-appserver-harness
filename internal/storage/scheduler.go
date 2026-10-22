@@ -151,8 +151,6 @@ func (k *KernelStore) activePhaseTx(ctx context.Context, tx *sql.Tx, target cont
 		set.Reason = "terminal"
 	case !k.clock().Before(wave.Deadline):
 		set.Reason = "deadline_exceeded"
-	case wave.State == domain.WaveBlocked:
-		set.Reason = "wave_blocked"
 	}
 	if set.Reason != "" {
 		return set, nil, false, nil
