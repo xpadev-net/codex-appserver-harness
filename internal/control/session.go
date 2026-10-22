@@ -207,23 +207,22 @@ func (o *owner) Call(ctx context.Context, method string, params, result any) err
 			return err
 		}
 	}
-	err = rpc.Call(ctx, method, params, result)
 	if o.mode == "recovery" && method == "thread/read" {
 		var response json.RawMessage
+		err = rpc.Call(ctx, method, params, &response)
 		errorDigest := ""
 		if err != nil {
 			errorDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(err.Error())))
-		} else {
-			var encodeErr error
-			response, encodeErr = json.Marshal(result)
-			if encodeErr != nil {
-				return encodeErr
-			}
 		}
-		_, recordErr := o.store.RecordHistoryRead(ctx, o.id, o.reservation.Binding.ThreadID, response, errorDigest)
-		err = errors.Join(err, recordErr)
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_, recordErr := o.store.RecordHistoryRead(cleanup, o.id, o.reservation.Binding.ThreadID, response, errorDigest)
+		if err == nil && result != nil {
+			err = json.Unmarshal(response, result)
+		}
+		return errors.Join(err, recordErr)
 	}
-	return err
+	return rpc.Call(ctx, method, params, result)
 }
 func (o *owner) Next(ctx context.Context) (codex.Message, error) {
 	if o.mode == "recovery" {

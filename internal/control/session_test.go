@@ -83,6 +83,9 @@ type fakeProcess struct {
 	final                                     string
 	manualCompletion                          bool
 	turnStarted                               chan struct{}
+	threadReadReply                           json.RawMessage
+	threadReadStarted                         chan struct{}
+	holdThreadRead                            bool
 	stopped, closed, initializeFail, turnFail bool
 }
 
@@ -134,6 +137,16 @@ func (p *fakeProcess) Send(value any) error {
 		}
 		result = map[string]any{"turn": map[string]any{"id": p.resultTurnID(), "status": "inProgress"}}
 	case "thread/read":
+		if p.threadReadStarted != nil {
+			close(p.threadReadStarted)
+		}
+		if p.holdThreadRead {
+			return nil
+		}
+		if p.threadReadReply != nil {
+			p.queue <- codex.Message{ID: m.ID, Result: p.threadReadReply}
+			return nil
+		}
 		result = map[string]any{"thread": map[string]any{"id": p.threadID, "cwd": p.binding.CWD, "turns": []any{map[string]any{"id": p.resultTurnID(), "status": "completed", "items": []any{map[string]string{"type": "agentMessage", "text": p.resultText()}}}}}}
 	default:
 		return fmt.Errorf("unexpected method %s", m.Method)
