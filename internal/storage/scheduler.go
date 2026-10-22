@@ -263,6 +263,13 @@ func (k *KernelStore) taskReadyTx(ctx context.Context, tx *sql.Tx, wave domain.W
 	if task.Attempts >= wave.Policy.Limits.TaskAttempts {
 		return "attempts_exhausted", nil
 	}
+	used, _, saturated, err := waveTokensTx(ctx, tx, wave.ID)
+	if err != nil {
+		return "", err
+	}
+	if saturated || used >= wave.Policy.Limits.Tokens {
+		return "token_budget_exhausted", nil
+	}
 	var active string
 	var creating, stopped int
 	if err := tx.QueryRowContext(ctx, "SELECT creating,process_stopped,active_run_id FROM kernel_sessions WHERE id=?", task.SessionID).Scan(&creating, &stopped, &active); err != nil {

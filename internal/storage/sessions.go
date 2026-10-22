@@ -207,6 +207,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	if err = k.bindWakeRunTx(ctx, tx, b, snapshot, run); err != nil {
 		return err
 	}
+	if err = k.reserveRunBudgetTx(ctx, tx, b, snapshot, run); err != nil {
+		return err
+	}
 	if b.Kind == "task" {
 		task, err := loadTask(ctx, tx, b.TaskID)
 		if err != nil {
@@ -339,6 +342,9 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 		return errors.New("run start evidence cannot be overwritten")
 	}
 	if err = kernelRecordTx(ctx, tx, "agent_run", id, owner, run); err != nil {
+		return err
+	}
+	if err = observeRunUsageTx(ctx, tx, run); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_run_bindings SET state=? WHERE run_id=?", run.State, id); err != nil {
