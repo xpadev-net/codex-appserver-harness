@@ -58,18 +58,24 @@ type inputSubscription struct {
 	Cursor     int64           `json:"cursor"`
 	Definition json.RawMessage `json:"definition"`
 }
+type appliedMainDecision struct {
+	RunID    string                `json:"run_id"`
+	Decision contract.MainDecision `json:"decision"`
+}
 type sessionManifest struct {
-	SchemaVersion int                            `json:"schema_version"`
-	SessionID     string                         `json:"session_id"`
-	Kind          string                         `json:"kind"`
-	Wave          domain.Wave                    `json:"wave"`
-	Plan          *PlanAdmission                 `json:"plan"`
-	Tasks         []domain.Task                  `json:"tasks"`
-	Results       map[string]contract.TaskResult `json:"results"`
-	Artifacts     []domain.Artifact              `json:"artifacts"`
-	Subscriptions []inputSubscription            `json:"subscriptions"`
-	Direction     *WaveDirection                 `json:"direction"`
-	Budget        WaveRunBudget                  `json:"budget"`
+	SchemaVersion    int                            `json:"schema_version"`
+	SessionID        string                         `json:"session_id"`
+	Kind             string                         `json:"kind"`
+	Wave             domain.Wave                    `json:"wave"`
+	Plan             *PlanAdmission                 `json:"plan"`
+	Tasks            []domain.Task                  `json:"tasks"`
+	Results          map[string]contract.TaskResult `json:"results"`
+	TaskApplications []ResultApplication            `json:"task_applications"`
+	MainDecisions    []appliedMainDecision          `json:"main_decisions"`
+	Artifacts        []domain.Artifact              `json:"artifacts"`
+	Subscriptions    []inputSubscription            `json:"subscriptions"`
+	Direction        *WaveDirection                 `json:"direction"`
+	Budget           WaveRunBudget                  `json:"budget"`
 }
 
 // BuildSessionInput captures one consistent DB view, with no model/process or
@@ -231,7 +237,7 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
-	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
+	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
 	tokens, unknown, saturated, err := waveTokensTx(ctx, tx, w.ID)
 	if err != nil {
 		return m, err
@@ -255,6 +261,11 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			if err = json.Unmarshal(raw, m.Plan); err != nil {
 				return m, err
 			}
+			if m.Plan.Target != w.Target() {
+				m.Plan = nil
+			} else if digest, digestErr := contentDigest(m.Plan.Plan); digestErr != nil || digest != m.Plan.Digest {
+				return m, errors.New("input plan digest conflict")
+			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return m, err
 		}
@@ -275,15 +286,56 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			continue
 		}
 		m.Tasks = append(m.Tasks, task)
-		if task.ResultID != "" {
+		applicationIDs, err := inputIDsTx(ctx, tx, "SELECT a.id FROM records a JOIN kernel_run_bindings r ON r.run_id=a.id WHERE a.kind='task_result_application' AND a.work_item_id=? AND r.session_id=? AND r.applied=1 ORDER BY a.rowid", task.ID, task.SessionID)
+		if err != nil {
+			return m, err
+		}
+		for _, runID := range applicationIDs {
+			var application ResultApplication
+			if err = completionRecord(ctx, tx, "task_result_application", runID, &application); err != nil {
+				return m, err
+			}
+			if application.RunID != runID || application.TaskID != task.ID || application.Target != task.Target() {
+				return m, errors.New("input Task application binding conflict")
+			}
+			m.TaskApplications = append(m.TaskApplications, application)
+			if application.ResultID == "" || application.Archived {
+				continue
+			}
 			var result contract.TaskResult
-			if err = completionRecord(ctx, tx, "task_result", task.ResultID, &result); err != nil {
+			if err = completionRecord(ctx, tx, "task_result", application.ResultID, &result); err != nil {
 				return m, err
 			}
 			if result.TaskID != task.ID || result.Target != task.Target() {
 				return m, errors.New("input result binding conflict")
 			}
-			m.Results[task.ResultID] = result
+			m.Results[application.ResultID] = result
+		}
+	}
+	if b.Kind == "orchestrator" {
+		applications, err := inputIDsTx(ctx, tx, "SELECT a.id FROM records a JOIN kernel_run_bindings r ON r.run_id=a.id WHERE a.kind='main_result_application' AND r.session_id=? AND r.applied=1 ORDER BY a.rowid", b.ID)
+		if err != nil {
+			return m, err
+		}
+		for _, runID := range applications {
+			var application MainResultApplication
+			if err = completionRecord(ctx, tx, "main_result_application", runID, &application); err != nil {
+				return m, err
+			}
+			if application.SessionID != b.ID || application.RunID != runID {
+				return m, errors.New("input main application binding conflict")
+			}
+			if application.State != "applied" || application.Result == nil {
+				continue
+			}
+			if application.Result.SessionID != b.ID {
+				return m, errors.New("input main result owner conflict")
+			}
+			for _, decision := range application.Result.Decisions {
+				if decision.Target.WaveID == w.ID && decision.Target.ScopeRevision == w.ScopeRevision && decision.Target.PolicyRevision == w.Policy.Revision {
+					m.MainDecisions = append(m.MainDecisions, appliedMainDecision{RunID: runID, Decision: decision})
+				}
+			}
 		}
 	}
 	if b.Kind == "task" && !slices.ContainsFunc(m.Tasks, func(t domain.Task) bool { return t.ID == b.TaskID }) {

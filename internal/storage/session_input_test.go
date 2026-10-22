@@ -373,3 +373,114 @@ func TestInputGrantIsExactSnapshotAndMultiWaveBoundariesStaySorted(t *testing.T)
 		readSavedInput(t, k, "main", wave.Manifest)
 	}
 }
+
+func storedManifest(t *testing.T, k *KernelStore, snapshot contract.InputSnapshot) sessionManifest {
+	t.Helper()
+	ref := inputContext(t, snapshot).Waves[0].Manifest
+	var saved savedInputManifest
+	if err := k.Record(context.Background(), "session_input_manifest", ref.ID, &saved); err != nil {
+		t.Fatal(err)
+	}
+	var m sessionManifest
+	if err := json.Unmarshal(saved.Data, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+func TestInputPreservesAppliedNonterminalTaskResults(t *testing.T) {
+	for _, outcome := range []string{"waiting", "blocked"} {
+		t.Run(outcome, func(t *testing.T) {
+			ctx := context.Background()
+			k, b, run, result := recordedTaskResultFixture(t, func(r *contract.TaskResult) {
+				r.Outcome = outcome
+				r.Remaining = []string{"retain this unfinished work"}
+				r.Blockers = []string{"await source clarification"}
+				if outcome == "waiting" {
+					session := strings.Replace(r.TaskID, "task-", "session-", 1)
+					r.SubscriptionIDs = []string{mailboxSubscriptionID(session, r.Target, r.TaskID)}
+				}
+			})
+			if err := k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := k.ApplyTaskResult(ctx, b.ID, run.ID)
+			if err != nil || receipt.ResultID == "" || string(receipt.State) != outcome {
+				t.Fatal(receipt, err)
+			}
+			task, err := k.Task(ctx, b.TaskID)
+			if err != nil || task.ResultID != "" {
+				t.Fatal(task, err)
+			}
+			for _, session := range []string{b.ID, b.ParentSessionID} {
+				snapshot, err := k.BuildSessionInput(ctx, session, []contract.Target{b.Target})
+				if err != nil {
+					t.Fatal(err)
+				}
+				m := storedManifest(t, k, snapshot)
+				got, ok := m.Results[receipt.ResultID]
+				if !ok || !reflect.DeepEqual(got.Remaining, result.Remaining) || !reflect.DeepEqual(got.Blockers, result.Blockers) || !reflect.DeepEqual(got.CriterionResults, result.CriterionResults) || len(m.TaskApplications) != 1 || m.TaskApplications[0].RunID != run.ID {
+					t.Fatal("nonterminal result dropped", m)
+				}
+			}
+		})
+	}
+}
+func TestInputPreservesOnlyAppliedMainDecisionsForThisScope(t *testing.T) {
+	ctx := context.Background()
+	k, b, waves, run, _ := mainResultFixture(t)
+	result := mainResult(t, b, waves, "report")
+	for i := range result.Decisions {
+		result.Decisions[i].Remaining = []string{"remaining-" + waves[i].ID}
+		result.Decisions[i].Blockers = []string{"blocker-" + waves[i].ID}
+	}
+	saveMainCompletion(t, k, b, run, result, true)
+	if _, err := k.ApplyMainResult(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i, w := range waves {
+		snapshot, err := k.BuildSessionInput(ctx, b.ID, []contract.Target{w.Target()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := storedManifest(t, k, snapshot)
+		if len(m.MainDecisions) != 1 || m.MainDecisions[0].RunID != run.ID || m.MainDecisions[0].Decision.Target != w.Target() || !reflect.DeepEqual(m.MainDecisions[0].Decision.Remaining, result.Decisions[i].Remaining) || !reflect.DeepEqual(m.MainDecisions[0].Decision.Blockers, result.Decisions[i].Blockers) {
+			t.Fatal("main remaining work lost or crossed Wave boundary", m.MainDecisions)
+		}
+	}
+	d := mustDirection(t, k, waves[0])
+	if _, err := k.ApplyWaveDirection(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := k.Wave(ctx, waves[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := k.BuildSessionInput(ctx, b.ID, []contract.Target{current.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := storedManifest(t, k, snapshot)
+	if len(m.MainDecisions) != 0 {
+		t.Fatal("old-scope decisions adopted as current input", m.MainDecisions)
+	}
+}
+func TestDirectionInputOmitsObsoletePlanBeforeReplanning(t *testing.T) {
+	ctx := context.Background()
+	k, w, _ := mailboxFixture(t)
+	d := mustDirection(t, k, w)
+	if _, err := k.ApplyWaveDirection(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err := k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := k.BuildSessionInput(ctx, "main", []contract.Target{w.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := storedManifest(t, k, snapshot)
+	if m.Plan != nil || len(m.Tasks) != 0 || m.Direction == nil || m.Direction.Request.Instruction != d.Request.Instruction {
+		t.Fatal("superseded plan leaked into new direction input", m)
+	}
+}
