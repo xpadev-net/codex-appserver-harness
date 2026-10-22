@@ -56,7 +56,11 @@ type TaskSpec struct {
 	DependsOn        []TaskDependency `json:"depends_on"`
 	InputArtifactIDs []string         `json:"input_artifact_ids"`
 	WorkItemIDs      []string         `json:"work_item_ids"`
+	SourceResultIDs  []string         `json:"source_result_ids,omitempty"`
 }
+
+const MaxTaskSourceResults = 16
+
 type PhaseSpec struct {
 	ID            string              `json:"id"`
 	Tasks         []TaskSpec          `json:"tasks"`
@@ -101,7 +105,7 @@ func (p PlanProposal) Validate() error {
 			return errors.New("phase must require all tasks")
 		}
 		for _, task := range phase.Tasks {
-			if task.ID == "" || !required[task.ID] || !inline(task.Instruction) || len(task.Criteria) == 0 || !validIDs(task.Criteria) || !validIDs(task.InputArtifactIDs) || !validIDs(task.WorkItemIDs) {
+			if task.ID == "" || !required[task.ID] || !inline(task.Instruction) || len(task.Criteria) == 0 || !validIDs(task.Criteria) || !validIDs(task.InputArtifactIDs) || !validIDs(task.WorkItemIDs) || !validIDs(task.SourceResultIDs) || len(task.SourceResultIDs) > MaxTaskSourceResults {
 				return errors.New("invalid task contract")
 			}
 			if _, ok := tasks[task.ID]; ok {
@@ -440,6 +444,7 @@ func PlanSchema() map[string]any {
 	phase["failure_policy"].(map[string]any)["const"] = "drain_and_block"
 	phase["completion"].(map[string]any)["properties"].(map[string]any)["kind"].(map[string]any)["const"] = "all_success"
 	phase["tasks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["kind"].(map[string]any)["enum"] = []string{"work", "verification", "review", "fix"}
+	phase["tasks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["source_result_ids"].(map[string]any)["maxItems"] = MaxTaskSourceResults
 	return s
 }
 func TaskResultSchema() map[string]any {

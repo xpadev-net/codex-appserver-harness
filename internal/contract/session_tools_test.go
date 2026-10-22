@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -152,5 +153,29 @@ func TestTaskClaimRequiresUsableEvidenceIDs(t *testing.T) {
 		if (err == nil) != valid {
 			t.Fatal("invalid evidence disposition", ids, err)
 		}
+	}
+}
+
+func TestPlanSourceResultsAreOptionalBoundedAndUnique(t *testing.T) {
+	for _, mode := range []string{"legacy", "valid", "duplicate", "too_many", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			p := planFixture()
+			switch mode {
+			case "valid":
+				p.Phases[0].Tasks[0].SourceResultIDs = []string{"result"}
+			case "duplicate":
+				p.Phases[0].Tasks[0].SourceResultIDs = []string{"result", "result"}
+			case "too_many":
+				for i := 0; i <= MaxTaskSourceResults; i++ {
+					p.Phases[0].Tasks[0].SourceResultIDs = append(p.Phases[0].Tasks[0].SourceResultIDs, fmt.Sprint(i))
+				}
+			case "empty":
+				p.Phases[0].Tasks[0].SourceResultIDs = []string{""}
+			}
+			err := p.Validate()
+			if (mode == "legacy" || mode == "valid") != (err == nil) {
+				t.Fatal(mode, err)
+			}
+		})
 	}
 }

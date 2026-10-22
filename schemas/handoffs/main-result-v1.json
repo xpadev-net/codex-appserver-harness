@@ -123,6 +123,14 @@
                                 "maxLength": 16384,
                                 "type": "string"
                               },
+                              "source_result_ids": {
+                                "items": {
+                                  "maxLength": 16384,
+                                  "type": "string"
+                                },
+                                "maxItems": 16,
+                                "type": "array"
+                              },
                               "work_item_ids": {
                                 "items": {
                                   "maxLength": 16384,

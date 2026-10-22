@@ -64,24 +64,26 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
-	SchemaVersion           int                            `json:"schema_version"`
-	SessionID               string                         `json:"session_id"`
-	Kind                    string                         `json:"kind"`
-	Wave                    domain.Wave                    `json:"wave"`
-	Plan                    *PlanAdmission                 `json:"plan"`
-	Tasks                   []domain.Task                  `json:"tasks"`
-	Results                 map[string]contract.TaskResult `json:"results"`
-	UnavailableResults      []unavailableInputResult       `json:"unavailable_results"`
-	TaskApplications        []ResultApplication            `json:"task_applications"`
-	TemplateContexts        map[string]json.RawMessage     `json:"template_contexts"`
-	TemplateSubjects        map[string]TemplateSubject     `json:"template_subjects"`
-	MainDecisions           []appliedMainDecision          `json:"main_decisions"`
-	Artifacts               []domain.Artifact              `json:"artifacts"`
-	UnavailableArtifacts    []unavailableInputArtifact     `json:"unavailable_artifacts"`
-	UnavailableTaskMetadata []unavailableTaskMetadata      `json:"unavailable_task_metadata"`
-	Subscriptions           []inputSubscription            `json:"subscriptions"`
-	Direction               *WaveDirection                 `json:"direction"`
-	Budget                  WaveRunBudget                  `json:"budget"`
+	SchemaVersion            int                            `json:"schema_version"`
+	SessionID                string                         `json:"session_id"`
+	Kind                     string                         `json:"kind"`
+	Wave                     domain.Wave                    `json:"wave"`
+	Plan                     *PlanAdmission                 `json:"plan"`
+	Tasks                    []domain.Task                  `json:"tasks"`
+	Results                  map[string]contract.TaskResult `json:"results"`
+	SourceResults            map[string]TaskResultInput     `json:"source_results"`
+	UnavailableSourceResults []unavailableSourceResult      `json:"unavailable_source_results"`
+	UnavailableResults       []unavailableInputResult       `json:"unavailable_results"`
+	TaskApplications         []ResultApplication            `json:"task_applications"`
+	TemplateContexts         map[string]json.RawMessage     `json:"template_contexts"`
+	TemplateSubjects         map[string]TemplateSubject     `json:"template_subjects"`
+	MainDecisions            []appliedMainDecision          `json:"main_decisions"`
+	Artifacts                []domain.Artifact              `json:"artifacts"`
+	UnavailableArtifacts     []unavailableInputArtifact     `json:"unavailable_artifacts"`
+	UnavailableTaskMetadata  []unavailableTaskMetadata      `json:"unavailable_task_metadata"`
+	Subscriptions            []inputSubscription            `json:"subscriptions"`
+	Direction                *WaveDirection                 `json:"direction"`
+	Budget                   WaveRunBudget                  `json:"budget"`
 }
 
 type unavailableInputResult struct {
@@ -100,6 +102,12 @@ type unavailableTaskMetadata struct {
 	TaskID string `json:"task_id"`
 	Kind   string `json:"kind"`
 	Reason string `json:"reason"`
+}
+
+type unavailableSourceResult struct {
+	TaskID   string `json:"task_id"`
+	ResultID string `json:"result_id"`
+	Reason   string `json:"reason"`
 }
 
 // BuildSessionInput captures one consistent DB view, with no model/process or
@@ -295,7 +303,7 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
-	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, UnavailableResults: []unavailableInputResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, UnavailableArtifacts: []unavailableInputArtifact{}, UnavailableTaskMetadata: []unavailableTaskMetadata{}, Subscriptions: []inputSubscription{}}
+	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, SourceResults: map[string]TaskResultInput{}, UnavailableSourceResults: []unavailableSourceResult{}, UnavailableResults: []unavailableInputResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, UnavailableArtifacts: []unavailableInputArtifact{}, UnavailableTaskMetadata: []unavailableTaskMetadata{}, Subscriptions: []inputSubscription{}}
 	tokens, unknown, saturated, err := waveTokensTx(ctx, tx, w.ID)
 	if err != nil {
 		return m, err
@@ -450,6 +458,22 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 					m.MainDecisions = append(m.MainDecisions, appliedMainDecision{RunID: runID, Decision: decision})
 				}
 			}
+		}
+	}
+	for _, task := range m.Tasks {
+		if b.Kind == "task" && task.ID != b.TaskID {
+			continue
+		}
+		for _, resultID := range task.Spec.SourceResultIDs {
+			input, err := k.taskResultInputTx(ctx, tx, w, resultID)
+			if err != nil {
+				if b.Kind == "orchestrator" && readinessHoldError(err) {
+					m.UnavailableSourceResults = append(m.UnavailableSourceResults, unavailableSourceResult{TaskID: task.ID, ResultID: resultID, Reason: "source_result_unavailable"})
+					continue
+				}
+				return m, err
+			}
+			m.SourceResults[resultID] = input
 		}
 	}
 	if b.Kind == "task" && !slices.ContainsFunc(m.Tasks, func(t domain.Task) bool { return t.ID == b.TaskID }) {
