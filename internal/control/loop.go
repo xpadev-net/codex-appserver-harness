@@ -422,9 +422,8 @@ func (l *Loop) shutdownManaged(ctx context.Context) error {
 					errs = append(errs, process.ErrUnconfirmed)
 					continue
 				}
-				requestErr := process.RequestGroupStopContext(ctx, p.Identity)
-				if err = process.WaitStopped(ctx, p.Identity); err != nil {
-					errs = append(errs, errors.Join(requestErr, err))
+				if err = process.StopGroup(ctx, p.Identity); err != nil {
+					errs = append(errs, err)
 					continue
 				}
 				proof.Disposition, proof.Identity = "group_stopped", p.Identity

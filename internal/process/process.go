@@ -269,6 +269,17 @@ func requestGroupStop(ctx context.Context, p Identity) error {
 			if e != nil {
 				return errors.Join(ErrUnconfirmed, e)
 			}
+			// A vfork parent can be in D until its frozen child exits. Kill
+			// pinned, fully stopped children first; the original leader stays
+			// as the group anchor while blocked parents become stoppable.
+			if pid != p.PID && targets[key] != nil && threadsStopped && (state == "T" || state == "t") {
+				e = targets[key].Signal(syscall.SIGKILL)
+				if e != nil && !errors.Is(e, os.ErrProcessDone) && !errors.Is(e, syscall.ESRCH) {
+					return errors.Join(ErrUnconfirmed, e)
+				}
+				frozen = false
+				continue
+			}
 			if targets[key] == nil || state != "T" && state != "t" || !threadsStopped {
 				frozen = false
 				if e = pinAndFreeze(pid, ticks); e != nil && !errors.Is(e, os.ErrProcessDone) && !errors.Is(e, syscall.ESRCH) {
@@ -324,4 +335,24 @@ func allThreadsStopped(pid int) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// StopGroup retries a bounded collection that was interrupted before all
+// members froze, and returns only after strict group-absence proof or deadline.
+func StopGroup(ctx context.Context, p Identity) error {
+	if !p.Valid() {
+		return ErrUnconfirmed
+	}
+	for {
+		requestErr := RequestGroupStopContext(ctx, p)
+		pulse, cancel := context.WithTimeout(ctx, 25*time.Millisecond)
+		waitErr := WaitStopped(pulse, p)
+		cancel()
+		if waitErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return errors.Join(ErrUnconfirmed, requestErr, waitErr, ctx.Err())
+		}
+	}
 }

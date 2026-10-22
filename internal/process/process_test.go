@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -130,14 +131,55 @@ func TestRecoveredGroupStopPreventsForkDuringEnumeration(t *testing.T) {
 				t.Fatal(err)
 			}
 			time.Sleep(5 * time.Millisecond)
-			if err = RequestGroupStop(p); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			if err = WaitStopped(ctx, p); err != nil {
+			if err = StopGroup(ctx, p); err != nil {
 				t.Fatal("forking descendant survived", err)
 			}
 		}()
+	}
+}
+
+func TestRecoveredGroupStopUnblocksVforkWaiter(t *testing.T) {
+	compiler, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("C compiler required for kernel vfork fixture")
+	}
+	dir := t.TempDir()
+	source := filepath.Join(dir, "vfork.c")
+	binary := filepath.Join(dir, "vfork")
+	program := []byte(`#include <unistd.h>
+#include <stdlib.h>
+int main(void) {
+ pid_t child = vfork();
+ if (child == 0) { write(1, "ready", 5); sleep(30); _exit(0); }
+ sleep(30); return 0;
+}
+`)
+	if err = os.WriteFile(source, program, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(compiler, "-O0", "-o", binary, source).CombinedOutput(); err != nil {
+		t.Fatalf("compile fixture: %s: %v", output, err)
+	}
+	cmd := exec.Command(binary)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := Identify(cmd.Process.Pid)
+	defer func() { _ = syscall.Kill(-p.PID, syscall.SIGKILL); _ = cmd.Wait() }()
+	buf := make([]byte, 5)
+	if _, err = pipe.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err = StopGroup(ctx, p); err != nil {
+		t.Fatal("vfork child deadlocked group stopping", err)
 	}
 }
