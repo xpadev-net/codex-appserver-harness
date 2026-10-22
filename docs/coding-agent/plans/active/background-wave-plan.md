@@ -233,6 +233,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/storage/scheduler.go
   - internal/storage/scheduler_test.go
   - internal/storage/sessions.go（turn予約時のready再照合）
+  - internal/storage/artifact_retention.go（現在のPhase完了証拠の保持）
   - internal/service/scheduler.go
   - internal/service/scheduler_test.go
   - internal/service/config.go

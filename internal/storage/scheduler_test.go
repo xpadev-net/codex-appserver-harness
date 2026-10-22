@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,7 +13,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-func readyFixture(t *testing.T) (*KernelStore, domain.Wave, []domain.Task) {
+func readyFixture(t *testing.T, mutations ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, []domain.Task) {
 	t.Helper()
 	ctx := context.Background()
 	k, request := waveStoreFixture(t)
@@ -29,6 +30,9 @@ func readyFixture(t *testing.T) (*KernelStore, domain.Wave, []domain.Task) {
 		{ID: "parallel", Tasks: []contract.TaskSpec{a, b}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"a", "b"}}, FailurePolicy: "drain_and_block"},
 		{ID: "report", Tasks: []contract.TaskSpec{report}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"report"}}, FailurePolicy: "drain_and_block"},
 	}, Templates: []contract.FixReviewTemplate{}}
+	for _, mutate := range mutations {
+		mutate(&plan)
+	}
 	receipt, err := k.AdoptPlan(ctx, wave.Target(), "initial", plan)
 	if err != nil {
 		t.Fatal(err)
@@ -260,5 +264,142 @@ func TestReadyGatesPauseDeadlineAndCorruptCompletedEvidence(t *testing.T) {
 				t.Fatal(set, err)
 			}
 		})
+	}
+}
+
+func TestReadyPhaseEvidenceSurvivesCollectionUntilWaveAcceptance(t *testing.T) {
+	ctx := context.Background()
+	k, w, tasks := readyFixture(t, func(p *contract.PlanProposal) { p.Phases[1].Tasks[0].DependsOn = []contract.TaskDependency{} })
+	base := k.clock()
+	k.Now = func() time.Time { return base }
+	w.Policy.Limits.RetentionSeconds = 1
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveWave(ctx, tx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	a := completeTemplateTask(t, k, tasks[0], "A completion proof", "", nil)
+	b := completeTemplateTask(t, k, tasks[1], "B completion proof", "", nil)
+	k.Now = func() time.Time { return base.Add(2 * time.Second) }
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		artifact, err := k.Artifact(ctx, id)
+		if err != nil || artifact.State != "committed" {
+			t.Fatal("Phase barrier evidence collected", artifact, err)
+		}
+	}
+	mustReady(t, k, w, tasks[2].ID) // later Phase has no explicit data dependency.
+	c := completeTemplateTask(t, k, tasks[2], "independent later result", "", nil)
+	k.Now = func() time.Time { return base.Add(4 * time.Second) }
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if set := mustReady(t, k, w); set.State != "execution_completed" {
+		t.Fatal(set)
+	}
+	// Final acceptance still needs the current results after every Task is done.
+	for _, id := range []string{a.ID, b.ID, c.ID} {
+		artifact, err := k.Artifact(ctx, id)
+		if err != nil || artifact.State != "committed" {
+			t.Fatal(artifact, err)
+		}
+	}
+	tx, err = k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = loadWave(ctx, tx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.State, w.CompletedAt = domain.WaveCompleted, k.clock()
+	if err = saveWave(ctx, tx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{a.ID, b.ID, c.ID} {
+		artifact, err := k.Artifact(ctx, id)
+		if err != nil || artifact.State != "expired" {
+			t.Fatal("terminal evidence did not follow retention", artifact, err)
+		}
+	}
+}
+func TestReadyRetainsCarriedEvidenceAndReleasesDroppedPhaseEvidence(t *testing.T) {
+	ctx := context.Background()
+	k, w, tasks := readyFixture(t, func(p *contract.PlanProposal) { p.Phases[1].Tasks[0].DependsOn = []contract.TaskDependency{} })
+	base := k.clock()
+	k.Now = func() time.Time { return base }
+	w.Policy.Limits.RetentionSeconds = 1
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveWave(ctx, tx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	a := completeTemplateTask(t, k, tasks[0], "carried A", "", nil)
+	b := completeTemplateTask(t, k, tasks[1], "carried B", "", nil)
+	var admission PlanAdmission
+	var raw []byte
+	if err = k.DB.QueryRow("SELECT payload FROM kernel_plans WHERE wave_id=? AND revision=1", w.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(raw, &admission); err != nil {
+		t.Fatal(err)
+	}
+	plan := admission.Plan
+	plan.Phases[1].ID = "report-2"
+	plan.Phases[1].Tasks[0].ID = "report-2"
+	plan.Phases[1].Completion.RequiredTaskIDs = []string{"report-2"}
+	receipt, err := k.AdoptPlan(ctx, w.Target(), "carry", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.Now = func() time.Time { return base.Add(2 * time.Second) }
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustReady(t, k, w, receipt.CreatedTaskIDs[0])
+	for _, id := range []string{a.ID, b.ID} {
+		artifact, err := k.Artifact(ctx, id)
+		if err != nil || artifact.State != "committed" {
+			t.Fatal("carried Phase evidence collected", artifact, err)
+		}
+	}
+	replacement := plan.Phases[1]
+	replacement.ID = "replacement"
+	replacement.Tasks[0].ID = "replacement"
+	replacement.Completion.RequiredTaskIDs = []string{"replacement"}
+	plan.Phases = []contract.PhaseSpec{replacement}
+	if _, err = k.AdoptPlan(ctx, w.Target(), "drop", plan); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		artifact, err := k.Artifact(ctx, id)
+		if err != nil || artifact.State != "expired" {
+			t.Fatal("historical dropped evidence was retained", artifact, err)
+		}
 	}
 }
