@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"slices"
 	"time"
 )
 
@@ -20,6 +21,30 @@ type Journal interface {
 	Put(context.Context, string, string, string, any) error
 	Record(context.Context, string, string, any) error
 }
+
+// After the journal atomically records a failed start (merging any early turn
+// proof), return that association to the caller too. Reading it before the
+// write would race with tool handlers establishing the turn concurrently.
+func (w Worker) preserveObservedTurn(ctx context.Context, run *Run) error {
+	if run.TurnID != "" {
+		return nil
+	}
+	var observed Run
+	if err := w.Journal.Record(ctx, "agent_run", run.ID, &observed); err != nil {
+		return err
+	}
+	if observed.ID != run.ID || observed.ThreadID != run.ThreadID || !observed.Started.Equal(run.Started) || observed.BaselineKnown != run.BaselineKnown || !slices.Equal(observed.BaselineTurnIDs, run.BaselineTurnIDs) {
+		return errors.New("observed run start identity changed")
+	}
+	if observed.TurnID != "" {
+		if slices.Contains(run.BaselineTurnIDs, observed.TurnID) {
+			return errors.New("observed turn belongs to the prior baseline")
+		}
+		run.TurnID = observed.TurnID
+	}
+	return nil
+}
+
 type Session struct {
 	BaselineTurnIDs []string `json:"baseline_turn_ids"`
 	BaselineKnown   bool     `json:"baseline_known"`
@@ -132,13 +157,21 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 		if saveErr := w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); saveErr != nil {
 			return r, saveErr
 		}
+		if mergeErr := w.preserveObservedTurn(context.WithoutCancel(ctx), &r); mergeErr != nil {
+			return r, mergeErr
+		}
 		return r, err
 	}
 	r.TurnID = reply.Turn.ID
 	r.State = "running"
 	if r.TurnID == "" {
 		r.State = "unknown"
-		_ = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r)
+		if saveErr := w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); saveErr != nil {
+			return r, saveErr
+		}
+		if mergeErr := w.preserveObservedTurn(context.WithoutCancel(ctx), &r); mergeErr != nil {
+			return r, mergeErr
+		}
 		return r, errors.New("missing turn id")
 	}
 	if err = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); err != nil {
