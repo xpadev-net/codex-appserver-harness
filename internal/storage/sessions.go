@@ -74,6 +74,12 @@ func (k *KernelStore) ReserveSessionThread(ctx context.Context, expected contrac
 		return err
 	}
 	defer tx.Rollback()
+	if err = k.reserveSessionThreadTx(ctx, tx, expected); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (k *KernelStore) reserveSessionThreadTx(ctx context.Context, tx *sql.Tx, expected contract.SessionBinding) error {
 	b, err := sessionBindingTx(ctx, tx, expected.ID)
 	if err != nil {
 		return err
@@ -127,7 +133,7 @@ func (k *KernelStore) ReserveSessionThread(ctx context.Context, expected contrac
 	if err = kernelRecordTx(ctx, tx, "session_preparation", b.ID, b.ID, b); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.SessionBinding, thread string) error {
 	if thread == "" {
@@ -156,6 +162,27 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 	if stopped != 0 || active != "" || (b.ThreadID == "" && creating != 1) {
 		return errors.New("thread creation was not reserved")
 	}
+	var managedOwner string
+	err = completionRecord(ctx, tx, "managed_preparation", b.PreparationID, &managedOwner)
+	if err == nil {
+		p, err := managedProcessTx(ctx, tx, managedOwner)
+		if err != nil {
+			return err
+		}
+		var method string
+		if err := completionRecord(ctx, tx, "managed_thread_rpc", b.PreparationID, &method); err != nil {
+			return err
+		}
+		want := "thread/start"
+		if b.ThreadID != "" {
+			want = "thread/resume"
+		}
+		if p.State != "started" || p.Request.Mode != "execute" || method != want {
+			return ErrManagedProcessHeld
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	b.ThreadID = thread
 	if err = bindSessionResourcesTx(ctx, tx, b, thread, ""); err != nil {
 		return err
@@ -166,6 +193,11 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET thread_id=?,creating=0,payload=? WHERE id=?", thread, raw, b.ID); err != nil {
 		return err
+	}
+	if managedOwner != "" {
+		if err = kernelRecordTx(ctx, tx, "managed_thread_ready", b.PreparationID, b.ID, ManagedThreadReady{OwnerID: managedOwner, ThreadID: thread}); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -193,6 +225,42 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	}
 	if !reflect.DeepEqual(b, expected) || b.ThreadID == "" || b.PreparationID == "" {
 		return errors.New("session changed before turn start")
+	}
+	var managedOwner string
+	err = completionRecord(ctx, tx, "managed_preparation", b.PreparationID, &managedOwner)
+	if err == nil {
+		p, err := managedProcessTx(ctx, tx, managedOwner)
+		if err != nil {
+			return err
+		}
+		if p.State != "started" || p.Request.Mode != "execute" || p.Request.RunID != run.ID {
+			return ErrManagedProcessHeld
+		}
+		var ready ManagedThreadReady
+		if err = completionRecord(ctx, tx, "managed_thread_ready", b.PreparationID, &ready); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrManagedProcessHeld
+			}
+			return err
+		}
+		if ready.OwnerID != managedOwner || ready.ThreadID != b.ThreadID {
+			return ErrManagedProcessHeld
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var runClaimOwner string
+	err = completionRecord(ctx, tx, "managed_run_claim", run.ID, &runClaimOwner)
+	if err == nil {
+		if managedOwner == "" || runClaimOwner == "" || runClaimOwner != managedOwner {
+			return ErrManagedProcessHeld
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+		if managedOwner != "" {
+			return ErrManagedProcessHeld
+		}
+	} else {
+		return err
 	}
 	var deadlineStop int
 	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='deadline_preparation_stop' AND id=?)", b.PreparationID).Scan(&deadlineStop); err != nil {
@@ -378,11 +446,26 @@ func sessionStopProofID(sessionID, preparationID string) string {
 // MarkSessionStopped is called only after the trusted process owner confirms all
 // app-server children stopped. Normal turn completion alone never frees a slot.
 func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID string) error {
+	return k.markSessionStopped(ctx, sessionID, "", proofID)
+}
+func (k *KernelStore) MarkSessionPreparationStopped(ctx context.Context, sessionID, preparationID, proofID string) error {
+	if preparationID == "" {
+		return errors.New("preparation stopping identity required")
+	}
+	return k.markSessionStopped(ctx, sessionID, preparationID, proofID)
+}
+func (k *KernelStore) markSessionStopped(ctx context.Context, sessionID, preparationID, proofID string) error {
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err = k.markSessionStoppedTx(ctx, tx, sessionID, preparationID, proofID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (k *KernelStore) markSessionStoppedTx(ctx context.Context, tx *sql.Tx, sessionID, preparationID, proofID string) (err error) {
 	var active string
 	if err = tx.QueryRowContext(ctx, "SELECT active_run_id FROM kernel_sessions WHERE id=?", sessionID).Scan(&active); err != nil {
 		return err
@@ -390,6 +473,18 @@ func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID
 	b, err := sessionBindingTx(ctx, tx, sessionID)
 	if err != nil {
 		return err
+	}
+	if preparationID != "" && b.PreparationID != preparationID {
+		return errors.New("stopping proof belongs to another preparation generation")
+	}
+	if preparationID == "" && active != "" {
+		var recovered int
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('run_recovery','managed_run_claim') AND id=?)", active).Scan(&recovered); err != nil {
+			return err
+		}
+		if recovered != 0 {
+			return errors.New("managed or recovered run requires an explicit preparation stopping proof")
+		}
 	}
 	if proofID == "" || (active != "" && active != proofID) || (active == "" && b.PreparationID != proofID) {
 		return errors.New("session stopping proof belongs to another run")
@@ -424,7 +519,7 @@ func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID
 	} else {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 func (k *KernelStore) RebindMainThread(ctx context.Context, expected contract.SessionBinding, next, snapshotID, reason string) error {
 	if expected.Kind != "orchestrator" || expected.ThreadID == "" || next == "" || next == expected.ThreadID || snapshotID == "" || reason == "" {
