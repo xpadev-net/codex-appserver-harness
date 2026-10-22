@@ -373,6 +373,9 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 }
 func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any) error {
 	if kind != "agent_run" {
+		if kind == "session_input_manifest" {
+			k.inputCache.clear()
+		}
 		return k.Store.Put(ctx, kind, id, owner, value)
 	}
 	run, ok := value.(contract.SessionRun)

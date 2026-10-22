@@ -46,3 +46,18 @@ func TestContextReadIsCommonBoundedTool(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestReadRequiresBoundReference(t *testing.T) {
+	r := ContextReadRequest{SchemaVersion: 1, Target: Target{"wave", 1, 1, 1}, Section: "manifest", Limit: MaxContextRead}
+	if r.Valid() {
+		t.Fatal("missing manifest reference")
+	}
+	r.ReferenceID = "input-manifest-reference"
+	if !r.Valid() {
+		t.Fatal("valid manifest reference rejected")
+	}
+	r.Section = "request"
+	if r.Valid() {
+		t.Fatal("reference accepted for a live context section")
+	}
+}

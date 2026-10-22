@@ -105,7 +105,7 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 		if err != nil {
 			return a, b, "", err
 		}
-		wave, err := loadWave(ctx, tx, task.WaveID)
+		wave, err := loadWaveToolScope(ctx, tx, task.WaveID)
 		if err != nil {
 			return a, b, "", err
 		}
@@ -136,7 +136,7 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 			return a, b, "", errors.New("main tool requires a controller-scoped snapshot")
 		}
 		if call.Name != "wave_create" {
-			wave, err := loadWave(ctx, tx, target.WaveID)
+			wave, err := loadWaveToolScope(ctx, tx, target.WaveID)
 			if err != nil {
 				return a, b, "", err
 			}

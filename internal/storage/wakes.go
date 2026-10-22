@@ -24,10 +24,11 @@ var ErrWakeBusy = errors.New("session already has an unfinished wake")
 // Context is constructed by controller code for these exact versioned inputs.
 // It must not contain credentials. A model cannot select the session or IDs.
 type WakeRequest struct {
-	SessionID       string          `json:"session_id"`
-	Key             string          `json:"key"`
-	NotificationIDs []string        `json:"notification_ids"`
-	Context         json.RawMessage `json:"context"`
+	SessionID             string          `json:"session_id"`
+	Key                   string          `json:"key"`
+	NotificationIDs       []string        `json:"notification_ids"`
+	Context               json.RawMessage `json:"context"`
+	IncludeSessionContext bool            `json:"include_session_context,omitempty"`
 }
 type WakeIntent struct {
 	ID              string            `json:"id"`
@@ -386,6 +387,24 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 	}
 	sort.Slice(intent.Targets, func(i, j int) bool { return intent.Targets[i].WaveID < intent.Targets[j].WaveID })
 	input.Targets = intent.Targets
+	intent.SnapshotID = structureID("wake-snapshot-", b.ID, id)
+	if request.IncludeSessionContext {
+		state, refs, contextErr := k.sessionContextTx(ctx, tx, b, intent.Targets)
+		if contextErr != nil {
+			return reservation, contextErr
+		}
+		combined, contextErr := encodeWakeJSON(struct {
+			State        SessionContext  `json:"state"`
+			Supplemental json.RawMessage `json:"supplemental"`
+		}{state, request.Context})
+		if contextErr != nil {
+			return reservation, contextErr
+		}
+		input.Context = combined
+		if contextErr = saveInputGrantsTx(ctx, tx, b.ID, intent.SnapshotID, refs); contextErr != nil {
+			return reservation, contextErr
+		}
+	}
 	rawInput, err := encodeWakeJSON(input)
 	if err != nil {
 		return reservation, err
@@ -397,7 +416,6 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 	if err != nil {
 		return reservation, err
 	}
-	intent.SnapshotID = structureID("wake-snapshot-", b.ID, id)
 	intent.SnapshotDigest = fmt.Sprintf("%x", sha256.Sum256(rawInput))
 	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_snapshots(id,digest,data) VALUES(?,?,?)", intent.SnapshotID, intent.SnapshotDigest, rawInput); err != nil {
 		return reservation, err
