@@ -38,6 +38,7 @@ type owner struct {
 	closeOnce                  sync.Once
 	closeErr                   error
 	released                   bool
+	rss                        <-chan *int64
 }
 
 func newOwner(ctx context.Context, k *storage.KernelStore, f Factory, sessionID, runID, mode string, now func() time.Time) (*owner, error) {
@@ -134,6 +135,7 @@ func (o *owner) ensure(ctx context.Context) (*codex.SessionRPC, error) {
 	if err = o.store.ObserveProcess(ctx, storage.ProcessObservation{ReservationID: p.PreparationID, SessionID: o.sessionID, PID: &pid, SpawnedAt: &spawned}); err != nil {
 		return fail(err)
 	}
+	o.rss = sampleRSS(o.ctx, identity)
 	var handler codex.ToolHandler
 	if o.mode == "execute" {
 		handler, err = worker.KernelToolHandler(o.sessionID, o.runID, contract.KernelGateway{Backend: o.store})
@@ -251,7 +253,13 @@ func (o *owner) Close() error {
 		proof := storage.ManagedStopProof{OwnerID: o.id, Disposition: "not_started"}
 		var metricErr error
 		if o.process != nil {
-			metricErr = o.store.ObserveProcess(ctx, storage.ProcessObservation{ReservationID: o.reservation.Binding.PreparationID, SessionID: o.sessionID, StopRequestedAt: &requested})
+			observation := storage.ProcessObservation{ReservationID: o.reservation.Binding.PreparationID, SessionID: o.sessionID, StopRequestedAt: &requested}
+			if o.rss != nil {
+				if peak := <-o.rss; peak != nil {
+					observation.PeakRSSBytes, observation.RSSMethod, observation.RSSIntervalNanos = peak, storage.RSSProcTree, int64(RSSSampleInterval)
+				}
+			}
+			metricErr = o.store.ObserveProcess(ctx, observation)
 			_ = o.process.Close()
 			if !o.process.GroupStopped() {
 				o.closeErr = errors.Join(process.ErrUnconfirmed, metricErr)

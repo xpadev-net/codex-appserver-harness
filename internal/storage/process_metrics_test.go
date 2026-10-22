@@ -138,3 +138,45 @@ func TestProcessMetricsPagesAdvanceAcrossExternalAndUnknownHistory(t *testing.T)
 		t.Fatal(end, err)
 	}
 }
+
+func TestProcessRSSSamplingProvenanceSurvivesReopenAndRejectsMixing(t *testing.T) {
+	ctx := context.Background()
+	k, w, _ := operationFixture(t)
+	r := operationRequest(t, w, "runner", "sampled")
+	if _, err := k.ReserveOperationCapacity(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	peak := int64(4096)
+	observation := ProcessObservation{ReservationID: r.ID, SessionID: r.SessionID, PeakRSSBytes: &peak, RSSMethod: RSSProcTree, RSSIntervalNanos: int64(500 * time.Millisecond)}
+	if err := k.ObserveProcess(ctx, observation); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(k.Root, "state.db")
+	k.Close()
+	k, err := OpenKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	for _, change := range []func(*ProcessObservation){
+		func(o *ProcessObservation) { o.RSSMethod = "unknown" },
+		func(o *ProcessObservation) { o.RSSMethod = ""; o.RSSIntervalNanos = 0 },
+		func(o *ProcessObservation) { o.RSSIntervalNanos++ },
+		func(o *ProcessObservation) { o.PeakRSSBytes = nil },
+	} {
+		invalid := observation
+		change(&invalid)
+		if err := k.ObserveProcess(ctx, invalid); err == nil {
+			t.Fatal("conflicting RSS source accepted", invalid)
+		}
+	}
+	low := int64(1024)
+	observation.PeakRSSBytes = &low
+	if err := k.ObserveProcess(ctx, observation); err != nil {
+		t.Fatal(err)
+	}
+	m, err := k.ProcessMetrics(ctx, r.ID)
+	if err != nil || m.PeakRSSBytes == nil || *m.PeakRSSBytes != peak || m.RSSMethod != RSSProcTree || m.RSSIntervalNanos != int64(500*time.Millisecond) {
+		t.Fatal(m, err)
+	}
+}
