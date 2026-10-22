@@ -53,7 +53,7 @@ func parentAttentionTx(ctx context.Context, q queryer, id string) (ParentAttenti
 	return a, nil
 }
 func (k *KernelStore) saveParentAttentionTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task, reason, detail string) (bool, error) {
-	if wave.DispatchPaused() || wave.State == domain.WaveCompleted || wave.State == domain.WaveCanceled || !k.clock().Before(wave.Deadline) || task.Paused {
+	if wave.DispatchPaused() || wave.State == domain.WaveCompleted || wave.State == domain.WaveCanceled || !k.clock().Before(wave.Deadline) || task.Paused && !task.State.Terminal() {
 		return false, nil
 	}
 	if err := currentObservedTaskTx(ctx, tx, wave, task); err != nil {
@@ -196,7 +196,7 @@ func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.
 	if err != nil {
 		return err
 	}
-	paused := task.Paused
+	paused := task.Paused && !task.State.Terminal()
 	task.Paused = a.Task.Paused
 	digest, err := contentDigest(task)
 	if err != nil {

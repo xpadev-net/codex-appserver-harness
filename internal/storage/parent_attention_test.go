@@ -540,3 +540,36 @@ func TestParentAttentionUnavailableArtifactManifestHasExplicitContext(t *testing
 		})
 	}
 }
+
+func TestCanceledPausedTaskStillNotifiesParentWithoutReopeningTask(t *testing.T) {
+	ctx := context.Background()
+	k, w, tasks := readyFixture(t)
+	task := tasks[0]
+	mustControl(t, k, operatorRequest(w, "pause-task", "pause", task.ID))
+	mustControl(t, k, operatorRequest(w, "cancel-task", "cancel", task.ID))
+	current, err := k.Task(ctx, task.ID)
+	if err != nil || current.State != contract.TaskCanceled || !current.Paused {
+		t.Fatal(current, err)
+	}
+	if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(pending) != 1 || pending[0].Reason != "task_canceled" || pending[0].TaskID != task.ID {
+		t.Fatal(pending, err)
+	}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: w.OrchestratorSessionID, Key: "paused-terminal", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.RunnableWake(ctx, wake.Intent.ID); err != nil {
+		t.Fatal("terminal Task pause blocked parent", err)
+	}
+	if _, err = k.ApplyOperatorControl(ctx, operatorRequest(w, "resume-task", "resume", task.ID)); err == nil {
+		t.Fatal("notification reopened terminal Task")
+	}
+	set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()})
+	if err != nil || len(set.Tasks) != 0 {
+		t.Fatal(set, err)
+	}
+}
