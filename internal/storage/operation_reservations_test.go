@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
@@ -344,5 +345,61 @@ func TestRunnerDoesNotStealWorkspaceFromUntrackedPreparation(t *testing.T) {
 	}
 	if _, err = k.ReserveOperationCapacity(ctx, request); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTaskSessionReservesOwnRunnerAndRejectsProductPausedTerminalAndForeignWork(t *testing.T) {
+	for _, mode := range []string{"own", "pr", "paused", "terminal", "other-wave"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, source := operationFixture(t)
+			receipt, err := k.AdoptPlan(ctx, w.Target(), "initial", storagePlanFixture())
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := k.Task(ctx, receipt.CreatedTaskIDs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := operationRequest(t, w, "runner", "task-runner")
+			request.SessionID = task.SessionID
+			switch mode {
+			case "pr":
+				request = operationRequest(t, w, "pr", "task-pr")
+				request.SessionID = task.SessionID
+			case "paused", "terminal":
+				tx, err := k.kernelTx(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "paused" {
+					task.Paused = true
+				} else {
+					task.State = contract.TaskCanceled
+					task.CompletedAt = k.clock()
+				}
+				if err = saveTask(ctx, tx, task); err != nil {
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+			case "other-wave":
+				source.SourceID = "other-wave"
+				other, err := k.CreateWave(ctx, source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Target = other.Target()
+			}
+			reservation, err := k.ReserveOperationCapacity(ctx, request)
+			if mode == "own" {
+				if err != nil || reservation.SessionID != task.SessionID || reservation.WaveID != task.WaveID {
+					t.Fatal(reservation, err)
+				}
+			} else if err == nil {
+				t.Fatal("Task role/scope/state did not hold dispatch", reservation)
+			}
+		})
 	}
 }
