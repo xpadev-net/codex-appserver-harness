@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -261,5 +262,60 @@ func TestDeadlineDoesNotStopMainRunScopedOnlyToAnotherWave(t *testing.T) {
 	var fences int
 	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='deadline_preparation_stop' AND id=?", next.PreparationID).Scan(&fences); err != nil || fences != 0 {
 		t.Fatal(fences, err)
+	}
+}
+
+func TestDeadlineAcknowledgesVerifiedStopOfUntrackedPreparation(t *testing.T) {
+	ctx := context.Background()
+	k, waves := budgetWaves(t, domain.DefaultKernelLimits(), 1)
+	old, err := k.SessionBinding(ctx, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.PreparationID = "pre-feature-unknown"
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.Exec("UPDATE kernel_sessions SET creating=1,process_stopped=0,payload=? WHERE id=?", raw, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	k.Now = func() time.Time { return waves[0].Deadline }
+	d, err := k.ExpireWave(ctx, waves[0].ID)
+	if err != nil || len(d.ActionIDs) != 1 {
+		t.Fatal(d, err)
+	}
+	if err := k.CompleteDeadlineAction(ctx, d.ActionIDs[0]); !errors.Is(err, ErrDeadlineHeld) {
+		t.Fatal("missing legacy proof accepted", err)
+	}
+	if err := k.MarkSessionStopped(ctx, old.ID, old.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.MarkSessionStopped(ctx, old.ID, old.PreparationID); err != nil {
+		t.Fatal("proof replay changed identity", err)
+	}
+	// A stopped latch or a newer owner's process is never evidence for this old
+	// action. Its explicit generation-bound fact survives restart instead.
+	newer := capacityMain(t, k, "new-owner", old.CWD)
+	if err := k.ReserveSessionThread(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(k.Root, "state.db")
+	k.Close()
+	k, err = OpenKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if err := k.CompleteDeadlineAction(ctx, d.ActionIDs[0]); err != nil {
+		t.Fatal("verified untracked stop could not complete", err)
+	}
+	capacity, err := k.ExecutionCapacity(ctx)
+	if err != nil || capacity.HeldProcessSlots != 1 {
+		t.Fatal("ack released newer process", capacity, err)
+	}
+	pending, err := k.PendingDeadlineActions(ctx, "", 10)
+	if err != nil || len(pending.Actions) != 0 {
+		t.Fatal(pending, err)
 	}
 }

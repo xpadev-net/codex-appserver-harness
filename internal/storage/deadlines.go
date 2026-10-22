@@ -310,14 +310,26 @@ func (k *KernelStore) CompleteDeadlineAction(ctx context.Context, id string) err
 			return ErrDeadlineHeld
 		}
 	} else {
-		if a.PreparationID == "" {
-			return ErrDeadlineHeld
-		}
 		r, err := loadProcessReservationTx(ctx, tx, a.PreparationID)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			var proof SessionStopProof
+			err = completionRecord(ctx, tx, "session_stop_proof", sessionStopProofID(a.SessionID, a.PreparationID), &proof)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrDeadlineHeld
+			}
+			if err != nil {
+				return err
+			}
+			expected := a.PreparationID
+			if a.RunID != "" {
+				expected = a.RunID
+			}
+			if proof.SessionID != a.SessionID || proof.PreparationID != a.PreparationID || proof.RunID != a.RunID || proof.ProofID != expected || proof.ConfirmedAt.IsZero() {
+				return ErrDeadlineHeld
+			}
+		} else if err != nil {
 			return err
-		}
-		if r.SessionID != a.SessionID || (a.RunID != "" && r.RunID != a.RunID) || r.State != "released" {
+		} else if r.SessionID != a.SessionID || (a.RunID != "" && r.RunID != a.RunID) || r.State != "released" {
 			return ErrDeadlineHeld
 		}
 	}

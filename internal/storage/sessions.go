@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -361,6 +362,19 @@ func (k *KernelStore) Put(ctx context.Context, kind, id, owner string, value any
 	return tx.Commit()
 }
 
+type SessionStopProof struct {
+	SessionID     string    `json:"session_id"`
+	PreparationID string    `json:"preparation_id"`
+	RunID         string    `json:"run_id"`
+	ProofID       string    `json:"proof_id"`
+	Generation    int       `json:"generation"`
+	ConfirmedAt   time.Time `json:"confirmed_at"`
+}
+
+func sessionStopProofID(sessionID, preparationID string) string {
+	return structureID("session-stop-", sessionID, preparationID)
+}
+
 // MarkSessionStopped is called only after the trusted process owner confirms all
 // app-server children stopped. Normal turn completion alone never frees a slot.
 func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID string) error {
@@ -390,6 +404,24 @@ func (k *KernelStore) MarkSessionStopped(ctx context.Context, sessionID, proofID
 		return err
 	}
 	if err = k.releaseSessionResourcesTx(ctx, tx, b, proofID); err != nil {
+		return err
+	}
+	// Retain the trusted stopping fact even for pre-feature processes whose
+	// preparation never had a dispatch reservation. Do not infer it from a later
+	// session latch, which may belong to another process generation.
+	stop := SessionStopProof{SessionID: b.ID, PreparationID: b.PreparationID, RunID: active, ProofID: proofID, Generation: b.Generation, ConfirmedAt: k.clock()}
+	stopID := sessionStopProofID(b.ID, b.PreparationID)
+	var previous SessionStopProof
+	err = completionRecord(ctx, tx, "session_stop_proof", stopID, &previous)
+	if err == nil {
+		if previous.SessionID != stop.SessionID || previous.PreparationID != stop.PreparationID || previous.RunID != stop.RunID || previous.ProofID != stop.ProofID || previous.Generation != stop.Generation {
+			return errors.New("session stopping fact identity conflict")
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+		if err = kernelRecordTx(ctx, tx, "session_stop_proof", stopID, b.ID, stop); err != nil {
+			return err
+		}
+	} else {
 		return err
 	}
 	return tx.Commit()
