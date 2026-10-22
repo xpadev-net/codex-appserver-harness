@@ -387,12 +387,12 @@ func TestMaintenanceErrorDoesNotSuppressOtherDeadlineAction(t *testing.T) {
 	if _, err := k.ExpireWave(ctx, b.Target.WaveID); err != nil {
 		t.Fatal(err)
 	}
-	canceled := false
 	l := NewLoop(Runtime{Store: k}, nil)
 	pc, ac := "", ""
-	err := l.maintain(ctx, map[string]*flight{b.ID: {work: work, cancel: func() { canceled = true }}}, &pc, &ac)
-	if err == nil || !canceled {
-		t.Fatal("unrelated corrupt process suppressed deadline stop", err, canceled)
+	err := l.maintain(ctx, map[string]*flight{b.ID: {work: work, cancel: func() {}}}, &pc, &ac)
+	p, processErr := k.ManagedProcess(ctx, "live")
+	if err == nil || processErr != nil || p.State != "stopped" {
+		t.Fatal("unrelated corrupt process suppressed admitted-owner disposition", err, p, processErr)
 	}
 }
 

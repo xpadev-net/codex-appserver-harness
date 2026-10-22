@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 )
 
@@ -392,13 +393,97 @@ type ManagedThreadReady struct {
 
 func managedPreparationStopFenceTx(ctx context.Context, tx *sql.Tx, id string) error {
 	var held int
-	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='deadline_preparation_stop' AND id=?)", id).Scan(&held); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('deadline_preparation_stop','interrupt_preparation_stop') AND id=?)", id).Scan(&held); err != nil {
 		return err
 	}
 	if held != 0 {
 		return ErrManagedProcessHeld
 	}
 	return nil
+}
+
+// CheckManagedRunSend rechecks exact physical ownership and durable stop intent
+// immediately before turn/start. The reserved run remains sent/unknown until its
+// outcome is reconciled; rejecting this check never permits a blind retry.
+func (k *KernelStore) CheckManagedRunSend(ctx context.Context, ownerID string) error {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	p, err := managedProcessTx(ctx, tx, ownerID)
+	if err != nil {
+		return err
+	}
+	if p.State != "started" || p.Request.Mode != "execute" {
+		return ErrManagedProcessHeld
+	}
+	if err = managedPreparationStopFenceTx(ctx, tx, p.PreparationID); err != nil {
+		return err
+	}
+	b, err := sessionBindingTx(ctx, tx, p.Request.Binding.ID)
+	if err != nil {
+		return err
+	}
+	var ready ManagedThreadReady
+	if err = completionRecord(ctx, tx, "managed_thread_ready", p.PreparationID, &ready); err != nil {
+		return err
+	}
+	expected := p.Request.Binding
+	expected.PreparationID, expected.ThreadID, expected.TaskState, expected.Closed = p.PreparationID, ready.ThreadID, b.TaskState, b.Closed
+	if ready.OwnerID != ownerID || !reflect.DeepEqual(b, expected) {
+		return ErrManagedProcessHeld
+	}
+	var active, thread string
+	var stopped, runStopped, applied int
+	if err = tx.QueryRowContext(ctx, "SELECT s.active_run_id,s.process_stopped,r.process_stopped,r.applied,r.thread_id FROM kernel_sessions s JOIN kernel_run_bindings r ON r.run_id=s.active_run_id WHERE s.id=?", b.ID).Scan(&active, &stopped, &runStopped, &applied, &thread); err != nil {
+		return err
+	}
+	if active != p.Request.RunID || stopped != 0 || runStopped != 0 || applied != 0 || thread != b.ThreadID {
+		return ErrManagedProcessHeld
+	}
+	reservation, err := loadProcessReservationTx(ctx, tx, p.PreparationID)
+	if err != nil {
+		return err
+	}
+	if reservation.State != "held" || reservation.SessionID != b.ID || reservation.RunID != active {
+		return ErrManagedProcessHeld
+	}
+	interrupted, err := runInterruptedTx(ctx, tx, b.ID, active)
+	if err != nil {
+		return err
+	}
+	if interrupted {
+		return ErrInterruptionHeld
+	}
+	if err = sessionDispatchableTx(ctx, tx, b); err != nil {
+		return err
+	}
+	var budget RunBudgetBinding
+	if err = completionRecord(ctx, tx, "run_budget", active, &budget); err != nil {
+		return err
+	}
+	if budget.RunID != active || budget.SessionID != b.ID || len(budget.Targets) == 0 || b.Kind == "task" && (len(budget.Targets) != 1 || budget.Targets[0] != b.Target) {
+		return ErrManagedProcessHeld
+	}
+	for _, target := range budget.Targets {
+		w, err := loadWave(ctx, tx, target.WaveID)
+		if err != nil {
+			return err
+		}
+		if w.Target() != target || w.DispatchPaused() || !k.clock().Before(w.Deadline) || b.Kind == "orchestrator" && w.OrchestratorSessionID != b.ID {
+			return ErrManagedProcessHeld
+		}
+		if w.State == domain.WaveCanceled || w.State == domain.WaveCompleted {
+			if b.Kind != "orchestrator" {
+				return ErrManagedProcessHeld
+			}
+			if err = terminalMainBudgetTargetTx(ctx, tx, b, active, w); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 type ManagedStopProof struct {
