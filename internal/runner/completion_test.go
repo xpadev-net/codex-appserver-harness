@@ -55,8 +55,8 @@ func TestCompletionHintFollowsExactSavedResultAndHidesControllerEnvironment(t *t
 		var request map[string]any
 		err = json.NewDecoder(conn).Decode(&request)
 		saved, loadErr := LoadResult(s.Root, s.JobID)
-		seen <- observation{request: request, saved: saved, err: errors.Join(err, loadErr)}
-		_ = json.NewEncoder(conn).Encode(ipc.Response{Version: ipc.Version, Accepted: true})
+		encodeErr := json.NewEncoder(conn).Encode(ipc.Response{Version: ipc.Version, Accepted: true})
+		seen <- observation{request: request, saved: saved, err: errors.Join(err, loadErr, encodeErr)}
 	}()
 	result, err := ExecuteWithWake(context.Background(), s, socket)
 	if err != nil || result.Status != "passed" {
