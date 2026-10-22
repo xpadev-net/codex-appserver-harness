@@ -33,9 +33,29 @@ JSON
 
 `kernel.json`は設定version 2、`state.db`はkernel schema 2です。同じinit/request IDは同じ内容で再実行でき、設定や依頼を上書きしません。同じrootへの初期化はprocess間で排他し、初期化済みDBの欠損時は再作成しません。既存の未設定DB・v1 DBは明示移行/復旧が必要です。既存のPR用rootと混ぜずに使用してください。
 
-この4コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
+これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
-request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。kernelの実行daemon・watch・優先操作のCLI接続と実K受入は後続工程です。
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。kernelの実行daemon・watch・監査付き復旧CLIと実K受入は後続工程です。
+
+### Wave / Task の優先操作
+
+`wave inspect`の現在の版を確認し、operator JSONにtarget・一意key・理由を指定します。
+
+```json
+{"key":"pause-001","target":{"wave_id":"WAVE_ID","scope_revision":1,"plan_revision":1,"policy_revision":1},"action":"pause","reason":"作業を確認する"}
+```
+
+```sh
+./harness wave pause --root /absolute/private/kernel --file operator.json
+./harness wave resume --root /absolute/private/kernel --file operator.json
+./harness wave cancel --root /absolute/private/kernel --file operator.json
+```
+
+各fileの`action`をコマンドと一致させ、新しい操作には新しいkeyを使います。同じkey/同じ内容の再送は元のreceiptを返し、操作を再適用しません。`task_id`を追加すると、そのTaskだけを操作します。cancelは終端で、resumeで戻しません。
+
+`wave steer --file direction.json`は`{key,target,instruction,criteria?}`を保存し、旧runの停止・結果照合後にcontrollerが新scopeへ適用します。任意の新criterionを指定する場合もoperatorの明示入力として記録します。保存だけで実行中turnへsteer/interruptを送りません。
+
+`wave interrupt --file interrupt.json`は`{key,target,session_id,run_id,preparation_id,reason}`で、inspectに表示された正しい実行世代を指定します。CLIは停止intentを保存し、共通runtimeがprocess停止を確認するまで枠を保持します。結果不明のrunを成功/失敗へ書き換えず、自動再実行も許可しません。
 
 ## 設定と起動
 
