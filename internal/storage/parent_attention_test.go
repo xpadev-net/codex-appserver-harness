@@ -479,3 +479,64 @@ func TestParentAttentionMissingOrInvalidResultHasExplicitContext(t *testing.T) {
 		})
 	}
 }
+
+func TestParentAttentionUnavailableArtifactManifestHasExplicitContext(t *testing.T) {
+	for _, mode := range []string{"missing", "json", "shape", "binding"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, _, artifact := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, nil)
+			var err error
+			if mode == "missing" {
+				_, err = k.DB.ExecContext(ctx, "DELETE FROM kernel_artifacts WHERE id=?", artifact.ID)
+			} else {
+				raw := []byte(`{"id":`)
+				if mode == "shape" {
+					raw = []byte(`{"id":7}`)
+				}
+				if mode == "binding" {
+					artifact.TaskID = "foreign-task"
+					raw, err = json.Marshal(artifact)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, err = k.DB.ExecContext(ctx, "UPDATE kernel_artifacts SET payload=? WHERE id=?", raw, artifact.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+				t.Fatal(changed, err)
+			}
+			pending, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+			if err != nil || len(pending) != 1 || pending[0].Reason != "task_evidence_unavailable" {
+				t.Fatal(pending, err)
+			}
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			main, err := sessionBindingTx(ctx, tx, w.OrchestratorSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := k.sessionManifestTx(ctx, tx, main, w)
+			tx.Rollback()
+			if err != nil || len(manifest.UnavailableArtifacts) != 1 || manifest.UnavailableArtifacts[0].ArtifactID != artifact.ID {
+				t.Fatal(manifest.UnavailableArtifacts, err)
+			}
+			for _, current := range manifest.Artifacts {
+				if current.ID == artifact.ID {
+					t.Fatal("invalid artifact granted as available")
+				}
+			}
+			if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: main.ID, Key: "invalid-artifact-parent", NotificationIDs: []string{pending[0].ID}, IncludeSessionContext: true}); err != nil {
+				t.Fatal("parent context could not be constructed", err)
+			}
+			set, err := k.ReadyTasks(ctx, ReadyRequest{Target: w.Target()})
+			if err != nil || len(set.Tasks) != 0 {
+				t.Fatal("invalid artifact allowed downstream dispatch", set, err)
+			}
+		})
+	}
+}

@@ -63,22 +63,23 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
-	SchemaVersion      int                            `json:"schema_version"`
-	SessionID          string                         `json:"session_id"`
-	Kind               string                         `json:"kind"`
-	Wave               domain.Wave                    `json:"wave"`
-	Plan               *PlanAdmission                 `json:"plan"`
-	Tasks              []domain.Task                  `json:"tasks"`
-	Results            map[string]contract.TaskResult `json:"results"`
-	UnavailableResults []unavailableInputResult       `json:"unavailable_results"`
-	TaskApplications   []ResultApplication            `json:"task_applications"`
-	TemplateContexts   map[string]json.RawMessage     `json:"template_contexts"`
-	TemplateSubjects   map[string]TemplateSubject     `json:"template_subjects"`
-	MainDecisions      []appliedMainDecision          `json:"main_decisions"`
-	Artifacts          []domain.Artifact              `json:"artifacts"`
-	Subscriptions      []inputSubscription            `json:"subscriptions"`
-	Direction          *WaveDirection                 `json:"direction"`
-	Budget             WaveRunBudget                  `json:"budget"`
+	SchemaVersion        int                            `json:"schema_version"`
+	SessionID            string                         `json:"session_id"`
+	Kind                 string                         `json:"kind"`
+	Wave                 domain.Wave                    `json:"wave"`
+	Plan                 *PlanAdmission                 `json:"plan"`
+	Tasks                []domain.Task                  `json:"tasks"`
+	Results              map[string]contract.TaskResult `json:"results"`
+	UnavailableResults   []unavailableInputResult       `json:"unavailable_results"`
+	TaskApplications     []ResultApplication            `json:"task_applications"`
+	TemplateContexts     map[string]json.RawMessage     `json:"template_contexts"`
+	TemplateSubjects     map[string]TemplateSubject     `json:"template_subjects"`
+	MainDecisions        []appliedMainDecision          `json:"main_decisions"`
+	Artifacts            []domain.Artifact              `json:"artifacts"`
+	UnavailableArtifacts []unavailableInputArtifact     `json:"unavailable_artifacts"`
+	Subscriptions        []inputSubscription            `json:"subscriptions"`
+	Direction            *WaveDirection                 `json:"direction"`
+	Budget               WaveRunBudget                  `json:"budget"`
 }
 
 type unavailableInputResult struct {
@@ -86,6 +87,11 @@ type unavailableInputResult struct {
 	ResultID string `json:"result_id"`
 	RunID    string `json:"run_id"`
 	Reason   string `json:"reason"`
+}
+
+type unavailableInputArtifact struct {
+	ArtifactID string `json:"artifact_id"`
+	Reason     string `json:"reason"`
 }
 
 // BuildSessionInput captures one consistent DB view, with no model/process or
@@ -281,7 +287,7 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
-	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, UnavailableResults: []unavailableInputResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
+	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, UnavailableResults: []unavailableInputResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, UnavailableArtifacts: []unavailableInputArtifact{}, Subscriptions: []inputSubscription{}}
 	tokens, unknown, saturated, err := waveTokensTx(ctx, tx, w.ID)
 	if err != nil {
 		return m, err
@@ -430,12 +436,44 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 	if err != nil {
 		return m, err
 	}
+	referenced := map[string]bool{}
+	if b.Kind == "orchestrator" {
+		selected := map[string]bool{}
+		for _, id := range ids {
+			selected[id] = true
+		}
+		for _, result := range m.Results {
+			for _, id := range resultArtifactReferences(result) {
+				referenced[id] = true
+				if !selected[id] {
+					ids = append(ids, id)
+					selected[id] = true
+				}
+			}
+		}
+		sort.Strings(ids)
+	}
 	for _, id := range ids {
 		a, err := loadArtifact(ctx, tx, id)
 		if err != nil {
+			if b.Kind == "orchestrator" && (errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrArtifactIntegrity)) {
+				reason := "invalid_artifact_manifest"
+				if errors.Is(err, sql.ErrNoRows) {
+					reason = "missing_artifact"
+				}
+				m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: reason})
+				continue
+			}
 			return m, err
 		}
-		if a.ScopeRevision != w.ScopeRevision || a.PolicyRevision != w.Policy.Revision {
+		if a.WaveID != w.ID || a.ScopeRevision != w.ScopeRevision || a.PolicyRevision != w.Policy.Revision {
+			if referenced[id] {
+				m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: "outside_scope_artifact"})
+			}
+			continue
+		}
+		if a.State != "committed" {
+			m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: "unavailable_artifact"})
 			continue
 		}
 		if err = artifactReadableTx(ctx, tx, b, w, a); err != nil {
