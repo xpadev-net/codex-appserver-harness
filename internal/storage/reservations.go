@@ -241,7 +241,7 @@ func worktreeResource(ctx context.Context, path string) (string, error) {
 		}
 	}
 }
-func claimResourceTx(ctx context.Context, tx *sql.Tx, resource string, r ProcessReservation) (ResourceLease, error) {
+func claimResourceTx(ctx context.Context, tx *sql.Tx, resource, ownerID, waveID string) (ResourceLease, error) {
 	lease := ResourceLease{Resource: resource, Generation: 1}
 	var owner, state string
 	var generation int64
@@ -251,7 +251,7 @@ func claimResourceTx(ctx context.Context, tx *sql.Tx, resource string, r Process
 	}
 	if err == nil {
 		if state == "held" {
-			if owner != r.ID {
+			if owner != ownerID {
 				return lease, ErrResourceBusy
 			}
 			lease.Generation = generation
@@ -266,7 +266,7 @@ func claimResourceTx(ctx context.Context, tx *sql.Tx, resource string, r Process
 	if err != nil {
 		return lease, err
 	}
-	result, err := tx.ExecContext(ctx, "INSERT INTO kernel_resource_leases(resource,run_id,wave_id,state,generation,payload) VALUES(?,?,?,'held',?,?) ON CONFLICT(resource) DO UPDATE SET run_id=excluded.run_id,wave_id=excluded.wave_id,state=excluded.state,generation=excluded.generation,payload=excluded.payload WHERE kernel_resource_leases.state='released'", resource, r.ID, r.WaveID, lease.Generation, raw)
+	result, err := tx.ExecContext(ctx, "INSERT INTO kernel_resource_leases(resource,run_id,wave_id,state,generation,payload) VALUES(?,?,?,'held',?,?) ON CONFLICT(resource) DO UPDATE SET run_id=excluded.run_id,wave_id=excluded.wave_id,state=excluded.state,generation=excluded.generation,payload=excluded.payload WHERE kernel_resource_leases.state='released'", resource, ownerID, waveID, lease.Generation, raw)
 	if err != nil {
 		return lease, err
 	}
@@ -335,35 +335,7 @@ func (k *KernelStore) reserveSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return err
 	}
-	// A live preparation from an older binary may have no lease row yet.
-	rows, err := tx.QueryContext(ctx, "SELECT payload FROM kernel_sessions WHERE process_stopped=0 AND id<>?", b.ID)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var raw []byte
-		var other contract.SessionBinding
-		if err = rows.Scan(&raw); err != nil {
-			rows.Close()
-			return err
-		}
-		if err = json.Unmarshal(raw, &other); err != nil {
-			rows.Close()
-			return err
-		}
-		otherPath, err := worktreeResource(ctx, other.CWD)
-		if err != nil {
-			rows.Close()
-			return err
-		}
-		if otherPath == path {
-			rows.Close()
-			return ErrResourceBusy
-		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if err = checkLiveWorkspaceTx(ctx, tx, path, b.ID); err != nil {
 		return err
 	}
 	resources := []string{"worktree:" + path}
@@ -371,7 +343,7 @@ func (k *KernelStore) reserveSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 		resources = append(resources, "thread:"+b.ThreadID)
 	}
 	for _, resource := range resources {
-		lease, err := claimResourceTx(ctx, tx, resource, r)
+		lease, err := claimResourceTx(ctx, tx, resource, r.ID, r.WaveID)
 		if err != nil {
 			return err
 		}
@@ -399,7 +371,7 @@ func bindSessionResourcesTx(ctx context.Context, tx *sql.Tx, b contract.SessionB
 			exists = exists || lease.Resource == resource
 		}
 		if !exists {
-			lease, err := claimResourceTx(ctx, tx, resource, r)
+			lease, err := claimResourceTx(ctx, tx, resource, r.ID, r.WaveID)
 			if err != nil {
 				return err
 			}
@@ -443,4 +415,39 @@ func (k *KernelStore) releaseSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 	}
 	r.State, r.StoppedAt = "released", k.clock()
 	return saveProcessReservationTx(ctx, tx, r)
+}
+
+// Untracked preparations from earlier versions still exclude their workspace.
+func checkLiveWorkspaceTx(ctx context.Context, tx *sql.Tx, path, excludeSessionID string) error {
+	rows, err := tx.QueryContext(ctx, "SELECT payload FROM kernel_sessions WHERE process_stopped=0 AND id<>?", excludeSessionID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var raw []byte
+		var other contract.SessionBinding
+		if err = rows.Scan(&raw); err != nil {
+			rows.Close()
+			return err
+		}
+		if err = json.Unmarshal(raw, &other); err != nil {
+			rows.Close()
+			return err
+		}
+		otherPath, err := worktreeResource(ctx, other.CWD)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		if otherPath == path {
+			rows.Close()
+			return ErrResourceBusy
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }
