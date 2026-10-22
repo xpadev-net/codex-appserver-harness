@@ -230,6 +230,9 @@ func (k *KernelStore) BeginManagedProcessLaunch(ctx context.Context, ownerID str
 	if p.State != "admitted" {
 		return p, ErrManagedProcessHeld
 	}
+	if err = managedPreparationStopFenceTx(ctx, tx, p.PreparationID); err != nil {
+		return p, err
+	}
 	b, err := validateManagedPreparationTx(ctx, tx, p)
 	if err != nil {
 		return p, err
@@ -301,6 +304,9 @@ func (k *KernelStore) MarkManagedThreadRPC(ctx context.Context, ownerID, method 
 	if p.State != "started" || p.Request.Mode != "execute" {
 		return ErrManagedProcessHeld
 	}
+	if err = managedPreparationStopFenceTx(ctx, tx, p.PreparationID); err != nil {
+		return err
+	}
 	b, err := validateManagedPreparationTx(ctx, tx, p)
 	if err != nil {
 		return err
@@ -327,6 +333,22 @@ func (k *KernelStore) MarkManagedThreadRPC(ctx context.Context, ownerID, method 
 		return err
 	}
 	return tx.Commit()
+}
+
+type ManagedThreadReady struct {
+	OwnerID  string `json:"owner_id"`
+	ThreadID string `json:"thread_id"`
+}
+
+func managedPreparationStopFenceTx(ctx context.Context, tx *sql.Tx, id string) error {
+	var held int
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='deadline_preparation_stop' AND id=?)", id).Scan(&held); err != nil {
+		return err
+	}
+	if held != 0 {
+		return ErrManagedProcessHeld
+	}
+	return nil
 }
 
 type ManagedStopProof struct {

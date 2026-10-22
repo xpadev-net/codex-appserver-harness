@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -417,4 +418,86 @@ func TestManagedStopRetainsIdentityWhenStartupFactWasNotSaved(t *testing.T) {
 		t.Fatal(p, err)
 	}
 	managedCapacity(t, k, 0)
+}
+
+func TestManagedStopFenceStillHoldsAfterDeadlineExtension(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(map[bool]string{false: "launch", true: "thread-rpc"}[started], func(t *testing.T) {
+			ctx := context.Background()
+			k, w, b := managedTaskFixture(t)
+			r := managedReserve(t, k, b, "fenced", "run", "execute")
+			if started {
+				managedStart(t, k, r, 100)
+			}
+			k.Now = func() time.Time { return w.Deadline }
+			d, err := k.ExpireWave(ctx, w.ID)
+			if err != nil || len(d.ActionIDs) != 1 {
+				t.Fatal(d, err)
+			}
+			if err := k.ChangeWaveDeadline(ctx, DeadlineChangeRequest{Key: "extension", Target: w.Target(), ExpectedDeadline: w.Deadline, Deadline: w.Deadline.Add(time.Hour), Reason: "operator approved extension"}); err != nil {
+				t.Fatal(err)
+			}
+			if started {
+				err = k.MarkManagedThreadRPC(ctx, r.Process.Request.OwnerID, "thread/start")
+			} else {
+				_, err = k.BeginManagedProcessLaunch(ctx, r.Process.Request.OwnerID)
+			}
+			if !errors.Is(err, ErrManagedProcessHeld) {
+				t.Fatal("stopping preparation gained new work after extension", err)
+			}
+			managedCapacity(t, k, 1)
+			proof := ManagedStopProof{OwnerID: r.Process.Request.OwnerID, Disposition: "not_started"}
+			if started {
+				proof.Disposition, proof.Identity = "group_stopped", managedIdentity(100)
+			}
+			if err := k.ConfirmManagedProcessStopped(ctx, proof); err != nil {
+				t.Fatal(err)
+			}
+			if err := k.CompleteDeadlineAction(ctx, d.ActionIDs[0]); err != nil {
+				t.Fatal(err)
+			}
+			current, err := k.SessionBinding(ctx, b.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := managedReserve(t, k, current, "after-stop", "next", "execute")
+			if _, err := k.BeginManagedProcessLaunch(ctx, next.Process.Request.OwnerID); err != nil {
+				t.Fatal("fresh preparation held by old fence", err)
+			}
+		})
+	}
+}
+func TestManagedBoundSessionMustResumeThreadBeforeReservingRun(t *testing.T) {
+	ctx := context.Background()
+	k, b := boundTaskFixture(t)
+	if err := k.MarkSessionStopped(ctx, b.ID, b.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := k.SessionBinding(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := managedReserve(t, k, current, "bound-owner", "bound-run", "execute")
+	managedStart(t, k, r, 110)
+	run := recoveryRun(k, r.Binding, r.Process.Request.RunID)
+	for _, phase := range []string{"no-thread-rpc", "reply-not-bound"} {
+		if phase == "reply-not-bound" {
+			if err := k.MarkManagedThreadRPC(ctx, r.Process.Request.OwnerID, "thread/resume"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := k.ReserveSessionRun(ctx, r.Binding, sessionSnapshot(), run); !errors.Is(err, ErrManagedProcessHeld) {
+			t.Fatal(phase, err)
+		}
+		task, err := k.Task(ctx, b.TaskID)
+		if err != nil || task.Attempts != 0 {
+			t.Fatal("unprepared app-server charged Attempt", phase, task, err)
+		}
+	}
+	if err := k.BindSessionThread(ctx, r.Binding, b.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ReserveSessionRun(ctx, r.Binding, sessionSnapshot(), run); err != nil {
+		t.Fatal("confirmed resume did not admit run", err)
+	}
 }

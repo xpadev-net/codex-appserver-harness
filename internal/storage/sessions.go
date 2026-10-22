@@ -194,6 +194,11 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET thread_id=?,creating=0,payload=? WHERE id=?", thread, raw, b.ID); err != nil {
 		return err
 	}
+	if managedOwner != "" {
+		if err = kernelRecordTx(ctx, tx, "managed_thread_ready", b.PreparationID, b.ID, ManagedThreadReady{OwnerID: managedOwner, ThreadID: thread}); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -229,6 +234,16 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 			return err
 		}
 		if p.State != "started" || p.Request.Mode != "execute" || p.Request.RunID != run.ID {
+			return ErrManagedProcessHeld
+		}
+		var ready ManagedThreadReady
+		if err = completionRecord(ctx, tx, "managed_thread_ready", b.PreparationID, &ready); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrManagedProcessHeld
+			}
+			return err
+		}
+		if ready.OwnerID != managedOwner || ready.ThreadID != b.ThreadID {
 			return ErrManagedProcessHeld
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
