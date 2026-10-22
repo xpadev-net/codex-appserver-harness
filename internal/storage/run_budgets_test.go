@@ -440,3 +440,50 @@ func TestOpenKernelRefusesRunsWithoutBudgetBindingsBeforeWriting(t *testing.T) {
 		t.Fatal("refusal changed permissions", info, err)
 	}
 }
+
+func TestNormalizedRunUsageChargesOnlyObservedDeltaAndPreservesUnknown(t *testing.T) {
+	ctx := context.Background()
+	k, waves := budgetWaves(t, domain.DefaultKernelLimits(), 2)
+	b, run, _ := reserveBudgetMain(t, k, "normalized", waves[0].Target(), waves[1].Target())
+	run.State, run.TurnID = "running", "turn-normalized"
+	run.Usage = json.RawMessage(`{"total":{"totalTokens":570},"last":{"totalTokens":40}}`)
+	run.ObservedUsage = &contract.RunUsageObservation{Version: 1, Source: "unavailable"}
+	if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range waves {
+		budget, err := k.WaveRunBudget(ctx, w.ID)
+		if err != nil || budget.ObservedTokens != 0 || budget.UnobservedRuns != 1 {
+			t.Fatal("missing baseline guessed from total or last", budget, err)
+		}
+	}
+	run.ObservedUsage = &contract.RunUsageObservation{Version: 1, Source: "thread_total_delta", HasObservation: true, TotalTokens: 70}
+	for i := 0; i < 2; i++ {
+		if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, w := range waves {
+		budget, err := k.WaveRunBudget(ctx, w.ID)
+		if err != nil || budget.ObservedTokens != 35 || budget.UnobservedRuns != 1 {
+			t.Fatal("delta lost, doubled, or declared final", budget, err)
+		}
+	}
+	run.ObservedUsage.Source = "counter_reset"
+	if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(k.Root, "state.db")
+	k.Close()
+	k, err := OpenKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	for _, w := range waves {
+		budget, err := k.WaveRunBudget(ctx, w.ID)
+		if err != nil || budget.ObservedTokens != 35 || budget.UnobservedRuns != 1 {
+			t.Fatal(budget, err)
+		}
+	}
+}

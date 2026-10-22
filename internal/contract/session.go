@@ -31,15 +31,25 @@ type InputSnapshot struct {
 }
 
 type SessionRun struct {
-	BaselineTurnIDs []string        `json:"baseline_turn_ids"`
-	BaselineKnown   bool            `json:"baseline_known"`
-	ID              string          `json:"id"`
-	ThreadID        string          `json:"thread_id"`
-	TurnID          string          `json:"turn_id"`
-	State           string          `json:"state"`
-	Reason          string          `json:"reason"`
-	Started         time.Time       `json:"started"`
-	Final           string          `json:"final"`
-	Request         *codex.Message  `json:"request,omitempty"`
-	Usage           json.RawMessage `json:"usage,omitempty"`
+	BaselineTurnIDs []string             `json:"baseline_turn_ids"`
+	BaselineKnown   bool                 `json:"baseline_known"`
+	ID              string               `json:"id"`
+	ThreadID        string               `json:"thread_id"`
+	TurnID          string               `json:"turn_id"`
+	State           string               `json:"state"`
+	Reason          string               `json:"reason"`
+	Started         time.Time            `json:"started"`
+	Final           string               `json:"final"`
+	Request         *codex.Message       `json:"request,omitempty"`
+	Usage           json.RawMessage      `json:"usage,omitempty"`
+	ObservedUsage   *RunUsageObservation `json:"observed_usage,omitempty"`
+}
+
+// RunUsageObservation is controller-normalized, best-effort usage for this run.
+// It never asserts that missing provider usage has become known or final.
+type RunUsageObservation struct {
+	Version        int    `json:"version"`
+	TotalTokens    int64  `json:"total_tokens"`
+	HasObservation bool   `json:"has_observation"`
+	Source         string `json:"source"`
 }

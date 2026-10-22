@@ -28,6 +28,7 @@ type SessionPersistence interface {
 	SessionBinding(context.Context, string) (SessionBinding, error)
 	ReserveSessionThread(context.Context, SessionBinding) error
 	BindSessionThread(context.Context, SessionBinding, string) error
+	SessionThreadUnused(context.Context, SessionBinding) (bool, error)
 	ReserveSessionRun(context.Context, SessionBinding, InputSnapshot, Run) error
 	RebindMainThread(context.Context, SessionBinding, string, string, string) error
 }
@@ -35,6 +36,7 @@ type PreparedSession struct {
 	Binding         SessionBinding
 	BaselineTurnIDs []string
 	BaselineKnown   bool
+	UsageBaseline   *int64
 }
 type SessionDriver struct {
 	RPC   RPC
@@ -129,6 +131,19 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 	}
 	b.ThreadID = reply.Thread.ID
 	prepared := PreparedSession{Binding: b, BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if len(baseline.Turns) == 0 {
+		unused := method == "thread/start"
+		if !unused {
+			unused, err = d.Store.SessionThreadUnused(ctx, b)
+			if err != nil {
+				return PreparedSession{}, err
+			}
+		}
+		if unused {
+			zero := int64(0)
+			prepared.UsageBaseline = &zero
+		}
+	}
 	for _, turn := range baseline.Turns {
 		prepared.BaselineTurnIDs = append(prepared.BaselineTurnIDs, turn.ID)
 	}
@@ -169,7 +184,7 @@ func (d SessionDriver) Execute(ctx context.Context, p PreparedSession, runID str
 	if !reflect.DeepEqual(latest, p.Binding) || latest.ThreadID == "" {
 		return Run{}, errors.New("session changed before dispatch")
 	}
-	session := Session{WorkItemID: latest.ID, Role: latest.Kind, ThreadID: latest.ThreadID, CWD: latest.CWD, Model: latest.Model, BaselineTurnIDs: p.BaselineTurnIDs, BaselineKnown: p.BaselineKnown}
+	session := Session{WorkItemID: latest.ID, Role: latest.Kind, ThreadID: latest.ThreadID, CWD: latest.CWD, Model: latest.Model, BaselineTurnIDs: p.BaselineTurnIDs, BaselineKnown: p.BaselineKnown, UsageBaseline: p.UsageBaseline}
 	worker := Worker{RPC: d.RPC, Journal: sessionJournal{SessionPersistence: d.Store, binding: latest, snapshot: snapshot}}
 	run, err := worker.Execute(ctx, session, runID, "snapshot:"+snapshot.ID, string(snapshot.Input), outputSchema)
 	if err != nil {

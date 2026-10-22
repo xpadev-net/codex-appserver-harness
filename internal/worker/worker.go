@@ -48,6 +48,7 @@ func (w Worker) preserveObservedTurn(ctx context.Context, run *Run) error {
 type Session struct {
 	BaselineTurnIDs []string `json:"baseline_turn_ids"`
 	BaselineKnown   bool     `json:"baseline_known"`
+	UsageBaseline   *int64   `json:"usage_baseline,omitempty"`
 	WorkItemID      string   `json:"work_item_id"`
 	Role            string   `json:"role"`
 	ThreadID        string   `json:"thread_id"`
@@ -127,6 +128,8 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 	if runID == "" || s.ThreadID == "" || reason == "" {
 		return r, errors.New("invalid run")
 	}
+	usage := newRunUsageTracker(s)
+	r.ObservedUsage = &contract.RunUsageObservation{Version: 1, Source: "unavailable"}
 	var existing Run
 	if err := w.Journal.Record(ctx, "agent_run", runID, &existing); err == nil {
 		return existing, errors.New("run already exists; reconcile before starting")
@@ -218,8 +221,13 @@ func (w Worker) Execute(ctx context.Context, s Session, runID, reason, prompt st
 				r.Final = p.Item.Text
 			}
 		case "thread/tokenUsage/updated":
-			if p.TurnID == r.TurnID {
+			observation, current := usage.observe(r.TurnID, p.TurnID, p.TokenUsage)
+			if current {
 				r.Usage = p.TokenUsage
+				r.ObservedUsage = &observation
+				if err = w.Journal.Put(context.WithoutCancel(ctx), "agent_run", runID, s.WorkItemID, r); err != nil {
+					return r, err
+				}
 			}
 		case "turn/completed":
 			if p.Turn.ID != r.TurnID {
