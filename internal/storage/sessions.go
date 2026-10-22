@@ -666,8 +666,8 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 	if err != nil {
 		return err
 	}
-	if b.Kind != "task" || b.ThreadID != "" || b.Closed {
-		return errors.New("only an unfinished unbound Task may be retired")
+	if b.Kind != "task" || b.ThreadID != "" || b.Closed && b.TaskState != contract.TaskCanceled {
+		return errors.New("only an unfinished or canceled unbound Task may be retired")
 	}
 	var creating, stopped int
 	var active string
@@ -681,9 +681,12 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 	if err != nil {
 		return err
 	}
-	task.State, task.Reason, task.CompletedAt = contract.TaskFailed, reason, k.clock()
-	if err = saveTask(ctx, tx, task); err != nil {
-		return err
+	alreadyCanceled := task.State == contract.TaskCanceled
+	if !alreadyCanceled {
+		task.State, task.Reason, task.CompletedAt = contract.TaskFailed, reason, k.clock()
+		if err = saveTask(ctx, tx, task); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET creating=0 WHERE id=?", sessionID); err != nil {
 		return err
@@ -695,7 +698,11 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 	if err != nil {
 		return err
 	}
-	if err = k.waveEventTx(ctx, tx, wave, "task_failed", task.ID, task.ID+":thread_lost", map[string]string{"reason": reason}); err != nil {
+	kind := "task_failed"
+	if alreadyCanceled {
+		kind = "thread_creation_retired"
+	}
+	if err = k.waveEventTx(ctx, tx, wave, kind, task.ID, task.ID+":thread_lost", map[string]string{"reason": reason}); err != nil {
 		return err
 	}
 	return tx.Commit()

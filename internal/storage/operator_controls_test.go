@@ -251,3 +251,58 @@ func TestOperatorEventFailureRollsBackAllCancellationAndAudit(t *testing.T) {
 		t.Fatal(count, err)
 	}
 }
+
+func TestOperatorCanceledLostThreadCanBeRetiredOnlyAfterStop(t *testing.T) {
+	for _, scope := range []string{"task", "wave"} {
+		t.Run(scope, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, b := managedTaskFixture(t)
+			r := managedReserve(t, k, b, "owner", "run", "execute")
+			managedStart(t, k, r, 42)
+			if err := k.MarkManagedThreadRPC(ctx, "owner", "thread/start"); err != nil {
+				t.Fatal(err)
+			}
+			taskID := b.TaskID
+			if scope == "wave" {
+				taskID = ""
+			}
+			mustControl(t, k, operatorRequest(w, "cancel-lost-start", "cancel", taskID))
+			before, err := k.Task(ctx, b.TaskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = k.RetireUnboundTaskSession(ctx, b.ID, "lost reply"); err == nil {
+				t.Fatal("unconfirmed canceled creation retired")
+			}
+			if err = k.ConfirmManagedProcessStopped(ctx, ManagedStopProof{OwnerID: "owner", Disposition: "group_stopped", Identity: managedIdentity(42)}); err != nil {
+				t.Fatal(err)
+			}
+			plan := storagePlanFixture()
+			plan.Phases[0].ID = "replacement"
+			plan.Phases[0].Tasks[0].ID = "replacement-work"
+			plan.Phases[0].Completion.RequiredTaskIDs[0] = "replacement-work"
+			plan.Phases = plan.Phases[:1]
+			if _, err = k.AdoptPlan(ctx, w.Target(), "replacement", plan); err == nil {
+				t.Fatal("unresolved creation did not hold replan")
+			}
+			if err = k.RetireUnboundTaskSession(ctx, b.ID, "audited lost reply after cancellation"); err != nil {
+				t.Fatal(err)
+			}
+			after, err := k.Task(ctx, b.TaskID)
+			if err != nil || !reflect.DeepEqual(after, before) || after.State != contract.TaskCanceled {
+				t.Fatal("cleanup changed canceled Task", after, before, err)
+			}
+			var creating int
+			if err = k.DB.QueryRowContext(ctx, "SELECT creating FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating); err != nil || creating != 0 {
+				t.Fatal(creating, err)
+			}
+			if _, err = k.ReserveManagedProcess(ctx, ManagedProcessRequest{OwnerID: "again", RunID: "again", Mode: "execute", Binding: b}); err == nil {
+				t.Fatal("canceled Task reopened after cleanup")
+			}
+			_, err = k.AdoptPlan(ctx, w.Target(), "replacement", plan)
+			if scope == "task" && err != nil || scope == "wave" && err == nil {
+				t.Fatal("cleanup did not preserve Wave cancellation policy", scope, err)
+			}
+		})
+	}
+}
