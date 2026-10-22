@@ -213,7 +213,7 @@ func (k *KernelStore) reserveArtifactTx(ctx context.Context, tx *sql.Tx, request
 	if err != nil {
 		return a, err
 	}
-	if b.Closed || w.Paused || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || !k.clock().Before(w.Deadline) {
+	if b.Closed || w.DispatchPaused() || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || !k.clock().Before(w.Deadline) {
 		return a, errors.New("Artifact publication is closed, paused or expired")
 	}
 	if b.Kind == "task" {
@@ -519,7 +519,7 @@ func (k *KernelStore) ImportArtifactFile(ctx context.Context, request ArtifactIm
 	if rollbackErr != nil {
 		return a, rollbackErr
 	}
-	if b.Closed || w.Paused || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || !k.clock().Before(w.Deadline) {
+	if b.Closed || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || !k.clock().Before(w.Deadline) {
 		return a, errors.New("Artifact source session is closed, paused or expired")
 	}
 	root, err := os.OpenRoot(b.CWD)

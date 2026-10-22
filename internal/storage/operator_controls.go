@@ -79,6 +79,9 @@ func (k *KernelStore) ApplyOperatorControl(ctx context.Context, r OperatorContro
 		}
 	} else {
 		if r.Action == "cancel" {
+			if err = cancelWaveDirectionTx(ctx, tx, &w, receipt.CreatedAt); err != nil {
+				return receipt, err
+			}
 			w.State, w.Reason, w.CompletedAt = domain.WaveCanceled, r.Reason, receipt.CreatedAt
 			// Cancellation supersedes pause. The parent's terminal observation
 			// must remain deliverable; terminal state still forbids Task dispatch.

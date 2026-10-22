@@ -152,12 +152,14 @@ func (k *KernelStore) activePhaseTx(ctx context.Context, tx *sql.Tx, target cont
 		return set, nil, false, errors.New("stale scheduler target")
 	}
 	switch {
-	case wave.Paused:
+	case wave.DispatchPaused():
 		set.Reason = "paused"
 	case wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted:
 		set.Reason = "terminal"
 	case !k.clock().Before(wave.Deadline):
 		set.Reason = "deadline_exceeded"
+	case wave.State == domain.WavePlanning && wave.DirectionID != "":
+		set.Reason = "plan_required"
 	}
 	if set.Reason != "" {
 		return set, nil, false, nil

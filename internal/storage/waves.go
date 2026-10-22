@@ -353,7 +353,7 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	if err != nil {
 		return receipt, err
 	}
-	if wave.Target() != target || wave.Paused || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
+	if wave.Target() != target || wave.DispatchPaused() || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
 		return receipt, errors.New("stale/terminal/paused/expired Wave")
 	}
 	if err = domain.ValidateWavePlan(wave, plan); err != nil {

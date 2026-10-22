@@ -175,7 +175,7 @@ func operationCapacityOwnerTx(ctx context.Context, tx *sql.Tx, r OperationCapaci
 	if err != nil {
 		return err
 	}
-	if w.Target() != r.Target || w.Paused || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || !now.Before(w.Deadline) || b.Closed {
+	if w.Target() != r.Target || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || !now.Before(w.Deadline) || b.Closed {
 		return errors.New("operation source is stale, paused, expired or terminal")
 	}
 	if b.Kind == "orchestrator" {

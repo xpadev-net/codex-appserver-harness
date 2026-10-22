@@ -162,7 +162,7 @@ func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b cont
 	if err != nil {
 		return err
 	}
-	if obsoleteWakeNotification(b, wave, n, k.clock()) || wave.Paused {
+	if obsoleteWakeNotification(b, wave, n, k.clock()) || wave.DispatchPaused() {
 		return ErrWakeHeld
 	}
 	held, err := wakeBudgetHeldTx(ctx, tx, b, wave)

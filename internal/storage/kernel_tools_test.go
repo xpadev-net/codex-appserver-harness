@@ -50,7 +50,7 @@ func kernelCall(t *testing.T, b contract.SessionBinding, run contract.SessionRun
 	return contract.ToolInvocation{SessionID: b.ID, RunID: run.ID, ThreadID: b.ThreadID, TurnID: "tool-turn", CallID: "call", Name: name, Arguments: raw}
 }
 func TestKernelToolSourceRejectsForeignOrOldRuntimeIdentities(t *testing.T) {
-	for _, mutation := range []string{"session", "run", "thread", "baseline-turn", "namespace", "paused", "stopped", "superseded"} {
+	for _, mutation := range []string{"session", "run", "thread", "baseline-turn", "namespace", "paused", "direction", "stopped", "superseded"} {
 		t.Run(mutation, func(t *testing.T) {
 			ctx := context.Background()
 			k, wave, _, b, run := kernelToolFixture(t, "task")
@@ -66,6 +66,8 @@ func TestKernelToolSourceRejectsForeignOrOldRuntimeIdentities(t *testing.T) {
 				call.TurnID = "old-turn"
 			case "namespace":
 				call.Namespace = "functions"
+			case "direction":
+				mustDirection(t, k, wave)
 			case "stopped":
 				if err := k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
 					t.Fatal(err)

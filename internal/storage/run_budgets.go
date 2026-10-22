@@ -196,7 +196,7 @@ func (k *KernelStore) reserveRunBudgetTx(ctx context.Context, tx *sql.Tx, b cont
 		if err = w.Validate(); err != nil {
 			return err
 		}
-		if w.Target() != target || w.Paused || !k.clock().Before(w.Deadline) {
+		if w.Target() != target || w.DispatchPaused() || !k.clock().Before(w.Deadline) {
 			return fmt.Errorf("%w: %s is stale, paused or expired", ErrWaveRunBudget, w.ID)
 		}
 		if b.Kind == "orchestrator" {

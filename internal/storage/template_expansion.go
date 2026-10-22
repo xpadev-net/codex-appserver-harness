@@ -70,7 +70,7 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 	if err != nil {
 		return receipt, err
 	}
-	if wave.Target() != request.Target || wave.Paused || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
+	if wave.Target() != request.Target || wave.DispatchPaused() || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
 		return receipt, errors.New("stale/paused/terminal/expired template target")
 	}
 	if wave.Policy.Stage != "K" || wave.Policy.Product {
