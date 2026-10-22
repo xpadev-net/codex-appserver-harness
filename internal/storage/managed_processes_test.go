@@ -501,3 +501,115 @@ func TestManagedBoundSessionMustResumeThreadBeforeReservingRun(t *testing.T) {
 		t.Fatal("confirmed resume did not admit run", err)
 	}
 }
+
+func TestManagedPlannedRunCannotBeClaimedByTwoSessions(t *testing.T) {
+	ctx := context.Background()
+	k, _, task := managedTaskFixture(t)
+	main, err := k.SessionBinding(ctx, task.ParentSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := managedReserve(t, k, task, "first-owner", "same-run", "execute")
+	second := ManagedProcessRequest{OwnerID: "second-owner", RunID: "same-run", Mode: "execute", Binding: main}
+	if _, err := k.ReserveManagedProcess(ctx, second); !errors.Is(err, ErrManagedProcessHeld) {
+		t.Fatal("planned run admitted twice", err)
+	}
+	managedCapacity(t, k, 1)
+	if err := k.ConfirmManagedProcessStopped(ctx, ManagedStopProof{OwnerID: first.Process.Request.OwnerID, Disposition: "not_started"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReserveManagedProcess(ctx, second); !errors.Is(err, ErrManagedProcessHeld) {
+		t.Fatal("logical run transferred to another session", err)
+	}
+	current, err := k.SessionBinding(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := managedReserve(t, k, current, "retry-same-session", "same-run", "execute")
+	if _, err := k.BeginManagedProcessLaunch(ctx, retry.Process.Request.OwnerID); err != nil {
+		t.Fatal("known unsent logical run could not retry", err)
+	}
+	managedCapacity(t, k, 1)
+}
+func TestManagedThreadRPCChecksDeadlineWithoutExpirySweep(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(map[bool]string{false: "start", true: "resume"}[bound], func(t *testing.T) {
+			ctx := context.Background()
+			k, w, b := managedTaskFixture(t)
+			if bound {
+				old := reserveSessionFixture(t, k, b)
+				if err := k.BindSessionThread(ctx, old, "existing-thread"); err != nil {
+					t.Fatal(err)
+				}
+				if err := k.MarkSessionStopped(ctx, b.ID, old.PreparationID); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				b, err = k.SessionBinding(ctx, b.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := managedReserve(t, k, b, "slow-initialize", "run", "execute")
+			managedStart(t, k, r, 120)
+			k.Now = func() time.Time { return w.Deadline }
+			method := "thread/start"
+			if bound {
+				method = "thread/resume"
+			}
+			if err := k.MarkManagedThreadRPC(ctx, r.Process.Request.OwnerID, method); !errors.Is(err, ErrManagedProcessHeld) {
+				t.Fatal("expired thread RPC admitted before sweep", err)
+			}
+			var intents int
+			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='managed_thread_rpc' AND id=?", r.Binding.PreparationID).Scan(&intents); err != nil || intents != 0 {
+				t.Fatal(intents, err)
+			}
+			managedCapacity(t, k, 1)
+		})
+	}
+}
+
+func TestManagedPlannedRunClaimIsAtomicAcrossConnections(t *testing.T) {
+	ctx := context.Background()
+	k, _, task := managedTaskFixture(t)
+	other, err := OpenKernel(filepath.Join(k.Root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	main, err := k.SessionBinding(ctx, task.ParentSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := []ManagedProcessRequest{{OwnerID: "concurrent-task", RunID: "one-logical-run", Mode: "execute", Binding: task}, {OwnerID: "concurrent-main", RunID: "one-logical-run", Mode: "execute", Binding: main}}
+	stores := []*KernelStore{k, other}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := range requests {
+		go func() {
+			<-start
+			r, err := stores[i].ReserveManagedProcess(ctx, requests[i])
+			if err == nil && !r.Created {
+				err = errors.New("unexpected replay")
+			}
+			results <- err
+		}()
+	}
+	close(start)
+	created, held := 0, 0
+	for range 2 {
+		if err := <-results; err == nil {
+			created++
+		} else {
+			held++
+		}
+	}
+	if created != 1 || held != 1 {
+		t.Fatal("planned run had multiple owners", created, held)
+	}
+	managedCapacity(t, k, 1)
+	var owners int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='managed_process'").Scan(&owners); err != nil || owners != 1 {
+		t.Fatal(owners, err)
+	}
+}

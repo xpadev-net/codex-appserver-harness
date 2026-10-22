@@ -108,6 +108,9 @@ func (k *KernelStore) ReserveManagedProcess(ctx context.Context, r ManagedProces
 	if !errors.Is(err, sql.ErrNoRows) {
 		return result, err
 	}
+	if err = checkManagedRunClaimTx(ctx, tx, r); err != nil {
+		return result, err
+	}
 	if r.Mode == "execute" {
 		var exists int
 		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_run_bindings WHERE run_id=?)", r.RunID).Scan(&exists); err != nil {
@@ -133,9 +136,64 @@ func (k *KernelStore) ReserveManagedProcess(ctx context.Context, r ManagedProces
 	if err = kernelRecordTx(ctx, tx, "managed_preparation", b.PreparationID, b.ID, r.OwnerID); err != nil {
 		return result, err
 	}
+	if err = kernelRecordTx(ctx, tx, "managed_run_claim", r.RunID, b.ID, r.OwnerID); err != nil {
+		return result, err
+	}
 	result = ManagedReservation{Binding: b, Process: p, Created: true}
 	return result, tx.Commit()
 }
+
+// Planned runs are globally owned even before kernel_run_bindings exists.
+// A stopped predecessor can yield only to the same logical session; recovery
+// may reuse that run without ever granting a second model start.
+func checkManagedRunClaimTx(ctx context.Context, tx *sql.Tx, r ManagedProcessRequest) error {
+	var owner string
+	err := completionRecord(ctx, tx, "managed_run_claim", r.RunID, &owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	previous, err := managedProcessTx(ctx, tx, owner)
+	if err != nil {
+		return err
+	}
+	if previous.Request.Binding.ID != r.Binding.ID {
+		return ErrManagedProcessHeld
+	}
+	reservation, err := loadProcessReservationTx(ctx, tx, previous.PreparationID)
+	if err != nil {
+		return err
+	}
+	if reservation.State != "released" || reservation.SessionID != r.Binding.ID {
+		return ErrManagedProcessHeld
+	}
+	var proof SessionStopProof
+	if err := completionRecord(ctx, tx, "session_stop_proof", sessionStopProofID(r.Binding.ID, previous.PreparationID), &proof); err != nil {
+		return err
+	}
+	if proof.SessionID != r.Binding.ID || proof.PreparationID != previous.PreparationID || proof.RunID != reservation.RunID || proof.ConfirmedAt.IsZero() {
+		return ErrManagedProcessHeld
+	}
+	return nil
+}
+func managedExecuteDispatchableTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, now time.Time) error {
+	if err := sessionDispatchableTx(ctx, tx, b); err != nil {
+		return err
+	}
+	if b.Kind == "task" {
+		w, err := loadWave(ctx, tx, b.Target.WaveID)
+		if err != nil {
+			return err
+		}
+		if !now.Before(w.Deadline) {
+			return ErrManagedProcessHeld
+		}
+	}
+	return nil
+}
+
 func (k *KernelStore) reserveSessionRecoveryTx(ctx context.Context, tx *sql.Tx, expected contract.SessionBinding, runID string) error {
 	b, err := sessionBindingTx(ctx, tx, expected.ID)
 	if err != nil {
@@ -238,19 +296,11 @@ func (k *KernelStore) BeginManagedProcessLaunch(ctx context.Context, ownerID str
 		return p, err
 	}
 	if p.Request.Mode == "execute" {
-		if err = sessionDispatchableTx(ctx, tx, b); err != nil {
+		if err = managedExecuteDispatchableTx(ctx, tx, b, k.clock()); err != nil {
 			return p, err
 		}
-		if b.Kind == "task" {
-			w, err := loadWave(ctx, tx, b.Target.WaveID)
-			if err != nil {
-				return p, err
-			}
-			if !k.clock().Before(w.Deadline) {
-				return p, ErrManagedProcessHeld
-			}
-		}
 	}
+
 	p.State = "launching"
 	if err = saveManagedProcessTx(ctx, tx, p); err != nil {
 		return p, err
@@ -318,7 +368,7 @@ func (k *KernelStore) MarkManagedThreadRPC(ctx context.Context, ownerID, method 
 	if method != want {
 		return errors.New("thread RPC does not match the preparation")
 	}
-	if err = sessionDispatchableTx(ctx, tx, b); err != nil {
+	if err = managedExecuteDispatchableTx(ctx, tx, b, k.clock()); err != nil {
 		return err
 	}
 	var existing string
