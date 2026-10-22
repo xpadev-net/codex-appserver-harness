@@ -1,0 +1,36 @@
+{
+  "authentication": "empty template",
+  "combined_rss_sample_bytes": 236998656,
+  "final_held_process_slots": 0,
+  "independent_tasks": 2,
+  "k_workflow_acceptance": false,
+  "launcher_sha256": "13d738b10f13a37c472f499c7c6e05317311796802bdad36faa5261c7bff75c9",
+  "model_calls": 0,
+  "native_version": "codex-cli 0.163.0",
+  "observations": [
+    {
+      "group_stopped": true,
+      "initialize_nanos": 532510909,
+      "initialized": true,
+      "probe_nanos": 484270584,
+      "rss_method": "linux_proc_tree_rss_sampled_sum",
+      "rss_sample_bytes": 123199488,
+      "stop_nanos": 8122556
+    },
+    {
+      "group_stopped": true,
+      "initialize_nanos": 721464433,
+      "initialized": true,
+      "probe_nanos": 534159852,
+      "rss_method": "linux_proc_tree_rss_sampled_sum",
+      "rss_sample_bytes": 113799168,
+      "stop_nanos": 6142770
+    }
+  ],
+  "observed_at": "2026-10-22T15:41:43.192039134Z",
+  "rss_sampling": "one observation while both are alive; sum may count shared pages per process; not a peak or memory limit",
+  "simultaneously_live_app_servers": 2,
+  "stage": "Task_5 model-free parallel process probe",
+  "third_prelaunch_reservation_denied": true,
+  "thread_or_turn_started": false
+}

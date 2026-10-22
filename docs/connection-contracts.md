@@ -242,3 +242,22 @@ Both parent and Task use the same authenticated SessionRPC. After initialize/ini
 The external-auth API is unstable and marked internal in the generated schema; this implementation is explicitly pinned to the adopted 0.163.0 contract, with its exact schemas/hashes stored in `protocol/codex/experimental`. It requires renewed observation before changing the native version. The [pinned native bridge](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/app-server/src/external_auth.rs) owns native refresh request handling; the [pinned native storage implementation](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/login/src/auth/storage.rs) separates access-token auth from session history.
 
 The operator explicitly authorized this session's credentials. The opt-in `TestLiveSessionAccessTokenInitializeAndStop` used the actual native/bwrap launcher and current source access token for both roles. [Sanitized evidence](../evidence/background-wave/runtime/session-authentication.json) records successful initialization and original-group stopping. No worker auth.json, thread, turn or model call was created. This is authentication/process evidence, not K workflow acceptance or Cloud approval. Normal tests use fixtures and skip this probe.
+
+
+## Task_5 reference observations
+
+`TestNotificationReservationReferenceLoad` sends 100 distinct durable parent messages to two independent Tasks through the real SQLite notification/wake APIs, private Unix IPC and controller loop. Each notification gets a separate wake reservation. Both process slots are free before each pair, and a barrier requires the two controlled process fixtures to enter before either finishes. The explicit workload policy allows 50 turns per Task; production defaults are unchanged. Each valid waiting result is applied through the real storage transaction; all 100 notifications must reach applied and final held slots must be zero.
+
+The retained [race-enabled latency observation](../evidence/background-wave/runtime/notification-latency-race.json) measures from immediately **before the notification save call** through committed wake reservation, conservatively including the save transaction. It records every sample, nearest-rank p95, maximum, elapsed time and host/Go metadata. The 1s NFR-012 target is SHOULD: a performance miss is reported with the samples while functional lifecycle/persistence failures still fail the test. This workload uses controlled WorkSource/process fixtures and stubbed model/external I/O. It does not measure production Task_6 source reconstruction or actual model latency, and is not K acceptance.
+
+The separate [parallel native observation](../evidence/background-wave/runtime/parallel-native.json) initializes two actual 0.163.0 app-servers through bwrap, observes both alive together, rejects a third reservation before launch, and releases each slot only after its original group stops. Startup/probe/stop times and simultaneous RSS points are recorded separately from notification latency. RSS sums may double-count shared pages and are single observations, not peak or memory-limit evidence. No thread, turn or model call starts. Full production WorkSource/CLI/live-model K acceptance remains Task_6/9/10.
+
+```sh
+HARNESS_LATENCY_EVIDENCE=/absolute/notification-latency-race.json \
+go test -race ./internal/control -run '^TestNotificationReservationReferenceLoad$' -count=1 -v
+
+HARNESS_LIVE_FACTORY_PARALLEL=1 \
+HARNESS_LIVE_CODEX_BINARY=/absolute/native/codex \
+HARNESS_PARALLEL_EVIDENCE=/absolute/parallel-native.json \
+go test ./internal/control -run '^TestLiveParallelNativeCapacityAndStop$' -count=1
+```
