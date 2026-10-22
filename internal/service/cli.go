@@ -85,7 +85,7 @@ func CLI(ctx context.Context, args []string) error {
 		} else if !missing(err) {
 			return err
 		}
-		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution", "final_failure", "final_recovery_audit", "budget_baseline", "final_failure_history", "parent_final_history", "split_progress", "evidence_retention"} {
+		for _, kind := range []string{"scope", "candidate", "plan", "agent_run", "agent_process", "agent_quiesced", "agent_stop_proof", "validation", "review_round", "gate", "operation_error", "assessment", "source", "residual", "job_intent", "parent_completion", "parent_final_error", "continuation_hold", "ci_evidence", "runner_lifecycle", "runner_resolution", "final_failure", "final_recovery_audit", "budget_baseline", "final_failure_history", "parent_final_history", "split_progress", "evidence_retention"} {
 			records, err := s.Records(ctx, kind, w.ID)
 			if err != nil {
 				return err
@@ -174,6 +174,25 @@ func CLI(ctx context.Context, args []string) error {
 				return errors.New("reconcile outstanding operation before retry")
 			}
 		}
+		processes, err := s.Records(ctx, "agent_process", w.ID)
+		if err != nil {
+			return err
+		}
+		stoppedProcesses := map[string]bool{}
+		for _, raw := range processes {
+			var p AgentProcess
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return err
+			}
+			if p.OperationID == "" || p.WorkItemID != w.ID {
+				return errors.New("agent process identity conflicts with WorkItem")
+			}
+			var proof AgentStopProof
+			if err := s.Record(ctx, "agent_stop_proof", p.OperationID, &proof); err != nil || !agentProofMatches(p, proof) {
+				return errors.New("turn process quiescence is unverified; associate and reconcile first")
+			}
+			stoppedProcesses[p.OperationID] = true
+		}
 		runs, err := s.Records(ctx, "agent_run", w.ID)
 		if err != nil {
 			return err
@@ -183,8 +202,11 @@ func CLI(ctx context.Context, args []string) error {
 			if err = json.Unmarshal(data, &run); err != nil {
 				return err
 			}
+			if stoppedProcesses[run.ID] {
+				continue
+			}
 			var quiesced bool
-			if run.State != "completed" && s.Record(ctx, "agent_quiesced", run.ID, &quiesced) != nil {
+			if s.Record(ctx, "agent_quiesced", run.ID, &quiesced) != nil || !quiesced {
 				return errors.New("turn process quiescence is unverified; associate and reconcile first")
 			}
 		}

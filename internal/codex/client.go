@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"io"
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 type Message struct {
@@ -30,14 +33,18 @@ func (e *RequestError) Error() string {
 
 // Client is sequential: a single owner must consume calls and notifications.
 type Client struct {
-	writeMu  sync.Mutex
-	cancel   context.CancelFunc
-	cmd      *exec.Cmd
-	in       io.WriteCloser
-	messages chan Message
-	terminal error
-	pending  []Message
-	seq      int
+	identity     process.Identity
+	closeOnce    sync.Once
+	closeErr     error
+	groupStopped atomic.Bool
+	writeMu      sync.Mutex
+	cancel       context.CancelFunc
+	cmd          *exec.Cmd
+	in           io.WriteCloser
+	messages     chan Message
+	terminal     error
+	pending      []Message
+	seq          int
 }
 
 func Start(ctx context.Context, binary string, args ...string) (*Client, error) {
@@ -69,7 +76,7 @@ func StartCommand(ctx context.Context, binary string, args, environment []string
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := &Client{cancel: cancel, cmd: cmd, in: in, messages: make(chan Message, 64)}
+	c := &Client{cancel: cancel, cmd: cmd, identity: process.Identify(cmd.Process.Pid), in: in, messages: make(chan Message, 64)}
 	go func() {
 		defer close(c.messages)
 		scanner := bufio.NewScanner(out)
@@ -96,7 +103,32 @@ func StartCommand(ctx context.Context, binary string, args, environment []string
 	success = true
 	return c, nil
 }
-func (c *Client) Close() error { c.cancel(); _ = c.in.Close(); return c.cmd.Wait() }
+
+// ProcessIdentity returns the original host identity, never just a reusable PID.
+func (c *Client) ProcessIdentity() process.Identity { return c.identity }
+
+// GroupStopped covers this transport and its process group. The verified
+// launcher must separately contain descendants that create other groups.
+func (c *Client) GroupStopped() bool { return c.groupStopped.Load() }
+func (c *Client) Close() error {
+	c.closeOnce.Do(func() {
+		c.cancel()
+		_ = c.in.Close()
+		// The owned leader may have changed groups. Kill its unreaped process
+		// handle too, without signaling another process group's numeric PID.
+		_ = c.cmd.Process.Kill()
+		waitErr := c.cmd.Wait()
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		stopErr := process.WaitStopped(stopCtx, c.identity)
+		if c.cmd.ProcessState == nil {
+			stopErr = errors.Join(stopErr, process.ErrUnconfirmed)
+		}
+		c.groupStopped.Store(stopErr == nil)
+		c.closeErr = errors.Join(waitErr, stopErr)
+	})
+	return c.closeErr
+}
 func (c *Client) Send(v any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
