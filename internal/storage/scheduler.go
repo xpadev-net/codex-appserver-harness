@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -39,7 +40,7 @@ type ReadySet struct {
 }
 
 func readinessHoldError(err error) bool {
-	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrTaskBinding) || errors.Is(err, ErrArtifactUnavailable) || errors.Is(err, ErrArtifactScope) || errors.Is(err, ErrArtifactIntegrity) || errors.Is(err, ErrTemplateNeedsMain)
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrTaskBinding) || errors.Is(err, ErrArtifactUnavailable) || errors.Is(err, ErrArtifactScope) || errors.Is(err, ErrArtifactIntegrity) || errors.Is(err, ErrTemplateNeedsMain)
 }
 
 // ReadyTasks evaluates only saved facts. Selection reserves no process or run;

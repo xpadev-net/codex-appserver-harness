@@ -51,6 +51,9 @@ type Notification struct {
 	OperationID          string             `json:"operation_id,omitempty"`
 	ArtifactID           string             `json:"artifact_id,omitempty"`
 	OperationState       string             `json:"operation_state,omitempty"`
+	AttentionID          string             `json:"attention_id,omitempty"`
+	Reason               string             `json:"reason,omitempty"`
+	Detail               string             `json:"detail,omitempty"`
 	TaskState            contract.TaskState `json:"task_state"`
 	WaveState            domain.WaveState   `json:"wave_state"`
 	ResultID             string             `json:"result_id"`
@@ -336,6 +339,9 @@ func (k *KernelStore) fanoutNotificationTx(ctx context.Context, tx *sql.Tx, inte
 		return err
 	}
 	if err = k.fanoutKernelOperationTx(ctx, tx, intent); err != nil {
+		return err
+	}
+	if err = k.fanoutParentAttentionTx(ctx, tx, intent); err != nil {
 		return err
 	}
 	return kernelRecordTx(ctx, tx, "notification_fanout", intent.EventID, intent.Target.WaveID, intent)

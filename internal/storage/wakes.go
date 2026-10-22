@@ -176,6 +176,9 @@ func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b cont
 		return ErrWakeHeld
 	}
 	if b.Kind == "orchestrator" && wave.OrchestratorSessionID == b.ID {
+		if n.Kind == "parent_attention" {
+			return k.checkParentAttentionWakeTx(ctx, tx, b, n)
+		}
 		return nil
 	}
 	if b.Kind != "task" || b.Target != n.Target {
@@ -226,9 +229,10 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 	}
 	out := []Notification{}
 	type gateKey struct {
-		Target   contract.Target
-		Terminal bool
-		State    domain.WaveState
+		Target      contract.Target
+		Terminal    bool
+		State       domain.WaveState
+		AttentionID string
 	}
 	gateCache := map[gateKey]error{}
 	var after int64
@@ -257,6 +261,9 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 				return nil, err
 			}
 			key := gateKey{Target: n.Target, Terminal: n.Kind == "wave_terminal", State: n.WaveState}
+			if n.Kind == "parent_attention" {
+				key.AttentionID = n.ID
+			}
 			gate, known := gateCache[key]
 			if !known {
 				gate = k.wakeNotificationTx(ctx, tx, b, n)

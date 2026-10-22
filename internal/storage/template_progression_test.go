@@ -85,7 +85,7 @@ func TestAutomaticTemplateProgressionDoesNotBypassUnclassifiedOrInconclusiveRevi
 			}
 			for i := 0; i < 2; i++ {
 				changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID)
-				if err != nil || changed {
+				if err != nil || changed != (i == 0) {
 					t.Fatal(changed, err)
 				}
 				set := mustReady(t, k, w)
