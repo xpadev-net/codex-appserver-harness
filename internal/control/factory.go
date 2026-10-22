@@ -44,6 +44,7 @@ type Command struct {
 // CommandFactory has no inherited environment or implicit shell. The trusted
 // builder supplies the same approved launcher policy for parent and Task roles.
 // Containment must cover descendants outside the transport's process group.
+// Build validates configuration only; it must not spawn any process.
 type CommandFactory struct {
 	Build func(context.Context, Launch) (Command, error)
 }

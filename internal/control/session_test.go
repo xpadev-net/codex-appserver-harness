@@ -81,7 +81,7 @@ func fake(b contract.SessionBinding) *fakeProcess {
 func (p *fakeProcess) ProcessIdentity() process.Identity {
 	return process.Identity{PID: 12345, BootID: "fixture", StartTicks: 12345}
 }
-func (p *fakeProcess) StartedAt() time.Time { return time.Now().Add(-time.Millisecond).UTC() }
+func (p *fakeProcess) StartedAt() time.Time { return time.Now().UTC() }
 func (p *fakeProcess) GroupStopped() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

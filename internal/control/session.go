@@ -219,6 +219,7 @@ func (o *owner) ready(ctx context.Context) error {
 func (o *owner) Close() error {
 	o.closeOnce.Do(func() {
 		o.closed.Store(true)
+		requested := o.now()
 		o.cancel()
 		o.mu.Lock()
 		defer o.mu.Unlock()
@@ -250,7 +251,6 @@ func (o *owner) Close() error {
 		proof := storage.ManagedStopProof{OwnerID: o.id, Disposition: "not_started"}
 		var metricErr error
 		if o.process != nil {
-			requested := o.now()
 			metricErr = o.store.ObserveProcess(ctx, storage.ProcessObservation{ReservationID: o.reservation.Binding.PreparationID, SessionID: o.sessionID, StopRequestedAt: &requested})
 			_ = o.process.Close()
 			if !o.process.GroupStopped() {
