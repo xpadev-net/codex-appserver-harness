@@ -196,7 +196,7 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
 	case *contract.StateRequest:
-		content, err := k.kernelStateTx(ctx, tx, b, target)
+		content, err := k.kernelStateTx(ctx, tx, b, *r)
 		if err != nil {
 			return reply, err
 		}
@@ -271,7 +271,23 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	return reply, tx.Commit()
 }
 
-func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, target contract.Target) (string, error) {
+func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, request contract.StateRequest) (string, error) {
+	target := request.Target
+	page := contract.StatePage{Limit: 16}
+	if request.Page != nil {
+		page = *request.Page
+	}
+	if page.Limit < 1 || page.Limit > 64 || request.Page != nil && page.Collection != "tasks" && page.Collection != "subscriptions" {
+		return "", errors.New("invalid state page limit")
+	}
+	tasksEnabled, subscriptionsEnabled := request.Page == nil || page.Collection == "tasks", request.Page == nil || page.Collection == "subscriptions"
+	tasksAfter, subscriptionsAfter := "", ""
+	if page.Collection == "tasks" {
+		tasksAfter = page.After
+	}
+	if page.Collection == "subscriptions" {
+		subscriptionsAfter = page.After
+	}
 	wave, err := loadWave(ctx, tx, target.WaveID)
 	if err != nil {
 		return "", err
@@ -281,15 +297,17 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 		State contract.TaskState `json:"state"`
 	}
 	view := struct {
-		Target               contract.Target  `json:"target"`
-		WaveState            domain.WaveState `json:"wave_state"`
-		Paused               bool             `json:"paused"`
-		SessionID            string           `json:"session_id"`
-		TaskID               string           `json:"task_id"`
-		Tasks                []taskState      `json:"tasks"`
-		SubscriptionIDs      []string         `json:"subscription_ids"`
-		PendingMessages      int              `json:"pending_messages"`
-		PendingNotifications int              `json:"pending_notifications"`
+		Target                 contract.Target  `json:"target"`
+		WaveState              domain.WaveState `json:"wave_state"`
+		Paused                 bool             `json:"paused"`
+		SessionID              string           `json:"session_id"`
+		TaskID                 string           `json:"task_id"`
+		Tasks                  []taskState      `json:"tasks"`
+		SubscriptionIDs        []string         `json:"subscription_ids"`
+		PendingMessages        int              `json:"pending_messages"`
+		PendingNotifications   int              `json:"pending_notifications"`
+		NextTasksAfter         string           `json:"next_tasks_after"`
+		NextSubscriptionsAfter string           `json:"next_subscriptions_after"`
 	}{Target: target, WaveState: wave.State, Paused: wave.Paused, SessionID: b.ID, TaskID: b.TaskID, Tasks: []taskState{}, SubscriptionIDs: []string{}}
 	allowed := map[string]bool{}
 	if b.Kind == "task" {
@@ -302,7 +320,7 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 			allowed[structureID("task-", wave.ID, dep.TaskID)] = true
 		}
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT t.id,t.state FROM kernel_tasks t JOIN kernel_plan_bindings p ON p.task_id=t.id WHERE p.wave_id=? AND p.revision=? ORDER BY t.id", wave.ID, wave.PlanRevision)
+	rows, err := tx.QueryContext(ctx, "SELECT t.id,t.state FROM kernel_tasks t JOIN kernel_plan_bindings p ON p.task_id=t.id WHERE p.wave_id=? AND p.revision=? AND ?=1 AND t.id>? ORDER BY t.id", wave.ID, wave.PlanRevision, tasksEnabled, tasksAfter)
 	if err != nil {
 		return "", err
 	}
@@ -314,6 +332,9 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 		}
 		if b.Kind == "orchestrator" || allowed[task.ID] {
 			view.Tasks = append(view.Tasks, task)
+			if len(view.Tasks) > page.Limit {
+				break
+			}
 		}
 	}
 	err = rows.Err()
@@ -321,7 +342,7 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 	if err != nil {
 		return "", err
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT id,payload FROM kernel_subscriptions WHERE session_id=? AND wave_id=? AND scope_revision=? AND plan_revision=? ORDER BY id", b.ID, wave.ID, target.ScopeRevision, target.PlanRevision)
+	rows, err = tx.QueryContext(ctx, "SELECT id,payload FROM kernel_subscriptions WHERE session_id=? AND wave_id=? AND scope_revision=? AND plan_revision=? AND ?=1 AND id>? ORDER BY id", b.ID, wave.ID, target.ScopeRevision, target.PlanRevision, subscriptionsEnabled, subscriptionsAfter)
 	if err != nil {
 		return "", err
 	}
@@ -341,12 +362,23 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 		}
 		if sub.Target == target {
 			view.SubscriptionIDs = append(view.SubscriptionIDs, id)
+			if len(view.SubscriptionIDs) > page.Limit {
+				break
+			}
 		}
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return "", err
+	}
+	if len(view.Tasks) > page.Limit {
+		view.Tasks = view.Tasks[:page.Limit]
+		view.NextTasksAfter = view.Tasks[len(view.Tasks)-1].ID
+	}
+	if len(view.SubscriptionIDs) > page.Limit {
+		view.SubscriptionIDs = view.SubscriptionIDs[:page.Limit]
+		view.NextSubscriptionsAfter = view.SubscriptionIDs[len(view.SubscriptionIDs)-1]
 	}
 	for _, item := range []struct {
 		query string

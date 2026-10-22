@@ -5,14 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/worker"
 )
 
 func kernelToolFixture(t *testing.T, kind string) (*KernelStore, domain.Wave, []domain.Task, contract.SessionBinding, contract.SessionRun) {
@@ -287,5 +290,156 @@ func TestKernelToolStateAndArtifactReadsRemainScopedAndBounded(t *testing.T) {
 	decoded, err := base64.StdEncoding.DecodeString(chunk.Data)
 	if err != nil || len(decoded) != 4096 || chunk.Bytes != len(decoded) || chunk.Next != 4096 || chunk.EOF || chunk.Encoding != "base64" {
 		t.Fatal(chunk, err)
+	}
+}
+
+type earlyToolStartRPC struct {
+	gateway   contract.KernelGateway
+	call      contract.ToolInvocation
+	missingID bool
+	toolError error
+}
+
+func (r *earlyToolStartRPC) Call(ctx context.Context, method string, _ any, result any) error {
+	if method != "turn/start" {
+		return errors.New("unexpected RPC")
+	}
+	_, r.toolError = r.gateway.Handle(ctx, r.call)
+	if r.toolError != nil {
+		return r.toolError
+	}
+	if r.missingID {
+		return json.Unmarshal([]byte(`{"turn":{}}`), result)
+	}
+	return errors.New("turn/start reply lost")
+}
+func (*earlyToolStartRPC) Next(context.Context) (codex.Message, error) {
+	return codex.Message{}, errors.New("unexpected notification wait")
+}
+func TestKernelEarlyToolProofSurvivesUnknownStartWithoutAuthorizingMoreTools(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprint(missing), func(t *testing.T) {
+			ctx := context.Background()
+			k, wave, tasks := mailboxFixture(t)
+			b := prepareWakeSession(t, k, tasks[0].SessionID)
+			rpc := &earlyToolStartRPC{gateway: contract.KernelGateway{Backend: k}, missingID: missing}
+			rpc.call = kernelCall(t, b, contract.SessionRun{ID: "early-run"}, "state_get", contract.StateRequest{SchemaVersion: 1, Target: wave.Target()})
+			driver := worker.SessionDriver{RPC: rpc, Store: k}
+			prepared := worker.PreparedSession{Binding: b, BaselineKnown: true, BaselineTurnIDs: []string{"old-turn"}}
+			run, err := driver.Execute(ctx, prepared, "early-run", sessionSnapshot(), contract.TaskResultSchema(), worker.ValidateTaskOutput)
+			if err == nil || rpc.toolError != nil || run.State != "unknown" || run.TurnID != rpc.call.TurnID {
+				t.Fatal("early proof or transport outcome was lost", run, err, rpc.toolError)
+			}
+			var saved contract.SessionRun
+			if err = k.Record(ctx, "agent_run", run.ID, &saved); err != nil || saved.State != "unknown" || saved.TurnID != rpc.call.TurnID {
+				t.Fatal(saved, err)
+			}
+			rpc.call.CallID = "after-unknown"
+			if _, err = rpc.gateway.Handle(ctx, rpc.call); err == nil {
+				t.Fatal("unresolved start still authorized a tool")
+			}
+			if err = k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err = k.ArchiveSessionRun(ctx, b.ID, run.ID, "unresolved"); err == nil {
+				t.Fatal("unknown start was discarded")
+			}
+		})
+	}
+}
+func TestKernelStatePaginationKeepsLargeSupportedPlanRetrievable(t *testing.T) {
+	ctx := context.Background()
+	k, request := waveStoreFixture(t)
+	request.Policy.Limits.Tasks = 128
+	wave, err := k.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase := contract.PhaseSpec{ID: "large", FailurePolicy: "drain_and_block", Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{}}, Tasks: []contract.TaskSpec{}}
+	for i := range 128 {
+		id := fmt.Sprintf("task-%03d", i)
+		phase.Tasks = append(phase.Tasks, contract.TaskSpec{ID: id, Kind: "work", Instruction: "produce evidence", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{}})
+		phase.Completion.RequiredTaskIDs = append(phase.Completion.RequiredTaskIDs, id)
+	}
+	adopted, err := k.AdoptPlan(ctx, wave.Target(), "large", contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{phase}, Templates: []contract.FixReviewTemplate{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range adopted.CreatedTaskIDs {
+		if _, err = k.Subscribe(ctx, SubscriptionRequest{SessionID: "main", Target: wave.Target(), Key: id, Kind: "task_terminal", TaskID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := prepareWakeSession(t, k, "main")
+	raw, _ := json.Marshal(map[string]any{"schema_version": 1, "session_id": b.ID, "targets": []contract.Target{wave.Target()}})
+	snapshot := contract.InputSnapshot{ID: "large-main", Input: raw, Digest: fmt.Sprintf("%x", sha256.Sum256(raw))}
+	run := contract.SessionRun{ID: "large-run", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if err = k.ReserveSessionRun(ctx, b, snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	gateway := contract.KernelGateway{Backend: k}
+	for _, collection := range []string{"tasks", "subscriptions"} {
+		after := ""
+		seen := map[string]bool{}
+		for page := 0; page < 100; page++ {
+			args := contract.StateRequest{SchemaVersion: 1, Target: wave.Target(), Page: &contract.StatePage{Collection: collection, After: after, Limit: 16}}
+			call := kernelCall(t, b, run, "state_get", args)
+			call.CallID = fmt.Sprintf("page-%s-%d", collection, page)
+			reply, err := gateway.Handle(ctx, call)
+			if err != nil || len(reply.Content) > contract.MaxInline {
+				t.Fatal("state collection became unreadable", err)
+			}
+			var state struct {
+				Tasks []struct {
+					ID string `json:"id"`
+				} `json:"tasks"`
+				SubscriptionIDs   []string `json:"subscription_ids"`
+				NextTasks         string   `json:"next_tasks_after"`
+				NextSubscriptions string   `json:"next_subscriptions_after"`
+			}
+			if err = json.Unmarshal([]byte(reply.Content), &state); err != nil {
+				t.Fatal(err)
+			}
+			ids, next := state.SubscriptionIDs, state.NextSubscriptions
+			if collection == "tasks" {
+				if len(state.SubscriptionIDs) != 0 {
+					t.Fatal("another collection leaked into page")
+				}
+				ids, next = nil, state.NextTasks
+				for _, task := range state.Tasks {
+					ids = append(ids, task.ID)
+				}
+			} else if len(state.Tasks) != 0 {
+				t.Fatal("another collection leaked into page")
+			}
+			if len(ids) > 16 {
+				t.Fatal("page exceeded row limit")
+			}
+			for _, id := range ids {
+				if seen[id] {
+					t.Fatal("page repeated an item", id)
+				}
+				seen[id] = true
+			}
+			if next == "" {
+				break
+			}
+			if next <= after {
+				t.Fatal("page cursor did not advance")
+			}
+			after = next
+		}
+		want := 128
+		if collection == "subscriptions" {
+			want = 256
+		}
+		if len(seen) != want {
+			t.Fatal("pagination lost an authorized item", collection, len(seen), want)
+		}
+	}
+	call := kernelCall(t, b, run, "state_get", contract.StateRequest{SchemaVersion: 1, Target: wave.Target()})
+	call.CallID = "legacy-overview"
+	if reply, err := gateway.Handle(ctx, call); err != nil || len(reply.Content) > contract.MaxInline {
+		t.Fatal("old request shape could not retrieve overview", err)
 	}
 }

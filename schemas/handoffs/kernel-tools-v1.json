@@ -373,10 +373,39 @@
     {
       "type": "function",
       "name": "state_get",
-      "description": "Version 1 controller operation: state_get. Accepted work is not completed work; wait on the returned subscription.",
+      "description": "Version 1 controller operation: state_get. Accepted work is not completed work; wait on the returned subscription. The default overview returns 16 Tasks/subscriptions. Continue each collection with page {collection: tasks or subscriptions, after: its next cursor, limit: 1..64}; an empty next cursor ends that collection.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "page": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "collection": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "collection",
+                  "after",
+                  "limit"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "schema_version": {
             "const": 1,
             "type": "integer"
@@ -717,10 +746,39 @@
     {
       "type": "function",
       "name": "state_get",
-      "description": "Version 1 controller operation: state_get. Accepted work is not completed work; wait on the returned subscription.",
+      "description": "Version 1 controller operation: state_get. Accepted work is not completed work; wait on the returned subscription. The default overview returns 16 Tasks/subscriptions. Continue each collection with page {collection: tasks or subscriptions, after: its next cursor, limit: 1..64}; an empty next cursor ends that collection.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "page": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "after": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "collection": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "collection",
+                  "after",
+                  "limit"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "schema_version": {
             "const": 1,
             "type": "integer"

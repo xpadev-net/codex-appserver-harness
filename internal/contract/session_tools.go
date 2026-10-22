@@ -296,8 +296,14 @@ type PlanWaveRequest struct {
 	Plan          PlanProposal `json:"plan"`
 }
 type StateRequest struct {
-	SchemaVersion int    `json:"schema_version"`
-	Target        Target `json:"target"`
+	SchemaVersion int        `json:"schema_version"`
+	Target        Target     `json:"target"`
+	Page          *StatePage `json:"page,omitempty"`
+}
+type StatePage struct {
+	Collection string `json:"collection"`
+	After      string `json:"after"`
+	Limit      int    `json:"limit"`
 }
 type InstructRequest struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -403,7 +409,11 @@ func KernelTools(kind string) []ToolDefinition {
 		if name == "wave_plan" {
 			inputSchema["properties"].(map[string]any)["plan"] = PlanSchema()
 		}
-		out = append(out, ToolDefinition{Type: "function", Name: name, Description: "Version 1 controller operation: " + name + ". Accepted work is not completed work; wait on the returned subscription.", InputSchema: inputSchema})
+		description := "Version 1 controller operation: " + name + ". Accepted work is not completed work; wait on the returned subscription."
+		if name == "state_get" {
+			description += " The default overview returns 16 Tasks/subscriptions. Continue each collection with page {collection: tasks or subscriptions, after: its next cursor, limit: 1..64}; an empty next cursor ends that collection."
+		}
+		out = append(out, ToolDefinition{Type: "function", Name: name, Description: description, InputSchema: inputSchema})
 	}
 	return out
 }
@@ -451,6 +461,9 @@ func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolRep
 		target = a.Target
 		if a.SchemaVersion != 1 {
 			return reject("invalid tool version")
+		}
+		if a.Page != nil && (a.Page.Limit < 1 || a.Page.Limit > 64 || len(a.Page.After) > 256 || (a.Page.Collection != "tasks" && a.Page.Collection != "subscriptions")) {
+			return reject("invalid state page")
 		}
 	case *InstructRequest:
 		target = a.Target
