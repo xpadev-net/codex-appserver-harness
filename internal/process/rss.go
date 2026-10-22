@@ -112,7 +112,7 @@ func parseRSSStat(raw string, pageSize int64) (s rssStat, err error) {
 	if s.parent, err = strconv.Atoi(f[1]); err != nil || s.parent < 0 {
 		return s, errors.New("invalid RSS parent")
 	}
-	if s.ticks, err = strconv.ParseUint(f[19], 10, 64); err != nil || s.ticks == 0 {
+	if s.ticks, err = strconv.ParseUint(f[19], 10, 64); err != nil {
 		return s, errors.New("invalid RSS process start identity")
 	}
 	pages, err := strconv.ParseInt(f[21], 10, 64)

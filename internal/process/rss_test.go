@@ -122,6 +122,12 @@ func TestRSSStatParserRejectsInvalidAndOverflowingPages(t *testing.T) {
 	if err != nil || s.bytes != 7*4096 || s.parent != 1 || s.ticks != 99 {
 		t.Fatal(s, err)
 	}
+	// Early-boot processes can have zero start ticks. They may be unrelated
+	// entries in /proc; only the selected root requires a complete identity.
+	f[19] = "0"
+	if _, err := parseRSSStat(raw(), 4096); err != nil {
+		t.Fatal("valid early-boot entry rejected", err)
+	}
 	for _, value := range []string{"-1", "bad", strconv.FormatInt(math.MaxInt64, 10)} {
 		f[21] = value
 		if _, err := parseRSSStat(raw(), 4096); err == nil {
