@@ -306,3 +306,38 @@ func TestOperatorCanceledLostThreadCanBeRetiredOnlyAfterStop(t *testing.T) {
 		})
 	}
 }
+
+func TestOperatorPauseThenCancelAllowsOnlyParentTerminalObservation(t *testing.T) {
+	ctx := context.Background()
+	k, w, tasks := mailboxFixture(t)
+	if _, err := k.Subscribe(ctx, SubscriptionRequest{SessionID: "main", Target: w.Target(), Key: "terminal", Kind: "wave_terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: "main", Target: w.Target(), Key: "child", Recipient: tasks[0].ID, Body: "unsent work"}); err != nil {
+		t.Fatal(err)
+	}
+	mustControl(t, k, operatorRequest(w, "pause", "pause", ""))
+	mustControl(t, k, operatorRequest(w, "cancel", "cancel", ""))
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil || current.State != domain.WaveCanceled || current.Paused {
+		t.Fatal(current, err)
+	}
+	pending, err := k.PendingWakeNotifications(ctx, "main", 10)
+	if err != nil || len(pending) != 1 || pending[0].Kind != "wave_terminal" || pending[0].WaveState != domain.WaveCanceled {
+		t.Fatal("cancellation observation was stranded", pending, err)
+	}
+	if child, err := k.PendingWakeNotifications(ctx, tasks[0].SessionID, 10); err != nil || len(child) != 0 {
+		t.Fatal("cancellation restarted Task inputs", child, err)
+	}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: "main", Key: "terminal", NotificationIDs: []string{pending[0].ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := prepareWakeSession(t, k, "main")
+	if err = k.ReserveSessionRun(ctx, b, wake.Snapshot, wakeStartingRun(k, b, wake)); err != nil {
+		t.Fatal("parent terminal run remained paused", err)
+	}
+	if set := mustReady(t, k, current); set.Reason != "terminal" {
+		t.Fatal("cancel did not supersede pause", set)
+	}
+}
