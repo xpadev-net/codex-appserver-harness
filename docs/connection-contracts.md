@@ -265,7 +265,7 @@ go test ./internal/control -run '^TestLiveParallelNativeCapacityAndStop$' -count
 
 ## Main judgment application
 
-`MainResult` v1 permits `plan`, `wait` and `report` decisions, one for every Wave selected in the saved input. It contains no completion, approval or policy-replacement action. A report is an explanation; ordinary quality/acceptance code remains responsible for Wave completion. Strict decoding and current controller policy reject unselected/stale targets, missing/duplicate decisions, invented criteria and foreign waiting subscriptions.
+`MainResult` v1 permits `plan`, `wait` and `report` decisions, one for every Wave selected in the saved input. Wake and run admission share its 16-Wave maximum, including accumulated terminal observations; oversized batches leave notifications pending for smaller batches. It contains no completion, approval or policy-replacement action. A report is an explanation; ordinary quality/acceptance code remains responsible for Wave completion. Strict decoding and current controller policy reject unselected/stale targets, missing/duplicate decisions, invented criteria and foreign waiting subscriptions.
 
 `ApplyMainResult` requires the exact active logical Orchestrator/run/thread, normal known completion, original stop proof, digest-bound snapshot and matching saved run-budget scope. It validates the batch before adopting plans; plans, fresh Task/session structure and cumulative reservations, fanout, receipt, run disposition and notification/message application commit together. A replay returns the original receipt after DB restart or audited main-thread rotation. No extra model turn or reset budget is implied.
 

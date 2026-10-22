@@ -399,3 +399,76 @@ func TestMainResultCanReportAnAlreadyCanceledTerminalObservation(t *testing.T) {
 		t.Fatal(current, err)
 	}
 }
+
+func TestMainResultWaveLimitMatchesWakeAndRunAdmission(t *testing.T) {
+	ctx := context.Background()
+	k, request := waveStoreFixture(t)
+	targets := []contract.Target{}
+	for i := range contract.MaxMainWaves + 1 {
+		request.SourceID = fmt.Sprintf("terminal-%d", i)
+		wave, err := k.CreateWave(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = k.Subscribe(ctx, SubscriptionRequest{SessionID: "main", Target: wave.Target(), Key: "terminal-" + wave.ID, Kind: "wave_terminal"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = k.ApplyOperatorControl(ctx, OperatorControl{Key: "cancel", Target: wave.Target(), Action: "cancel", Reason: "terminal load"}); err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, wave.Target())
+	}
+	notifications, err := k.PendingWakeNotifications(ctx, "main", 100)
+	if err != nil || len(notifications) != contract.MaxMainWaves+1 {
+		t.Fatal(len(notifications), err)
+	}
+	ids := []string{}
+	for _, n := range notifications {
+		ids = append(ids, n.ID)
+	}
+	if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: "main", Key: "oversize", NotificationIDs: ids}); !errors.Is(err, ErrWakeScopeLimit) {
+		t.Fatal("unanswerable wake admitted", err)
+	}
+	var intents, pending int
+	k.DB.QueryRow("SELECT count(*) FROM kernel_wake_intents").Scan(&intents)
+	k.DB.QueryRow("SELECT count(*) FROM kernel_notifications WHERE state='pending'").Scan(&pending)
+	if intents != 0 || pending != len(ids) {
+		t.Fatal("oversized wake consumed inputs", intents, pending)
+	}
+	b := prepareWakeSession(t, k, "main")
+	run := contract.SessionRun{ID: "too-large-main", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	if err = k.ReserveSessionRun(ctx, b, mainBudgetSnapshot(t, "oversize", b.ID, targets...), run); err == nil {
+		t.Fatal("unanswerable direct run admitted")
+	}
+	// The accepted subset can produce and apply a complete valid result, while
+	// the remaining terminal notification stays pending for a later batch.
+	if err = k.MarkSessionPreparationStopped(ctx, b.ID, b.PreparationID, b.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: "main", Key: "bounded", NotificationIDs: ids[:contract.MaxMainWaves]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = prepareWakeSession(t, k, "main")
+	run = wakeStartingRun(k, b, wake)
+	if err = k.ReserveSessionRun(ctx, b, wake.Snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	selected := []domain.Wave{}
+	for _, target := range wake.Intent.Targets {
+		wave, err := k.Wave(ctx, target.WaveID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected = append(selected, wave)
+	}
+	saveMainCompletion(t, k, b, run, mainResult(t, b, selected, "report"), true)
+	receipt, err := k.ApplyMainResult(ctx, b.ID, run.ID)
+	if err != nil || receipt.State != "applied" {
+		t.Fatal(receipt, err)
+	}
+	k.DB.QueryRow("SELECT count(*) FROM kernel_notifications WHERE state='pending'").Scan(&pending)
+	if pending != 1 {
+		t.Fatal("remaining input lost", pending)
+	}
+}

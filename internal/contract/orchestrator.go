@@ -2,6 +2,8 @@ package contract
 
 import "errors"
 
+const MaxMainWaves = 16
+
 // MainResult proposes actions within the controller's saved Wave input scope.
 // Completion/approval/policy changes are deliberately absent: ordinary code
 // owns those gates. A report records an explanation, never Wave acceptance.
@@ -21,7 +23,7 @@ type MainDecision struct {
 }
 
 func (r MainResult) Validate() error {
-	if r.SchemaVersion != 1 || !inline(r.SessionID) || len(r.Decisions) == 0 || len(r.Decisions) > 16 {
+	if r.SchemaVersion != 1 || !inline(r.SessionID) || len(r.Decisions) == 0 || len(r.Decisions) > MaxMainWaves {
 		return errors.New("invalid main result identity or decision bound")
 	}
 	seen := map[string]bool{}
@@ -62,7 +64,7 @@ func (r MainResult) Validate() error {
 func MainResultSchema() map[string]any {
 	schema := Schema(MainResult{})
 	decisions := schema["properties"].(map[string]any)["decisions"].(map[string]any)
-	decisions["minItems"], decisions["maxItems"] = 1, 16
+	decisions["minItems"], decisions["maxItems"] = 1, MaxMainWaves
 	fields := decisions["items"].(map[string]any)["properties"].(map[string]any)
 	fields["action"].(map[string]any)["enum"] = []string{"plan", "wait", "report"}
 	fields["plan"].(map[string]any)["anyOf"] = []any{PlanSchema(), map[string]any{"type": "null"}}
