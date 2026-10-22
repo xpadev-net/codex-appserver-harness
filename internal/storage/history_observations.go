@@ -124,15 +124,10 @@ func (k *KernelStore) RecordHistoryRead(ctx context.Context, ownerID, threadID s
 	}
 	// Repeated classifications/history headers share their first attestation.
 	// Body growth and changing error text cannot grow the journal every poll.
-	identity := out
-	identity.ID, identity.OwnerID, identity.PreparationID = "", "", ""
-	identity.ResponseDigest, identity.ErrorDigest = "", ""
-	identity.ObservedAt = time.Time{}
-	digest, err := contentDigest(identity)
+	out.ID, err = historyObservationID(out)
 	if err != nil {
 		return out, err
 	}
-	out.ID = "history-" + digest
 	var previous HistoryObservation
 	err = completionRecord(ctx, tx, "session_history_observation", out.ID, &previous)
 	if err == nil {
@@ -148,4 +143,12 @@ func (k *KernelStore) RecordHistoryRead(ctx context.Context, ownerID, threadID s
 		return HistoryObservation{}, err
 	}
 	return out, nil
+}
+
+func historyObservationID(observation HistoryObservation) (string, error) {
+	observation.ID, observation.OwnerID, observation.PreparationID = "", "", ""
+	observation.ResponseDigest, observation.ErrorDigest = "", ""
+	observation.ObservedAt = time.Time{}
+	digest, err := contentDigest(observation)
+	return "history-" + digest, err
 }
