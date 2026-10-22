@@ -33,6 +33,7 @@ func (e *RequestError) Error() string {
 
 // Client is sequential: a single owner must consume calls and notifications.
 type Client struct {
+	startedAt    time.Time
 	identity     process.Identity
 	closeOnce    sync.Once
 	closeErr     error
@@ -53,6 +54,11 @@ func Start(ctx context.Context, binary string, args ...string) (*Client, error) 
 
 // StartCommand is used by the controller with an isolated launcher and allowlisted environment.
 func StartCommand(ctx context.Context, binary string, args, environment []string) (*Client, error) {
+	return StartCommandIn(ctx, binary, args, environment, "")
+}
+
+// StartCommandIn preserves the controller-selected process working directory.
+func StartCommandIn(ctx context.Context, binary string, args, environment []string, directory string) (*Client, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	success := false
 	defer func() {
@@ -61,6 +67,7 @@ func StartCommand(ctx context.Context, binary string, args, environment []string
 		}
 	}()
 	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Dir = directory
 	cmd.Env = environment
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var groupKillOnce sync.Once
@@ -81,7 +88,7 @@ func StartCommand(ctx context.Context, binary string, args, environment []string
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := &Client{cancel: cancel, cmd: cmd, identity: process.Identify(cmd.Process.Pid), in: in, messages: make(chan Message, 64)}
+	c := &Client{startedAt: time.Now().UTC(), cancel: cancel, cmd: cmd, identity: process.Identify(cmd.Process.Pid), in: in, messages: make(chan Message, 64)}
 	go func() {
 		defer close(c.messages)
 		scanner := bufio.NewScanner(out)
@@ -111,6 +118,9 @@ func StartCommand(ctx context.Context, binary string, args, environment []string
 
 // ProcessIdentity returns the original host identity, never just a reusable PID.
 func (c *Client) ProcessIdentity() process.Identity { return c.identity }
+
+// StartedAt is when successful exec was observed by the process owner.
+func (c *Client) StartedAt() time.Time { return c.startedAt }
 
 // GroupStopped covers this transport and its process group. The verified
 // launcher must separately contain descendants that create other groups.

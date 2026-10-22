@@ -275,7 +275,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_5: イベントloopとprocess間wake
 
 - status: in_progress
-- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。本PRでKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加する。lazy process owner、非同期event loop、private IPC/hint、状態stream、優先操作と実測負荷試験は後続PRで接続する。
+- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。本PRで共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続する。非同期event loop、production launcher設定、private IPC/hint、状態stream、優先操作と実測負荷試験は後続PRで接続する。
 - type: impl
 - owns:
   - internal/control/**
