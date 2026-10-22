@@ -90,6 +90,7 @@ func TestProcessMetricsRejectWrongSourcesAndConflictingFacts(t *testing.T) {
 	conflict := start.Add(time.Second)
 	future := k.clock().Add(time.Second)
 	past := reservation.CreatedAt.Add(-time.Second)
+	beforeSpawn := reservation.CreatedAt
 	for _, observation := range []ProcessObservation{
 		{ReservationID: r.ID, SessionID: "foreign", PID: &pid},
 		{ReservationID: r.ID, SessionID: r.SessionID, PID: &wrongPID},
@@ -97,6 +98,8 @@ func TestProcessMetricsRejectWrongSourcesAndConflictingFacts(t *testing.T) {
 		{ReservationID: r.ID, SessionID: r.SessionID, PeakRSSBytes: &negative},
 		{ReservationID: r.ID, SessionID: r.SessionID, ReadyAt: &future},
 		{ReservationID: r.ID, SessionID: r.SessionID, StoppedAt: &past},
+		{ReservationID: r.ID, SessionID: r.SessionID, ReadyAt: &beforeSpawn},
+		{ReservationID: r.ID, SessionID: r.SessionID, StoppedAt: &beforeSpawn},
 	} {
 		if err := k.ObserveProcess(ctx, observation); err == nil {
 			t.Fatal("invalid observation accepted", observation)
