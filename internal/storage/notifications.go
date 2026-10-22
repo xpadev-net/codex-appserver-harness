@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -183,14 +184,14 @@ func (k *KernelStore) Subscribe(ctx context.Context, request SubscriptionRequest
 
 func currentObservedTaskTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task) error {
 	if task.ScopeRevision != wave.ScopeRevision || task.PolicyRevision != wave.Policy.Revision {
-		return errors.New("observed Task is outside current scope/policy")
+		return fmt.Errorf("%w: observed Task is outside current scope/policy", ErrTaskBinding)
 	}
 	var result, digest string
 	if err := tx.QueryRowContext(ctx, "SELECT source_result_id,input_digest FROM kernel_plan_bindings WHERE wave_id=? AND revision=? AND task_id=?", wave.ID, wave.PlanRevision, task.ID).Scan(&result, &digest); err != nil {
 		return err
 	}
 	if task.PlanRevision != wave.PlanRevision && (task.State != contract.TaskCompleted || task.ResultID == "" || result != task.ResultID || digest != task.InputDigest) {
-		return errors.New("observed Task is not explicitly carried into this plan")
+		return fmt.Errorf("%w: observed Task is not explicitly carried into this plan", ErrTaskBinding)
 	}
 	return nil
 }

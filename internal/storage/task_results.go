@@ -353,16 +353,21 @@ func (k *KernelStore) finishTaskResultTx(ctx context.Context, tx *sql.Tx, b cont
 func (k *KernelStore) completedTaskResultTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task) (contract.TaskResult, error) {
 	var result contract.TaskResult
 	if task.State != contract.TaskCompleted || task.ResultID == "" || task.ScopeRevision != wave.ScopeRevision || task.PolicyRevision != wave.Policy.Revision {
-		return result, errors.New("dependency result is not current and complete")
+		return result, fmt.Errorf("%w: dependency result is not current and complete", ErrTaskEvidence)
 	}
 	if err := completionRecord(ctx, tx, "task_result", task.ResultID, &result); err != nil {
+		var syntax *json.SyntaxError
+		var shape *json.UnmarshalTypeError
+		if errors.As(err, &syntax) || errors.As(err, &shape) {
+			return result, fmt.Errorf("%w: %v", ErrTaskEvidence, err)
+		}
 		return result, err
 	}
 	if err := result.Validate(); err != nil {
-		return result, err
+		return result, fmt.Errorf("%w: %v", ErrTaskEvidence, err)
 	}
 	if result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Target != task.Target() || result.Outcome != "result" {
-		return result, errors.New("dependency result binding conflict")
+		return result, fmt.Errorf("%w: dependency result binding conflict", ErrTaskEvidence)
 	}
 	for _, id := range resultArtifactReferences(result) {
 		if _, err := k.currentArtifactTx(ctx, tx, wave, id); err != nil {

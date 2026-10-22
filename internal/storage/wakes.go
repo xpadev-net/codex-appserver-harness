@@ -419,6 +419,9 @@ func (k *KernelStore) bindWakeRunTx(ctx context.Context, tx *sql.Tx, b contract.
 		err = tx.QueryRowContext(ctx, "SELECT id FROM kernel_wake_intents WHERE session_id=? AND state IN ('reserved','bound') LIMIT 1", b.ID).Scan(&id)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		if b.Kind == "task" && b.TaskState == contract.TaskWaiting {
+			return errors.New("waiting Task requires a reserved wake")
+		}
 		return nil // Initial/non-notification turns do not require a wake.
 	}
 	if err != nil {

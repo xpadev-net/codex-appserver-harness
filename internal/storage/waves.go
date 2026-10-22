@@ -563,7 +563,7 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 			return "", err
 		}
 		if binding.Target.WaveID != wave.ID || binding.Target.ScopeRevision != wave.ScopeRevision || binding.Target.PolicyRevision != wave.Policy.Revision {
-			return "", errors.New("WorkItem is outside the trusted Wave scope")
+			return "", fmt.Errorf("%w: WorkItem is outside the trusted Wave scope", ErrTaskEvidence)
 		}
 		references["work_item:"+id] = binding.CandidateID
 	}
@@ -593,7 +593,7 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 					found = found || id == dependency.ArtifactID
 				}
 				if !found || result.TaskID != prior.ID || result.PhaseID != prior.PhaseID || result.Target != prior.Target() || result.Outcome != "result" {
-					return "", errors.New("dependency artifact does not belong to the bound completed result")
+					return "", fmt.Errorf("%w: dependency artifact does not belong to the bound completed result", ErrTaskEvidence)
 				}
 				artifact, err := k.currentArtifactTx(ctx, tx, wave, dependency.ArtifactID)
 				if err != nil {
@@ -617,7 +617,7 @@ func (k *KernelStore) currentArtifactTx(ctx context.Context, tx *sql.Tx, wave do
 		return a, err
 	}
 	if a.State != "committed" || a.WaveID != wave.ID || a.ScopeRevision != wave.ScopeRevision || a.PolicyRevision != wave.Policy.Revision {
-		return a, errors.New("Artifact unavailable or outside current scope/policy")
+		return a, fmt.Errorf("%w: unavailable or outside current scope/policy", ErrArtifactUnavailable)
 	}
 	_, err = k.readArtifactObject(a)
 	return a, err

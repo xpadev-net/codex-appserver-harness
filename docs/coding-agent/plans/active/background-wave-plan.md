@@ -227,13 +227,14 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_4: 実行枠・排他・予算scheduler
 
 - status: in_progress
-- split: 最初のPRで保存済みplan/Phase/Task成果に基づくready集合とturn予約時の再照合を追加する。実行枠・排他・累積使用量・main turn予算は続くPRで同一transactionへ接続する。製品Candidate/merge判定はTask_8の認可adapterまでfail closedとする。processを起動するTask_5より先に予約portを完成させる。
+- split: PR #66で保存済みplan/Phase/Task成果に基づくready集合・turn予約時の再照合・Phase証拠の保持を追加。次の補正PRで復旧許可のrun/input固定・waitingのwake必須・運用エラーの分類を補強する。実行枠・排他・累積使用量・main turn予算は続くPRで同一transactionへ接続する。製品Candidate/merge判定はTask_8の認可adapterまでfail closedとする。processを起動するTask_5より先に予約portを完成させる。
 - type: impl
 - owns:
   - internal/storage/scheduler.go
   - internal/storage/scheduler_test.go
   - internal/storage/sessions.go（turn予約時のready再照合）
   - internal/storage/artifact_retention.go（現在のPhase完了証拠の保持）
+  - internal/storage/task_recovery.go、internal/storage/task_recovery_test.go（復旧許可とrun/inputへの原子的消費）
   - internal/service/scheduler.go
   - internal/service/scheduler_test.go
   - internal/service/config.go

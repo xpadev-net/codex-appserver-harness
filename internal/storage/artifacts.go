@@ -35,6 +35,7 @@ type ArtifactImport struct {
 var ErrArtifactGrant = errors.New("Artifact was not granted to this Task")
 var ErrArtifactScope = errors.New("Artifact is outside the current scope/policy")
 var ErrArtifactUnavailable = errors.New("Artifact is not committed")
+var ErrArtifactIntegrity = errors.New("Artifact content or manifest is inconsistent")
 
 func loadArtifact(ctx context.Context, q queryer, id string) (domain.Artifact, error) {
 	var a domain.Artifact
@@ -49,10 +50,10 @@ func loadArtifact(ctx context.Context, q queryer, id string) (domain.Artifact, e
 		return a, err
 	}
 	if err = a.Validate(); err != nil {
-		return a, err
+		return a, fmt.Errorf("%w: %v", ErrArtifactIntegrity, err)
 	}
 	if a.ID != id || a.WaveID != wave || a.TaskID != task || a.State != state || a.Bytes != size || a.Digest != digest {
-		return a, errors.New("inconsistent Artifact manifest")
+		return a, fmt.Errorf("%w: manifest fields differ", ErrArtifactIntegrity)
 	}
 	return a, nil
 }
@@ -383,13 +384,13 @@ func privateArtifactFile(file *os.File) error {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || !ok || stat.Nlink != 1 || stat.Uid != uint32(os.Geteuid()) {
-		return errors.New("Artifact object must be a private regular controller-owned file")
+		return fmt.Errorf("%w: object must be a private regular controller-owned file", ErrArtifactIntegrity)
 	}
 	return nil
 }
 func (k *KernelStore) readArtifactObject(a domain.Artifact) ([]byte, error) {
 	if err := a.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrArtifactIntegrity, err)
 	}
 	root, err := k.openArtifactRoot()
 	if err != nil {
@@ -409,17 +410,17 @@ func (k *KernelStore) readArtifactObject(a domain.Artifact) ([]byte, error) {
 		return nil, err
 	}
 	if info.Size() != a.Bytes {
-		return nil, errors.New("Artifact byte count differs from manifest")
+		return nil, fmt.Errorf("%w: byte count differs from manifest", ErrArtifactIntegrity)
 	}
 	if a.Bytes > k.ControllerArtifactBytes || a.Bytes == int64(^uint64(0)>>1) {
-		return nil, errors.New("Artifact object exceeds controller capacity")
+		return nil, fmt.Errorf("%w: object exceeds controller capacity", ErrArtifactIntegrity)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, a.Bytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) != a.Bytes || fmt.Sprintf("%x", sha256.Sum256(data)) != a.Digest {
-		return nil, errors.New("Artifact missing or digest mismatch")
+		return nil, fmt.Errorf("%w: digest mismatch", ErrArtifactIntegrity)
 	}
 	return data, nil
 }
