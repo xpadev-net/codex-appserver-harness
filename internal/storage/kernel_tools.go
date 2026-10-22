@@ -323,7 +323,7 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 			allowed[structureID("task-", wave.ID, dep.TaskID)] = true
 		}
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT t.id,t.state FROM kernel_tasks t JOIN kernel_plan_bindings p ON p.task_id=t.id WHERE p.wave_id=? AND p.revision=? AND ?=1 AND t.id>? ORDER BY t.id", wave.ID, wave.PlanRevision, tasksEnabled, tasksAfter)
+	rows, err := tx.QueryContext(ctx, "SELECT t.id,t.state FROM kernel_tasks t JOIN kernel_plan_bindings p ON p.task_id=t.id WHERE p.wave_id=? AND p.revision=? AND json_extract(t.payload,'$.scope_revision')=? AND json_extract(t.payload,'$.policy_revision')=? AND ?=1 AND t.id>? ORDER BY t.id", wave.ID, wave.PlanRevision, wave.ScopeRevision, wave.Policy.Revision, tasksEnabled, tasksAfter)
 	if err != nil {
 		return "", err
 	}

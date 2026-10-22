@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -56,6 +57,7 @@ func TestWaveDirectionGatesDispatchAndRequiresFreshPlanWithoutResettingBudget(t 
 	if set := mustReady(t, k, current); set.Reason != "plan_required" {
 		t.Fatal(set)
 	}
+	assertDirectionStateTasks(t, k, current, 0)
 	for _, task := range tasks {
 		old, err := k.Task(ctx, task.ID)
 		if err != nil || old.State != contract.TaskCanceled {
@@ -72,8 +74,42 @@ func TestWaveDirectionGatesDispatchAndRequiresFreshPlanWithoutResettingBudget(t 
 	if err != nil || after.Replans != before.Replans+1 || after.TasksCreated != before.TasksCreated+2 {
 		t.Fatal("direction reset structural usage", after, err)
 	}
+	assertDirectionStateTasks(t, k, after, 2)
 	if replay, err := k.RequestWaveDirection(ctx, directionRequest(w)); err != nil || !reflect.DeepEqual(replay, applied) {
 		t.Fatal(replay, err)
+	}
+}
+
+func assertDirectionStateTasks(t *testing.T, k *KernelStore, w domain.Wave, count int) {
+	t.Helper()
+	ctx := context.Background()
+	b, err := k.SessionBinding(ctx, w.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	raw, err := k.kernelStateTx(ctx, tx, b, contract.StateRequest{SchemaVersion: 1, Target: w.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view struct {
+		Target contract.Target `json:"target"`
+		Tasks  []struct {
+			ID string `json:"id"`
+		} `json:"tasks"`
+	}
+	if err = json.Unmarshal([]byte(raw), &view); err != nil || view.Target != w.Target() || len(view.Tasks) != count {
+		t.Fatal("state_get mixed current and superseded scope", raw, err)
+	}
+	for _, listed := range view.Tasks {
+		task, err := loadTask(ctx, tx, listed.ID)
+		if err != nil || task.ScopeRevision != w.ScopeRevision || task.PolicyRevision != w.Policy.Revision {
+			t.Fatal(task, err)
+		}
 	}
 }
 
@@ -101,6 +137,11 @@ func TestWaveDirectionWaitsForStopAndResultApplicationAndPreservesOldOutcome(t *
 	if _, err = k.ApplyWaveDirection(ctx, d.ID); err != nil {
 		t.Fatal(err)
 	}
+	currentWave, err := k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDirectionStateTasks(t, k, currentWave, 0)
 	var saved contract.TaskResult
 	if err = k.Record(ctx, "task_result", application.ResultID, &saved); err != nil || saved.Target != b.Target || saved.TaskID != b.TaskID || !reflect.DeepEqual(saved.Artifacts, result.Artifacts) {
 		t.Fatal(saved, result, err)

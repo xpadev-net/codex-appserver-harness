@@ -282,6 +282,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/storage/process_metrics.go、internal/storage/process_metrics_test.go（RSS方式・間隔と世代付き観測）
   - internal/storage/operator_controls.go、internal/storage/operator_controls_test.go（operatorのpause/resume/cancel）
   - internal/storage/directions.go、internal/storage/directions_test.go（版付き方向修正と旧run照合）
+  - internal/storage/artifact_retention.go（旧scopeの証拠を通常保持へ戻すGC照合）
   - internal/domain/wave.go、internal/storage/kernel_tools_test.go（方向修正のdispatch抑止とtool gate）
   - internal/ipc/**（private hint/read-only stream transport）
   - internal/contract/state_stream.go（dispatch Targetと区別したevent DTO）
