@@ -170,6 +170,9 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		if err != nil {
 			return state, refs, err
 		}
+		if err = saveWaveToolScopeTx(ctx, tx, w); err != nil {
+			return state, refs, err
+		}
 		manifest, err := k.sessionManifestTx(ctx, tx, b, w)
 		if err != nil {
 			return state, refs, err
@@ -207,14 +210,14 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 	return state, refs, nil
 }
 
-func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, r contract.ContextReadRequest) ([]byte, error) {
+func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, r contract.ContextReadRequest) ([]byte, string, error) {
 	var snapshotID string
 	if err := tx.QueryRowContext(ctx, "SELECT r.snapshot_id FROM kernel_sessions s JOIN kernel_run_bindings r ON r.run_id=s.active_run_id AND r.session_id=s.id WHERE s.id=? AND r.applied=0", b.ID).Scan(&snapshotID); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var grant inputReferenceGrant
 	if err := completionRecord(ctx, tx, "session_input_references", snapshotID, &grant); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var ref InputReference
 	found := false
@@ -226,16 +229,20 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 		}
 	}
 	if grant.SessionID != b.ID || !found {
-		return nil, errors.New("manifest not granted by the active run snapshot")
+		return nil, "", errors.New("manifest not granted by the active run snapshot")
+	}
+	if data, ok := k.inputCache.get(ref); ok {
+		return data, ref.Digest, nil
 	}
 	var saved savedInputManifest
 	if err := completionRecord(ctx, tx, "session_input_manifest", ref.ID, &saved); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if saved.SessionID != b.ID || saved.Reference != ref || int64(len(saved.Data)) != ref.Bytes || fmt.Sprintf("%x", sha256.Sum256(saved.Data)) != ref.Digest {
-		return nil, errors.New("input manifest integrity conflict")
+		return nil, "", errors.New("input manifest integrity conflict")
 	}
-	return saved.Data, nil
+	k.inputCache.put(ref, saved.Data)
+	return saved.Data, ref.Digest, nil
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {

@@ -72,7 +72,10 @@ func saveWave(ctx context.Context, tx *sql.Tx, w domain.Wave) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE kernel_waves SET payload=? WHERE id=?", b, w.ID)
-	return err
+	if err != nil {
+		return err
+	}
+	return saveWaveToolScopeTx(ctx, tx, w)
 }
 func saveTask(ctx context.Context, tx *sql.Tx, t domain.Task) error {
 	b, err := json.Marshal(t)
@@ -260,6 +263,9 @@ func (k *KernelStore) createWaveTx(ctx context.Context, tx *sql.Tx, request Wave
 		return wave, err
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_waves(id,source,source_id,input_digest,payload) VALUES(?,?,?,?,?)", wave.ID, wave.Source, wave.SourceID, digest, raw); err != nil {
+		return wave, err
+	}
+	if err = saveWaveToolScopeTx(ctx, tx, wave); err != nil {
 		return wave, err
 	}
 	if err = kernelRecordTx(ctx, tx, "wave_operation_limits", wave.ID, wave.ID, limits); err != nil {

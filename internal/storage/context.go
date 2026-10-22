@@ -25,7 +25,7 @@ func (k *KernelStore) ReadContext(ctx context.Context, sessionID string, r contr
 		return contract.ContextSlice{}, err
 	}
 	defer tx.Rollback()
-	b, _, err := artifactAuthorityTx(ctx, tx, sessionID, r.Target)
+	b, err := sessionBindingTx(ctx, tx, sessionID)
 	if err != nil {
 		return contract.ContextSlice{}, err
 	}
@@ -36,19 +36,30 @@ func (k *KernelStore) contextSliceTx(ctx context.Context, tx *sql.Tx, b contract
 	if !r.Valid() {
 		return result, errors.New("invalid bounded context request")
 	}
+	if r.Section == "manifest" {
+		scope, err := loadWaveToolScope(ctx, tx, r.Target.WaveID)
+		if err != nil {
+			return result, err
+		}
+		if scope.Target() != r.Target || b.Closed || b.Kind == "orchestrator" && scope.OrchestratorSessionID != b.ID || b.Kind == "task" && b.Target != r.Target || b.Kind != "orchestrator" && b.Kind != "task" {
+			return result, errors.New("context reader is outside the current Wave contract")
+		}
+		data, digest, err := k.inputManifestTx(ctx, tx, b, r)
+		if err != nil {
+			return result, err
+		}
+		return contextBytes(data, r, "application/json", digest)
+	}
 	wave, err := loadWave(ctx, tx, r.Target.WaveID)
 	if err != nil {
 		return result, err
 	}
-	if wave.Target() != r.Target || b.Kind == "orchestrator" && wave.OrchestratorSessionID != b.ID || b.Kind == "task" && b.Target != r.Target || b.Kind != "orchestrator" && b.Kind != "task" {
+	if b.Closed || wave.Target() != r.Target || b.Kind == "orchestrator" && wave.OrchestratorSessionID != b.ID || b.Kind == "task" && b.Target != r.Target || b.Kind != "orchestrator" && b.Kind != "task" {
 		return result, errors.New("context reader is outside the current Wave contract")
 	}
 	var data []byte
 	media := "text/plain; charset=utf-8"
 	switch r.Section {
-	case "manifest":
-		data, err = k.inputManifestTx(ctx, tx, b, r)
-		media = "application/json"
 	case "request":
 		data = []byte(wave.OriginalRequest)
 	case "criteria":
@@ -74,6 +85,11 @@ func (k *KernelStore) contextSliceTx(ctx context.Context, tx *sql.Tx, b contract
 	if err != nil {
 		return result, err
 	}
+	digest := sha256.Sum256(data)
+	return contextBytes(data, r, media, hex.EncodeToString(digest[:]))
+}
+func contextBytes(data []byte, r contract.ContextReadRequest, media, digest string) (contract.ContextSlice, error) {
+	var result contract.ContextSlice
 	if r.Offset > int64(len(data)) || r.Offset < int64(len(data)) && !utf8.RuneStart(data[r.Offset]) {
 		return result, errors.New("context offset must address a UTF-8 boundary")
 	}
@@ -84,8 +100,7 @@ func (k *KernelStore) contextSliceTx(ctx context.Context, tx *sql.Tx, b contract
 	if end == r.Offset && r.Offset < int64(len(data)) {
 		return result, errors.New("context limit cannot fit the next UTF-8 character")
 	}
-	digest := sha256.Sum256(data)
-	result = contract.ContextSlice{SchemaVersion: 1, Target: wave.Target(), Section: r.Section, Digest: hex.EncodeToString(digest[:]), Bytes: int64(len(data)), Offset: r.Offset, ContentType: media, Content: string(data[r.Offset:end])}
+	result = contract.ContextSlice{SchemaVersion: 1, Target: r.Target, Section: r.Section, Digest: digest, Bytes: int64(len(data)), Offset: r.Offset, ContentType: media, Content: string(data[r.Offset:end])}
 	if end < int64(len(data)) {
 		next := end
 		result.NextOffset = &next

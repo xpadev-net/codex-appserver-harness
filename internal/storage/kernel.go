@@ -20,6 +20,7 @@ const KernelSchemaVersion = 2
 // KernelStore is opened explicitly on a private, new DB. It never initializes a
 // legacy WorkItem database as if it were empty. Legacy migration is offline M.
 type KernelStore struct {
+	inputCache verifiedInputCache
 	*Store
 	Root                    string
 	Now                     func() time.Time
