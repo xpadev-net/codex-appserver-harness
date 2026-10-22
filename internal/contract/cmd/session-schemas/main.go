@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	documents := map[string]any{"task-result-v1.json": contract.TaskResultSchema(), "wave-plan-v1.json": contract.PlanSchema(), "kernel-tools-v1.json": map[string]any{"schema_version": 1, "orchestrator": contract.KernelTools("orchestrator"), "task": contract.KernelTools("task")}}
+	documents := map[string]any{"main-result-v1.json": contract.MainResultSchema(), "task-result-v1.json": contract.TaskResultSchema(), "wave-plan-v1.json": contract.PlanSchema(), "kernel-tools-v1.json": map[string]any{"schema_version": 1, "orchestrator": contract.KernelTools("orchestrator"), "task": contract.KernelTools("task")}}
 	for name, document := range documents {
 		b, err := json.MarshalIndent(document, "", "  ")
 		if err == nil {

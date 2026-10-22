@@ -18,6 +18,7 @@ import (
 )
 
 var ErrWakeHeld = errors.New("wake is held by session state or current policy")
+var ErrWakeScopeLimit = errors.New("wake exceeds the main Wave batch limit")
 var ErrWakeBusy = errors.New("session already has an unfinished wake")
 
 // Context is constructed by controller code for these exact versioned inputs.
@@ -358,6 +359,9 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 		}
 		if !seenTargets[n.Target.WaveID] {
 			intent.Targets = append(intent.Targets, n.Target)
+			if b.Kind == "orchestrator" && len(intent.Targets) > contract.MaxMainWaves {
+				return reservation, ErrWakeScopeLimit
+			}
 			seenTargets[n.Target.WaveID] = true
 		}
 		input.Notifications = append(input.Notifications, n)

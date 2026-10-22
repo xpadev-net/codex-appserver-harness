@@ -142,7 +142,7 @@ func mainBudgetTargets(b contract.SessionBinding, snapshot contract.InputSnapsho
 	if err := json.Unmarshal(snapshot.Input, &input); err != nil {
 		return nil, err
 	}
-	if input.SchemaVersion != 1 || input.SessionID != b.ID || len(input.Targets) == 0 {
+	if input.SchemaVersion != 1 || input.SessionID != b.ID || len(input.Targets) == 0 || len(input.Targets) > contract.MaxMainWaves {
 		return nil, errors.New("main run requires a scoped Wave input snapshot")
 	}
 	targets := append([]contract.Target{}, input.Targets...)

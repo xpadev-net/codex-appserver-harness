@@ -261,3 +261,14 @@ HARNESS_LIVE_CODEX_BINARY=/absolute/native/codex \
 HARNESS_PARALLEL_EVIDENCE=/absolute/parallel-native.json \
 go test ./internal/control -run '^TestLiveParallelNativeCapacityAndStop$' -count=1
 ```
+
+
+## Main judgment application
+
+`MainResult` v1 permits `plan`, `wait` and `report` decisions, one for every Wave selected in the saved input. Wake and run admission share its 16-Wave maximum, including accumulated terminal observations; oversized batches leave notifications pending for smaller batches. It contains no completion, approval or policy-replacement action. A report is an explanation; ordinary quality/acceptance code remains responsible for Wave completion. Strict decoding and current controller policy reject unselected/stale targets, missing/duplicate decisions, invented criteria and foreign waiting subscriptions.
+
+`ApplyMainResult` requires the exact active logical Orchestrator/run/thread, normal known completion, original stop proof, digest-bound snapshot and matching saved run-budget scope. It validates the batch before adopting plans; plans, fresh Task/session structure and cumulative reservations, fanout, receipt, run disposition and notification/message application commit together. A replay returns the original receipt after DB restart or audited main-thread rotation. No extra model turn or reset budget is implied.
+
+Pause and unapplied Task work hold plan adoption. A nonterminal operator-interrupted main run remains undecided for explicit recovery; late normal history cannot accept its proposal. Cancel/queued direction/superseded scope retain the old physical output without adopting it. When a shared batch becomes obsolete, current input from other Waves returns to pending rather than being marked applied or lost. A separately bound canceled-terminal observation can still be reported. Known invalid output and unresolved references return errors with the stored input/result intact for the controller's later classification/reconciliation.
+
+This slice supplies the application contract/transaction. Production input reconstruction, WorkSource, failure/recovery policy, normalized native token observations, thread maintenance and CLI/live-model orchestration remain Task_6/9/10; no K completion is claimed.
