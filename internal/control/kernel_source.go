@@ -16,8 +16,8 @@ import (
 
 // KernelSource reconstructs work from committed DB facts. It never starts a
 // model itself. Loop/Runtime retain process, capacity and physical stop ownership.
-// Quality/template progression and explicit recovery controls are separate from
-// this session dispatch adapter; no Task/main output can complete a Wave here.
+// Saved templates progress before selection; explicit recovery and final Wave
+// acceptance remain separate. No Task/main output can complete a Wave here.
 type KernelSource struct {
 	Store         *storage.KernelStore
 	Report        func(error)
@@ -86,11 +86,29 @@ func (s *KernelSource) Ready(ctx context.Context, after string, limit int) (Work
 	if err != nil {
 		return out, err
 	}
+	progressionSeen := map[string]bool{}
 	for i, sid := range page.SessionIDs {
 		state, err := s.Store.SessionDispatchState(ctx, sid)
 		if err != nil {
 			s.report(err)
 			continue
+		}
+		progressionKey := "main:" + sid
+		if state.Binding.Kind == "task" {
+			progressionKey = "wave:" + state.Binding.Target.WaveID
+		}
+		if !progressionSeen[progressionKey] {
+			progressionSeen[progressionKey] = true
+			expanded, progressionErr := s.Store.ReconcileSessionTemplates(ctx, sid)
+			s.report(progressionErr)
+			out.Recheck = out.Recheck || expanded
+			if expanded {
+				state, err = s.Store.SessionDispatchState(ctx, sid)
+				if err != nil {
+					s.report(err)
+					continue
+				}
+			}
 		}
 		work, recheck, err := s.selectSession(ctx, state)
 		if err != nil {

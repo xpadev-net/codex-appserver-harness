@@ -46,6 +46,9 @@ type templateAssignment struct {
 // call a model, accept a generated plan, or authorize a Task to create Tasks.
 // P's verification/runner/candidate transitions are connected by Task_7/8.
 func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request TemplateExpansionRequest) (TemplateExpansion, error) {
+	return k.expandReviewTemplates(ctx, request, false)
+}
+func (k *KernelStore) expandReviewTemplates(ctx context.Context, request TemplateExpansionRequest, automatic bool) (TemplateExpansion, error) {
 	var receipt TemplateExpansion
 	if !request.Target.Valid() || request.ReviewTaskID == "" {
 		return receipt, errors.New("versioned review expansion request required")
@@ -75,6 +78,11 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 	}
 	if wave.Policy.Stage != "K" || wave.Policy.Product {
 		return receipt, fmt.Errorf("%w: product expansion needs independent verification adapter", ErrTemplateNeedsMain)
+	}
+	if automatic {
+		if err = idleTemplateParentTx(ctx, tx, wave); err != nil {
+			return receipt, err
+		}
 	}
 	var raw []byte
 	if err = tx.QueryRowContext(ctx, "SELECT payload FROM kernel_plans WHERE wave_id=? AND revision=?", wave.ID, wave.PlanRevision).Scan(&raw); err != nil {
@@ -326,6 +334,9 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 		return receipt, err
 	}
 	if err = kernelRecordTx(ctx, tx, "template_expansion_request", requestKey, wave.ID, receipt); err != nil {
+		return receipt, err
+	}
+	if err = k.followTemplateTerminalWaitsTx(ctx, tx, wave, receipt); err != nil {
 		return receipt, err
 	}
 	// Any review event in this already batched phase must resolve to the same
