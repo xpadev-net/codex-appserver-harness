@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -121,5 +122,37 @@ func TestResultPublicationWaitsForProfileChildrenToStop(t *testing.T) {
 	}
 	if alive, err := process.GroupAlive(life.Profile); err != nil || alive {
 		t.Fatal("published result preceded group stopping", life, alive, err)
+	}
+}
+
+func TestProfileMainThreadExitWaitsForRemainingThreads(t *testing.T) {
+	compiler, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("C compiler required for kernel pthread exit fixture")
+	}
+	dir := t.TempDir()
+	source, binary := filepath.Join(dir, "threads.c"), filepath.Join(dir, "threads")
+	program := []byte(`#include <pthread.h>
+#include <unistd.h>
+static void *worker(void *arg) {
+ usleep(100000); write(1, "PASS", 4); return 0;
+}
+int main(void) {
+ pthread_t thread;
+ if (pthread_create(&thread, 0, worker, 0)) return 2;
+ pthread_exit(0);
+}
+`)
+	if err = os.WriteFile(source, program, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(compiler, "-pthread", "-o", binary, source).CombinedOutput(); err != nil {
+		t.Fatalf("compile fixture: %s: %v", output, err)
+	}
+	s := spec(t)
+	s.Profile.Argv = []string{binary}
+	result, err := Execute(context.Background(), s)
+	if err != nil || result.Status != "passed" {
+		t.Fatal("main thread exit terminated live worker thread", result, err)
 	}
 }
