@@ -53,9 +53,8 @@ func expandedReviewResultTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, t
 }
 
 type templateTaskClone struct {
-	OriginalID    string `json:"original_id"`
-	ReplacementID string `json:"replacement_id"`
-	ExpansionKey  string `json:"expansion_key"`
+	OriginalID   string `json:"source_task_id"`
+	ExpansionKey string `json:"expansion_key"`
 }
 
 func templateTaskBoundTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, id string, seen map[string]bool) (bool, error) {
@@ -76,20 +75,20 @@ func templateTaskBoundTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, id s
 			return false, err
 		}
 	}
-	ids, err := inputIDsTx(ctx, tx, "SELECT id FROM records WHERE kind='template_task_clone' AND work_item_id=? ORDER BY rowid DESC", id)
+	ids, err := inputIDsTx(ctx, tx, "SELECT id FROM records WHERE kind='template_future_clone' AND work_item_id=? AND json_extract(payload,'$.source_task_id')=? ORDER BY rowid DESC", wave.ID, id)
 	if err != nil {
 		return false, err
 	}
 	for _, replacement := range ids {
 		var clone templateTaskClone
-		if err = completionRecord(ctx, tx, "template_task_clone", replacement, &clone); err != nil {
+		if err = completionRecord(ctx, tx, "template_future_clone", replacement, &clone); err != nil {
 			return false, err
 		}
 		var expansion TemplateExpansion
 		if err = completionRecord(ctx, tx, "template_expansion", clone.ExpansionKey, &expansion); err != nil {
 			return false, err
 		}
-		if clone.OriginalID != id || clone.ReplacementID != replacement || expansion.Key != clone.ExpansionKey || expansion.Admission.Mode != "template" || expansion.Request.Target.WaveID != wave.ID || expansion.Request.Target.ScopeRevision != wave.ScopeRevision || expansion.Request.Target.PolicyRevision != wave.Policy.Revision || !slices.Contains(expansion.Admission.CreatedTaskIDs, replacement) {
+		if clone.OriginalID != id || expansion.Key != clone.ExpansionKey || expansion.Admission.Mode != "template" || expansion.Request.Target.WaveID != wave.ID || expansion.Request.Target.ScopeRevision != wave.ScopeRevision || expansion.Request.Target.PolicyRevision != wave.Policy.Revision || !slices.Contains(expansion.Admission.CreatedTaskIDs, replacement) {
 			return false, errors.New("template clone receipt conflict")
 		}
 		bound, err := templateTaskBoundTx(ctx, tx, wave, replacement, seen)
@@ -201,6 +200,33 @@ func idleTemplateParentTx(ctx context.Context, tx *sql.Tx, wave domain.Wave) err
 	}
 	if !idle {
 		return ErrPlanAdmissionHeld
+	}
+	return nil
+}
+
+// A controller-owned plan revision continues an accepted background Wave.
+// Preserve each outstanding terminal wait with a versioned successor, retaining
+// the original subscription/request as history rather than rewriting its scope.
+func (k *KernelStore) followTemplateTerminalWaitsTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, expansion TemplateExpansion) error {
+	ids, err := inputIDsTx(ctx, tx, "SELECT id FROM kernel_subscriptions WHERE session_id=? AND wave_id=? AND scope_revision=? AND plan_revision=? AND resource=? ORDER BY id", wave.OrchestratorSessionID, wave.ID, wave.ScopeRevision, wave.PlanRevision, "kernel:wave-terminal:"+wave.ID)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		prior, err := subscriptionTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if prior.Target != wave.Target() || prior.Request.Kind != "wave_terminal" {
+			return errors.New("template terminal subscription conflict")
+		}
+		next, err := k.subscribeRequestTx(ctx, tx, SubscriptionRequest{SessionID: wave.OrchestratorSessionID, Target: expansion.Admission.Target, Key: structureID("template-terminal-", id, expansion.Key), Kind: "wave_terminal"})
+		if err != nil {
+			return err
+		}
+		if err = kernelRecordTx(ctx, tx, "template_terminal_follow", next.ID, id, map[string]any{"previous_subscription_id": id, "subscription_id": next.ID, "expansion_key": expansion.Key, "from": prior.Target, "to": next.Target}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

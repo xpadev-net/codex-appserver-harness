@@ -178,3 +178,62 @@ func TestFindingsGateRejectsPlanThatDropsGeneratedFixTasks(t *testing.T) {
 		t.Fatal("findings completed Wave")
 	}
 }
+
+func TestAutomaticTemplateProgressionPreservesTerminalWait(t *testing.T) {
+	ctx := context.Background()
+	k, w, _, _ := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, []string{"artifact_defect"})
+	prior, err := k.Subscribe(ctx, SubscriptionRequest{SessionID: w.OrchestratorSessionID, Target: w.Target(), Key: "background-terminal", Kind: "wave_terminal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err = k.DB.QueryRowContext(ctx, "SELECT payload FROM kernel_subscriptions WHERE session_id=? AND wave_id=? AND plan_revision=? AND resource=?", w.OrchestratorSessionID, w.ID, current.PlanRevision, "kernel:wave-terminal:"+w.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var successor Subscription
+	if err = json.Unmarshal(raw, &successor); err != nil || successor.Target != current.Target() || successor.ID == prior.ID {
+		t.Fatal(successor, err)
+	}
+	original, err := subscriptionTx(ctx, k.DB, prior.ID)
+	if err != nil || original.Request != prior.Request {
+		t.Fatal("original terminal wait rewritten", original, err)
+	}
+	mustControl(t, k, operatorRequest(current, "cancel", "cancel", ""))
+	notifications, err := k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
+	if err != nil || len(notifications) != 1 || notifications[0].SubscriptionID != successor.ID || notifications[0].Target != current.Target() || notifications[0].WaveState != domain.WaveCanceled {
+		t.Fatal(notifications, err)
+	}
+	wake, err := k.ReserveWake(ctx, WakeRequest{SessionID: w.OrchestratorSessionID, Key: "terminal-wake", NotificationIDs: []string{notifications[0].ID}, IncludeSessionContext: true})
+	if err != nil || len(wake.Intent.NotificationIDs) != 1 {
+		t.Fatal(wake, err)
+	}
+}
+
+func TestTemplateTerminalSuccessorFailureRollsBackExpansion(t *testing.T) {
+	ctx := context.Background()
+	k, w, _, _ := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, []string{"artifact_defect"})
+	if _, err := k.Subscribe(ctx, SubscriptionRequest{SessionID: w.OrchestratorSessionID, Target: w.Target(), Key: "terminal", Kind: "wave_terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.ExecContext(ctx, `CREATE TRIGGER fail_terminal_follow BEFORE INSERT ON kernel_subscriptions WHEN NEW.resource LIKE 'kernel:wave-terminal:%' AND NEW.plan_revision>1 BEGIN SELECT RAISE(ABORT,'fixture'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err == nil || changed {
+		t.Fatal("partial expansion accepted", changed, err)
+	}
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil || current.Target() != w.Target() || current.FixRounds != 0 || current.MainTurns != 0 {
+		t.Fatal(current, err)
+	}
+	var receipts int
+	if err = k.DB.QueryRowContext(ctx, "SELECT count(*) FROM records WHERE kind='template_expansion'").Scan(&receipts); err != nil || receipts != 0 {
+		t.Fatal(receipts, err)
+	}
+}

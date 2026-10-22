@@ -455,6 +455,21 @@ func TestTemplateClonedPendingReviewRetainsItsAuthorityAndNextRound(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Persisted pre-progression databases have template_future_clone records
+	// only. Reopening must recognize those existing authoritative receipts.
+	var extraCloneRecords int
+	if err = store.DB.QueryRowContext(ctx, "SELECT count(*) FROM records WHERE kind='template_task_clone'").Scan(&extraCloneRecords); err != nil || extraCloneRecords != 0 {
+		t.Fatal(extraCloneRecords, err)
+	}
+	path := filepath.Join(store.Root, "state.db")
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	var fixedA, fixedB domain.Artifact
 	var clonedReview domain.Task
 	for _, id := range second.Admission.CreatedTaskIDs {

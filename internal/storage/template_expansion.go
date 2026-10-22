@@ -336,6 +336,9 @@ func (k *KernelStore) expandReviewTemplates(ctx context.Context, request Templat
 	if err = kernelRecordTx(ctx, tx, "template_expansion_request", requestKey, wave.ID, receipt); err != nil {
 		return receipt, err
 	}
+	if err = k.followTemplateTerminalWaitsTx(ctx, tx, wave, receipt); err != nil {
+		return receipt, err
+	}
 	// Any review event in this already batched phase must resolve to the same
 	// expansion, even if another review happened to trigger the transaction.
 	for _, id := range sourceTaskIDs {
@@ -853,9 +856,6 @@ func pinClonedReviewSubjectTx(ctx context.Context, tx *sql.Tx, wave domain.Wave,
 
 func cloneTemplateMetadataTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, oldLocal, newLocal, key string, clones map[string]string, templates []contract.FixReviewTemplate) error {
 	oldID, newID := structureID("task-", wave.ID, oldLocal), structureID("task-", wave.ID, newLocal)
-	if err := kernelRecordTx(ctx, tx, "template_task_clone", newID, oldID, templateTaskClone{OriginalID: oldID, ReplacementID: newID, ExpansionKey: key}); err != nil {
-		return err
-	}
 	var lineage templateReviewLineage
 	err := completionRecord(ctx, tx, "template_review_lineage", oldID, &lineage)
 	if err == nil {
