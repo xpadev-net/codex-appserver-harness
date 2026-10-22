@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -192,6 +196,9 @@ func (k *KernelStore) BindSessionThread(ctx context.Context, expected contract.S
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET thread_id=?,creating=0,payload=? WHERE id=?", thread, raw, b.ID); err != nil {
+		return err
+	}
+	if err = k.finishMainRotationTx(ctx, tx, b, thread); err != nil {
 		return err
 	}
 	if managedOwner != "" {
@@ -718,7 +725,7 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 // proof. There can be no sent turn without a bound thread. Preserve its unknown
 // creation intent and recovery snapshot before permitting a fresh generation.
 func (k *KernelStore) RecoverUnboundMainThread(ctx context.Context, expected contract.SessionBinding, snapshot contract.InputSnapshot, reason string) error {
-	if reason == "" || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) {
+	if strings.TrimSpace(reason) == "" || len(reason) > contract.MaxInline || !utf8.ValidString(reason) || expected.Generation == math.MaxInt || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) {
 		return errors.New("audited recovery snapshot required")
 	}
 	if err := contract.ValidateSessionInput(snapshot.Input); err != nil {
@@ -744,12 +751,38 @@ func (k *KernelStore) RecoverUnboundMainThread(ctx context.Context, expected con
 	if creating != 1 || stopped != 1 || active != "" {
 		return errors.New("unknown main creation must be stopped before recovery")
 	}
+	var rotationID string
+	var rotation *MainThreadRotation
+	err = completionRecord(ctx, tx, "main_rotation_pending", b.ID, &rotationID)
+	if err == nil {
+		rotation = &MainThreadRotation{}
+		if err = completionRecord(ctx, tx, "main_thread_rotation", rotationID, rotation); err != nil {
+			return err
+		}
+		if rotation.ID != rotationID || rotation.SessionID != b.ID || rotation.Generation != b.Generation || rotation.State != "pending" {
+			return ErrMainRotationHeld
+		}
+		if _, err = k.rotationSnapshotTx(ctx, tx, b, snapshot); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	var count int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM kernel_run_bindings WHERE session_id=?", b.ID).Scan(&count); err != nil {
 		return err
 	}
 	if count != 0 {
-		return errors.New("unbound main unexpectedly has sent runs")
+		if rotation == nil {
+			return errors.New("unbound main unexpectedly has sent runs")
+		}
+		var unresolved int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM kernel_run_bindings WHERE session_id=? AND (applied=0 OR process_stopped=0)", b.ID).Scan(&unresolved); err != nil {
+			return err
+		}
+		if unresolved != 0 {
+			return ErrMainRotationHeld
+		}
 	}
 	var digest string
 	var data []byte
@@ -764,6 +797,19 @@ func (k *KernelStore) RecoverUnboundMainThread(ctx context.Context, expected con
 		}
 	} else {
 		return err
+	}
+	if rotation != nil {
+		recoveryID := structureID("main-rotation-recovery-", rotation.ID, strconv.Itoa(b.Generation+1))
+		recovery := map[string]any{"rotation_id": rotation.ID, "from_generation": b.Generation, "to_generation": b.Generation + 1, "unknown_preparation_id": b.PreparationID, "from_snapshot_id": rotation.SnapshotID, "snapshot_id": snapshot.ID, "snapshot_digest": snapshot.Digest, "reason": reason, "created_at": k.clock()}
+		if err = kernelRecordTx(ctx, tx, "main_rotation_recovery", recoveryID, b.ID, recovery); err != nil {
+			return err
+		}
+		rotation.Generation = b.Generation + 1
+		rotation.SnapshotID = snapshot.ID
+		rotation.SnapshotDigest = snapshot.Digest
+		if err = kernelRecordTx(ctx, tx, "main_thread_rotation", rotation.ID, b.ID, *rotation); err != nil {
+			return err
+		}
 	}
 	b.Generation++
 	b.PreparationID = ""
