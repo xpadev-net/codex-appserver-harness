@@ -327,6 +327,23 @@ func observeRunUsageTx(ctx context.Context, tx *sql.Tx, run contract.SessionRun)
 	if run.TurnID == "" || !run.BaselineKnown || slices.Contains(run.BaselineTurnIDs, run.TurnID) || len(run.Usage) == 0 {
 		return nil
 	}
+	if observation := run.ObservedUsage; observation != nil {
+		if observation.Version != 1 || observation.TotalTokens < 0 {
+			return errors.New("invalid normalized run usage")
+		}
+		switch observation.Source {
+		case "unavailable", "thread_total_delta", "counter_reset":
+		default:
+			return errors.New("invalid normalized usage source")
+		}
+		if !observation.HasObservation {
+			return nil
+		}
+		return applyRunTokensTx(ctx, tx, run.ID, &observation.TotalTokens, false)
+	}
+	// Historic records retain their last-response lower bound. New runs carry
+	// explicit normalized observations, so an absent baseline cannot charge a
+	// previous turn's response or a lifetime thread total to the current run.
 	var usage struct {
 		Last struct {
 			TotalTokens *int64 `json:"totalTokens"`
