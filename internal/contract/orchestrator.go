@@ -3,6 +3,7 @@ package contract
 import "errors"
 
 const MaxMainWaves = 16
+const MaxMainListItems = 128
 
 // MainResult proposes actions within the controller's saved Wave input scope.
 // Completion/approval/policy changes are deliberately absent: ordinary code
@@ -28,7 +29,7 @@ func (r MainResult) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, d := range r.Decisions {
-		if !d.Target.Valid() || seen[d.Target.WaveID] || !inline(d.Summary) || !validIDs(d.SubscriptionIDs) || len(d.SubscriptionIDs) > 128 || len(d.Remaining) > 128 || len(d.Blockers) > 128 {
+		if !d.Target.Valid() || seen[d.Target.WaveID] || !inline(d.Summary) || !validIDs(d.SubscriptionIDs) || len(d.SubscriptionIDs) > MaxMainListItems || len(d.Remaining) > MaxMainListItems || len(d.Blockers) > MaxMainListItems {
 			return errors.New("invalid or duplicate main decision")
 		}
 		seen[d.Target.WaveID] = true
@@ -66,6 +67,9 @@ func MainResultSchema() map[string]any {
 	decisions := schema["properties"].(map[string]any)["decisions"].(map[string]any)
 	decisions["minItems"], decisions["maxItems"] = 1, MaxMainWaves
 	fields := decisions["items"].(map[string]any)["properties"].(map[string]any)
+	for _, name := range []string{"subscription_ids", "remaining", "blockers"} {
+		fields[name].(map[string]any)["maxItems"] = MaxMainListItems
+	}
 	fields["action"].(map[string]any)["enum"] = []string{"plan", "wait", "report"}
 	fields["plan"].(map[string]any)["anyOf"] = []any{PlanSchema(), map[string]any{"type": "null"}}
 	return schema

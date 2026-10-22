@@ -19,7 +19,7 @@
               "maxLength": 16384,
               "type": "string"
             },
-            "maxItems": 256,
+            "maxItems": 128,
             "type": "array"
           },
           "plan": {
@@ -225,7 +225,7 @@
               "maxLength": 16384,
               "type": "string"
             },
-            "maxItems": 256,
+            "maxItems": 128,
             "type": "array"
           },
           "subscription_ids": {
@@ -233,7 +233,7 @@
               "maxLength": 16384,
               "type": "string"
             },
-            "maxItems": 256,
+            "maxItems": 128,
             "type": "array"
           },
           "summary": {

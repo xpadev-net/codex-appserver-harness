@@ -56,3 +56,23 @@ func TestMainResultWaitNeedsSubscriptionsAndReportCannotSmugglePlan(t *testing.T
 		t.Fatal("schema missing")
 	}
 }
+
+func TestMainResultSchemaListLimitsMatchValidation(t *testing.T) {
+	fields := MainResultSchema()["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	for _, name := range []string{"subscription_ids", "remaining", "blockers"} {
+		if fields[name].(map[string]any)["maxItems"] != MaxMainListItems {
+			t.Fatal("schema list bound differs from contract", name)
+		}
+	}
+	result := MainResult{SchemaVersion: 1, SessionID: "main", Decisions: []MainDecision{{Target: Target{"wave", 1, 1, 1}, Action: "report", Summary: "report"}}}
+	for range MaxMainListItems {
+		result.Decisions[0].Remaining = append(result.Decisions[0].Remaining, "pending work")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	result.Decisions[0].Remaining = append(result.Decisions[0].Remaining, "overflow")
+	if result.Validate() == nil {
+		t.Fatal("oversized explanation accepted")
+	}
+}
