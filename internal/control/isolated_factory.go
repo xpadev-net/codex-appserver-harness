@@ -37,6 +37,7 @@ type IsolatedConfig struct {
 type runtimeProbe func(context.Context, string, []string, []string, string) (string, error)
 type IsolatedFactory struct {
 	Config IsolatedConfig
+	store  *storage.KernelStore
 	probe  runtimeProbe
 }
 
@@ -58,7 +59,7 @@ func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runt
 	config.PrivateRoot = root
 	config.Launcher = append([]string{}, config.Launcher...)
 	config.GitDirectories = append([]string{}, config.GitDirectories...)
-	return Runtime{Store: store, Factory: IsolatedFactory{Config: config}}, nil
+	return Runtime{Store: store, Factory: IsolatedFactory{Config: config, store: store}}, nil
 }
 
 func pathContains(root, path string) bool {
@@ -177,6 +178,12 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 		source := sessionTokenSource{path: path}
 		credentials, err := source.Tokens(ctx)
 		if err != nil {
+			return fail(err)
+		}
+		if f.store == nil {
+			return fail(errors.New("session authentication requires a store-bound runtime"))
+		}
+		if err = f.store.BindSessionAuthentication(ctx, launch.Binding, credentials.AccountID); err != nil {
 			return fail(err)
 		}
 		source.account = credentials.AccountID

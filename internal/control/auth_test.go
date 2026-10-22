@@ -52,7 +52,7 @@ func TestSessionTokenSourceReadsOnlyCurrentAccessTokens(t *testing.T) {
 	}
 }
 func TestSessionTokenSourceRejectsExpiredMismatchedAndRedirectedFiles(t *testing.T) {
-	for _, kind := range []string{"expired", "account", "symlink", "fifo", "oversize"} {
+	for _, kind := range []string{"expired", "account", "bound-account", "symlink", "fifo", "oversize"} {
 		t.Run(kind, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "auth.json")
 			token := sessionSourceFixture(t, "account", time.Now().Add(time.Hour).Unix())
@@ -62,6 +62,10 @@ func TestSessionTokenSourceRejectsExpiredMismatchedAndRedirectedFiles(t *testing
 			}
 			if kind == "account" {
 				account = "foreign"
+			}
+			if kind == "bound-account" {
+				account = "foreign"
+				token = sessionSourceFixture(t, "foreign", time.Now().Add(time.Hour).Unix())
 			}
 			raw, _ := json.Marshal(map[string]any{"tokens": map[string]any{"access_token": token, "account_id": account}})
 			if err := os.WriteFile(path, raw, 0600); err != nil {
@@ -89,7 +93,11 @@ func TestSessionTokenSourceRejectsExpiredMismatchedAndRedirectedFiles(t *testing
 					t.Fatal(err)
 				}
 			}
-			if _, err := (sessionTokenSource{path: path}).Tokens(context.Background()); err == nil {
+			source := sessionTokenSource{path: path}
+			if kind == "bound-account" {
+				source.account = "account"
+			}
+			if _, err := source.Tokens(context.Background()); err == nil {
 				t.Fatal("unsafe source accepted")
 			}
 		})

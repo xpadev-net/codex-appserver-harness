@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
 func TestIsolatedFactoryUsesSessionAccessSourceForBothRoles(t *testing.T) {
@@ -71,4 +73,56 @@ func TestIsolatedFactoryUsesSessionAccessSourceForBothRoles(t *testing.T) {
 		t.Fatal("controller changed the source owner's credentials", err)
 	}
 	assertCapacity(t, k, 0)
+}
+
+func TestSessionAccountBindingSurvivesDatabaseAndProcessRecreation(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	config := isolatedConfig(t, k.Root)
+	config.SessionAuthFile = filepath.Join(t.TempDir(), "auth.json")
+	reservation, err := k.ReserveManagedProcess(ctx, storage.ManagedProcessRequest{OwnerID: "account-launch", RunID: "account-run", Mode: "execute", Binding: b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := k.BeginManagedProcessLaunch(ctx, "account-launch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = k.BindSessionAuthentication(ctx, reservation.Binding, "account"); err != nil {
+		t.Fatal(err)
+	}
+	stale := reservation.Binding
+	stale.Generation++
+	if err = k.BindSessionAuthentication(ctx, stale, "account"); err == nil {
+		t.Fatal("stale preparation changed authentication binding")
+	}
+	dbPath := filepath.Join(k.Root, "state.db")
+	if err = k.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := storage.OpenKernel(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err = reopened.BindSessionAuthentication(ctx, reservation.Binding, "account"); err != nil {
+		t.Fatal("same account did not replay after restart", err)
+	}
+	token := sessionSourceFixture(t, "replacement-account", time.Now().Add(time.Hour).Unix())
+	raw, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{"access_token": token, "account_id": "replacement-account"}})
+	if err = os.WriteFile(config.SessionAuthFile, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewIsolatedRuntime(reopened, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := runtime.Factory.Open(ctx, Launch{Binding: reservation.Binding, Process: launch})
+	if p != nil {
+		_ = p.Close()
+		t.Fatal("replacement account started a native process")
+	}
+	if !errors.Is(err, storage.ErrSessionAccountChanged) || !errors.Is(err, ErrNotStarted) {
+		t.Fatal("logical session adopted a replacement account", err)
+	}
 }

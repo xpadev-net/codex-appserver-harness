@@ -285,6 +285,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/storage/directions.go、internal/storage/directions_test.go（版付き方向修正と旧run照合）
   - internal/storage/interruptions.go、internal/storage/interruptions_test.go（明示停止intent・復旧待ち・遅着成功抑止）
   - internal/storage/task_results.go（interrupt後の旧run結果の保留）
+  - internal/storage/session_authentication.go（process/thread世代をまたぐ論理sessionのaccount固定）
   - internal/storage/artifact_retention.go（旧scopeの証拠を通常保持へ戻すGC照合）
   - internal/domain/wave.go、internal/storage/kernel_tools_test.go（方向修正のdispatch抑止とtool gate）
   - internal/ipc/**（private hint/read-only stream transport）

@@ -63,6 +63,10 @@ func TestLiveSessionAccessTokenInitializeAndStop(t *testing.T) {
 		t.Fatal("session auth source missing")
 	}
 	config := IsolatedConfig{SessionAuthFile: authFile, PrivateRoot: k.Root, Model: "configured", CodexBinary: binary, WorkerCodexHome: auth, Launcher: []string{launcher}, LauncherContract: "argv_passthrough_v1", IsolationVerified: true}
+	runtime, err := NewIsolatedRuntime(k, config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	observations := []map[string]any{}
 	for _, binding := range []contract.SessionBinding{main, task} {
 		owner := binding.Kind + "-probe"
@@ -75,7 +79,7 @@ func TestLiveSessionAccessTokenInitializeAndStop(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := time.Now()
-		p, err := (IsolatedFactory{Config: config}).Open(ctx, Launch{Binding: r.Binding, Process: launch})
+		p, err := runtime.Factory.Open(ctx, Launch{Binding: r.Binding, Process: launch})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -120,6 +124,11 @@ func TestLiveSessionAccessTokenInitializeAndStop(t *testing.T) {
 		} else {
 			obs["rss_sample_bytes"] = nil
 		}
+		var saved storage.SessionAuthentication
+		if err = k.Record(ctx, "session_authentication", binding.ID, &saved); err != nil || saved.SessionID != binding.ID || saved.AccountID == "" || saved.BoundAt.IsZero() {
+			t.Fatal("durable logical account binding missing")
+		}
+		obs["logical_account_binding"] = true
 		if _, err = os.Lstat(filepath.Join(isolatedHome(config, binding.ID), "codex", "auth.json")); !os.IsNotExist(err) {
 			t.Fatal("session authentication persisted in worker profile", err)
 		}
