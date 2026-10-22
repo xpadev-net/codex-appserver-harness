@@ -296,7 +296,11 @@ func (k *KernelStore) requeueCurrentMainInputsTx(ctx context.Context, tx *sql.Tx
 			return err
 		}
 		next, nextRun := "pending", ""
-		if obsoleteWakeNotification(b, wave, n, k.clock()) {
+		obsolete, err := k.obsoleteWakeNotificationTx(ctx, tx, b, wave, n)
+		if err != nil {
+			return err
+		}
+		if obsolete {
 			next, nextRun = "archived", runID
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE kernel_notifications SET state=?,run_id=? WHERE id=?", next, nextRun, id); err != nil {

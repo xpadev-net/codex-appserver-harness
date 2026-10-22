@@ -154,6 +154,26 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 	if err != nil {
 		return false, err
 	}
+	if set.State == "active" && set.Reason == "" {
+		changed, err := k.saveReadyInputAttentionTx(ctx, tx, wave, tasks)
+		if err != nil {
+			return false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		return changed, nil
+	}
+	if set.Reason == "review_inconclusive" || set.Reason == "drain_and_block" {
+		changed, err := k.savePhaseAttentionTx(ctx, tx, wave, tasks)
+		if err != nil {
+			return false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		return changed, nil
+	}
 	if set.Reason != "review_findings" {
 		return false, nil
 	}
@@ -184,7 +204,10 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 		return false, err
 	}
 	receipt, err := k.expandReviewTemplates(ctx, request, true)
-	if errors.Is(err, ErrTemplateNeedsMain) || errors.Is(err, ErrPlanAdmissionHeld) {
+	if errors.Is(err, ErrTemplateNeedsMain) {
+		return k.saveTemplateAttention(ctx, request, err.Error())
+	}
+	if errors.Is(err, ErrPlanAdmissionHeld) {
 		return false, nil
 	}
 	return err == nil && receipt.Admission.Target.PlanRevision > request.Target.PlanRevision, err

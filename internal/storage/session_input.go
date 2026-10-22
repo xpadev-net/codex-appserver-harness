@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -63,21 +64,42 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
-	SchemaVersion    int                            `json:"schema_version"`
-	SessionID        string                         `json:"session_id"`
-	Kind             string                         `json:"kind"`
-	Wave             domain.Wave                    `json:"wave"`
-	Plan             *PlanAdmission                 `json:"plan"`
-	Tasks            []domain.Task                  `json:"tasks"`
-	Results          map[string]contract.TaskResult `json:"results"`
-	TaskApplications []ResultApplication            `json:"task_applications"`
-	TemplateContexts map[string]json.RawMessage     `json:"template_contexts"`
-	TemplateSubjects map[string]TemplateSubject     `json:"template_subjects"`
-	MainDecisions    []appliedMainDecision          `json:"main_decisions"`
-	Artifacts        []domain.Artifact              `json:"artifacts"`
-	Subscriptions    []inputSubscription            `json:"subscriptions"`
-	Direction        *WaveDirection                 `json:"direction"`
-	Budget           WaveRunBudget                  `json:"budget"`
+	SchemaVersion           int                            `json:"schema_version"`
+	SessionID               string                         `json:"session_id"`
+	Kind                    string                         `json:"kind"`
+	Wave                    domain.Wave                    `json:"wave"`
+	Plan                    *PlanAdmission                 `json:"plan"`
+	Tasks                   []domain.Task                  `json:"tasks"`
+	Results                 map[string]contract.TaskResult `json:"results"`
+	UnavailableResults      []unavailableInputResult       `json:"unavailable_results"`
+	TaskApplications        []ResultApplication            `json:"task_applications"`
+	TemplateContexts        map[string]json.RawMessage     `json:"template_contexts"`
+	TemplateSubjects        map[string]TemplateSubject     `json:"template_subjects"`
+	MainDecisions           []appliedMainDecision          `json:"main_decisions"`
+	Artifacts               []domain.Artifact              `json:"artifacts"`
+	UnavailableArtifacts    []unavailableInputArtifact     `json:"unavailable_artifacts"`
+	UnavailableTaskMetadata []unavailableTaskMetadata      `json:"unavailable_task_metadata"`
+	Subscriptions           []inputSubscription            `json:"subscriptions"`
+	Direction               *WaveDirection                 `json:"direction"`
+	Budget                  WaveRunBudget                  `json:"budget"`
+}
+
+type unavailableInputResult struct {
+	TaskID   string `json:"task_id"`
+	ResultID string `json:"result_id"`
+	RunID    string `json:"run_id"`
+	Reason   string `json:"reason"`
+}
+
+type unavailableInputArtifact struct {
+	ArtifactID string `json:"artifact_id"`
+	Reason     string `json:"reason"`
+}
+
+type unavailableTaskMetadata struct {
+	TaskID string `json:"task_id"`
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
 }
 
 // BuildSessionInput captures one consistent DB view, with no model/process or
@@ -273,7 +295,7 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
-	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
+	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, UnavailableResults: []unavailableInputResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, UnavailableArtifacts: []unavailableInputArtifact{}, UnavailableTaskMetadata: []unavailableTaskMetadata{}, Subscriptions: []inputSubscription{}}
 	tokens, unknown, saturated, err := waveTokensTx(ctx, tx, w.ID)
 	if err != nil {
 		return m, err
@@ -326,20 +348,35 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 		var templateContext []byte
 		contextErr := tx.QueryRowContext(ctx, "SELECT work_item_id,payload FROM records WHERE kind='template_task_context' AND id=?", task.ID).Scan(&templateOwner, &templateContext)
 		if contextErr == nil {
-			if templateOwner != w.ID || !json.Valid(templateContext) {
-				return m, errors.New("input template context binding conflict")
+			invalid := templateOwner != w.ID || !json.Valid(templateContext)
+			if b.Kind == "orchestrator" && !invalid && (task.Spec.Kind == "fix" || task.Spec.Kind == "review") {
+				var input templateTaskInput
+				invalid = json.Unmarshal(templateContext, &input) != nil || len(input.InputDigest) != 64 || strings.Trim(input.InputDigest, "0123456789abcdef") != ""
 			}
-			m.TemplateContexts[task.ID] = json.RawMessage(templateContext)
+			if invalid {
+				if b.Kind != "orchestrator" {
+					return m, errors.New("input template context binding conflict")
+				}
+				m.UnavailableTaskMetadata = append(m.UnavailableTaskMetadata, unavailableTaskMetadata{TaskID: task.ID, Kind: "template_task_context", Reason: "invalid_template_context"})
+			} else {
+				m.TemplateContexts[task.ID] = json.RawMessage(templateContext)
+			}
 		} else if !errors.Is(contextErr, sql.ErrNoRows) {
 			return m, contextErr
 		}
 		var subject TemplateSubject
-		contextErr = completionRecord(ctx, tx, "template_subject", task.ID, &subject)
+		contextErr = taskEvidenceRecord(ctx, tx, "template_subject", task.ID, &subject)
 		if contextErr == nil {
 			if subject.TaskID != task.ID || subject.Target != task.Target() {
-				return m, errors.New("input template subject binding conflict")
+				if b.Kind != "orchestrator" {
+					return m, errors.New("input template subject binding conflict")
+				}
+				m.UnavailableTaskMetadata = append(m.UnavailableTaskMetadata, unavailableTaskMetadata{TaskID: task.ID, Kind: "template_subject", Reason: "invalid_template_subject_binding"})
+			} else {
+				m.TemplateSubjects[task.ID] = subject
 			}
-			m.TemplateSubjects[task.ID] = subject
+		} else if b.Kind == "orchestrator" && errors.Is(contextErr, ErrTaskEvidence) {
+			m.UnavailableTaskMetadata = append(m.UnavailableTaskMetadata, unavailableTaskMetadata{TaskID: task.ID, Kind: "template_subject", Reason: "invalid_template_subject"})
 		} else if !errors.Is(contextErr, sql.ErrNoRows) {
 			return m, contextErr
 		}
@@ -361,11 +398,30 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 				continue
 			}
 			var result contract.TaskResult
-			if err = completionRecord(ctx, tx, "task_result", application.ResultID, &result); err != nil {
+			if err = taskEvidenceRecord(ctx, tx, "task_result", application.ResultID, &result); err != nil {
+				if b.Kind == "orchestrator" && (errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence)) {
+					reason := "invalid_result"
+					if errors.Is(err, sql.ErrNoRows) {
+						reason = "missing_result"
+					}
+					m.UnavailableResults = append(m.UnavailableResults, unavailableInputResult{TaskID: task.ID, ResultID: application.ResultID, RunID: runID, Reason: reason})
+					continue
+				}
 				return m, err
 			}
 			if result.TaskID != task.ID || result.Target != task.Target() {
+				if b.Kind == "orchestrator" {
+					m.UnavailableResults = append(m.UnavailableResults, unavailableInputResult{TaskID: task.ID, ResultID: application.ResultID, RunID: runID, Reason: "invalid_result_binding"})
+					continue
+				}
 				return m, errors.New("input result binding conflict")
+			}
+			if err = result.Validate(); err != nil {
+				if b.Kind == "orchestrator" {
+					m.UnavailableResults = append(m.UnavailableResults, unavailableInputResult{TaskID: task.ID, ResultID: application.ResultID, RunID: runID, Reason: "invalid_result"})
+					continue
+				}
+				return m, fmt.Errorf("%w: %v", ErrTaskEvidence, err)
 			}
 			m.Results[application.ResultID] = result
 		}
@@ -403,13 +459,63 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 	if err != nil {
 		return m, err
 	}
+	referenced := map[string]bool{}
+	if b.Kind == "orchestrator" {
+		selected := map[string]bool{}
+		for _, id := range ids {
+			selected[id] = true
+		}
+		for _, result := range m.Results {
+			for _, id := range resultArtifactReferences(result) {
+				referenced[id] = true
+				if !selected[id] {
+					ids = append(ids, id)
+					selected[id] = true
+				}
+			}
+		}
+		for _, task := range m.Tasks {
+			for _, id := range task.Spec.InputArtifactIDs {
+				referenced[id] = true
+				if !selected[id] {
+					ids = append(ids, id)
+					selected[id] = true
+				}
+			}
+		}
+		sort.Strings(ids)
+	}
 	for _, id := range ids {
 		a, err := loadArtifact(ctx, tx, id)
 		if err != nil {
+			if b.Kind == "orchestrator" && (errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrArtifactIntegrity)) {
+				reason := "invalid_artifact_manifest"
+				if errors.Is(err, sql.ErrNoRows) {
+					reason = "missing_artifact"
+				}
+				m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: reason})
+				continue
+			}
 			return m, err
 		}
-		if a.ScopeRevision != w.ScopeRevision || a.PolicyRevision != w.Policy.Revision {
+		if a.WaveID != w.ID || a.ScopeRevision != w.ScopeRevision || a.PolicyRevision != w.Policy.Revision {
+			if referenced[id] {
+				m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: "outside_scope_artifact"})
+			}
 			continue
+		}
+		if a.State != "committed" {
+			m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: "unavailable_artifact"})
+			continue
+		}
+		if b.Kind == "orchestrator" {
+			if _, err = k.readArtifactObject(a); err != nil {
+				if errors.Is(err, ErrArtifactIntegrity) {
+					m.UnavailableArtifacts = append(m.UnavailableArtifacts, unavailableInputArtifact{ArtifactID: id, Reason: "invalid_artifact_object"})
+					continue
+				}
+				return m, err
+			}
 		}
 		if err = artifactReadableTx(ctx, tx, b, w, a); err != nil {
 			if errors.Is(err, ErrArtifactGrant) {

@@ -160,6 +160,20 @@ func obsoleteWakeNotification(b contract.SessionBinding, wave domain.Wave, n Not
 	}
 	return terminal
 }
+
+func (k *KernelStore) obsoleteWakeNotificationTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, wave domain.Wave, n Notification) (bool, error) {
+	if obsoleteWakeNotification(b, wave, n, k.clock()) {
+		return true, nil
+	}
+	if n.Kind == "parent_attention" {
+		err := k.checkParentAttentionSourceTx(ctx, tx, b, n, true)
+		if errors.Is(err, ErrWakeHeld) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
 func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, n Notification) error {
 	wave, err := loadWave(ctx, tx, n.Target.WaveID)
 	if err != nil {
@@ -176,6 +190,9 @@ func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b cont
 		return ErrWakeHeld
 	}
 	if b.Kind == "orchestrator" && wave.OrchestratorSessionID == b.ID {
+		if n.Kind == "parent_attention" {
+			return k.checkParentAttentionWakeTx(ctx, tx, b, n)
+		}
 		return nil
 	}
 	if b.Kind != "task" || b.Target != n.Target {
@@ -226,9 +243,10 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 	}
 	out := []Notification{}
 	type gateKey struct {
-		Target   contract.Target
-		Terminal bool
-		State    domain.WaveState
+		Target      contract.Target
+		Terminal    bool
+		State       domain.WaveState
+		AttentionID string
 	}
 	gateCache := map[gateKey]error{}
 	var after int64
@@ -257,6 +275,9 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 				return nil, err
 			}
 			key := gateKey{Target: n.Target, Terminal: n.Kind == "wave_terminal", State: n.WaveState}
+			if n.Kind == "parent_attention" {
+				key.AttentionID = n.ID
+			}
 			gate, known := gateCache[key]
 			if !known {
 				gate = k.wakeNotificationTx(ctx, tx, b, n)
@@ -568,7 +589,10 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 		if err != nil {
 			return w, err
 		}
-		old := obsoleteWakeNotification(b, wave, n, k.clock())
+		old, err := k.obsoleteWakeNotificationTx(ctx, tx, b, wave, n)
+		if err != nil {
+			return w, err
+		}
 		obsolete[n.ID], hasObsolete = old, hasObsolete || old
 		held, err := wakeBudgetHeldTx(ctx, tx, b, wave)
 		if err != nil {
