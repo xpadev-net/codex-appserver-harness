@@ -193,6 +193,14 @@ func (k *KernelStore) ReserveSessionRun(ctx context.Context, expected contract.S
 	if !reflect.DeepEqual(b, expected) || b.ThreadID == "" || b.PreparationID == "" {
 		return errors.New("session changed before turn start")
 	}
+	var deadlineStop int
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='deadline_preparation_stop' AND id=?)", b.PreparationID).Scan(&deadlineStop); err != nil {
+		return err
+	}
+	if deadlineStop != 0 {
+		return ErrDeadlineHeld
+	}
+
 	if err = sessionDispatchableTx(ctx, tx, b); err != nil {
 		return err
 	}

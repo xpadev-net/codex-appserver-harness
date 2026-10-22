@@ -226,8 +226,8 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_4: 実行枠・排他・予算scheduler
 
-- status: in_progress
-- split: PR #66で保存済みplan/Phase/Task成果に基づくready集合・turn予約時の再照合・Phase証拠の保持を追加。PR #67で復旧許可のrun/input固定・waitingのwake必須・運用エラーの分類を補強した。PR #68でcontroller設定・同時Wave/app-server枠・worktree/thread世代排他と停止証拠を接続した。PR #69でrunner/PR/Cloud枠・共通repository Git排他・終端証拠による原子的な解放と復旧ページを追加した。PR #70でrun単位のtoken配分・unknown保持・親turn/thread上限・Wave共有予算を同じ予約transactionへ接続した。本PRでWave固定のvalidation job/retry/同一候補review上限を実行枠と同時予約する。永続deadline停止intent・観測metricsは続くPRで実装する。製品Candidate/merge判定はTask_8の認可adapterまでfail closedとする。processを起動するTask_5より先に予約portを完成させる。
+- status: completed
+- split: PR #66で保存済みplan/Phase/Task成果に基づくready集合・turn予約時の再照合・Phase証拠の保持を追加。PR #67で復旧許可のrun/input固定・waitingのwake必須・運用エラーの分類を補強した。PR #68でcontroller設定・同時Wave/app-server枠・worktree/thread世代排他と停止証拠を接続した。PR #69でrunner/PR/Cloud枠・共通repository Git排他・終端証拠による原子的な解放と復旧ページを追加した。PR #70でrun単位のtoken配分・unknown保持・親turn/thread上限・Wave共有予算を同じ予約transactionへ接続した。PR #71でWave固定のvalidation job/retry/同一候補review上限を実行枠と同時予約した。本PRでdeadlineの永続blocked化・停止/外部追跡intent・監査付き期限変更と、RSS/起動/停止時間のgeneration別観測portを追加し、Task_4のstorage/scheduler境界を完成させる。実timer・signal・計測の取得とdispatch接続はTask_5、WorkItem/Cloud接続はTask_8が担当する。製品Candidate/merge判定はTask_8の認可adapterまでfail closedとする。processを起動するTask_5より先に予約portを完成させる。
 - type: impl
 - owns:
   - internal/storage/scheduler.go
@@ -247,6 +247,8 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/storage/run_budgets_test.go
   - internal/storage/operation_budgets.go
   - internal/storage/operation_budgets_test.go
+  - internal/storage/deadlines.go、internal/storage/deadlines_test.go
+  - internal/storage/process_metrics.go、internal/storage/process_metrics_test.go
   - internal/domain/execution.go（controller全体の枠と新規/旧設定既定値）
   - internal/service/execution_config_test.go
   - internal/service/cli.go（新規initの枠設定）
