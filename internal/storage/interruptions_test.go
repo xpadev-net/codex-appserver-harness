@@ -313,3 +313,66 @@ func TestInterruptedTaskKeepsUnprocessedWakeInputsPending(t *testing.T) {
 		t.Fatal("pending input automatically retried blocked work", set, err)
 	}
 }
+
+func TestInterruptMainUsesCommittedSameRunReplanTarget(t *testing.T) {
+	ctx := context.Background()
+	k, request := waveStoreFixture(t)
+	w, err := k.CreateWave(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.AdoptPlan(ctx, w.Target(), "initial", storagePlanFixture()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := k.SessionBinding(ctx, w.OrchestratorSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := managedReserve(t, k, b, "main-owner", "main-run", "execute")
+	managedStart(t, k, owner, 88)
+	b = managedBind(t, k, owner)
+	snapshot, err := k.BuildSessionInput(ctx, b.ID, []contract.Target{w.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := contract.SessionRun{ID: "main-run", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true}
+	if err = k.ReserveSessionRun(ctx, b, snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	call := kernelCall(t, b, run, "wave_plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: w.Target(), Plan: renamedWaveToolPlan("new-")})
+	if _, err = (contract.KernelGateway{Backend: k}).Handle(ctx, call); err != nil {
+		t.Fatal(err)
+	}
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil || current.PlanRevision != w.PlanRevision+1 {
+		t.Fatal(current, err)
+	}
+	stop := SessionInterruptRequest{Key: "main-stop", Target: current.Target(), SessionID: b.ID, RunID: run.ID, PreparationID: b.PreparationID, Reason: "stop after replan"}
+	for _, change := range []func(*SessionInterruptRequest){
+		func(r *SessionInterruptRequest) { r.Target = w.Target() },
+		func(r *SessionInterruptRequest) { r.Target.PlanRevision++ },
+		func(r *SessionInterruptRequest) { r.Target.ScopeRevision++ },
+		func(r *SessionInterruptRequest) { r.PreparationID = "old-preparation" },
+	} {
+		bad := stop
+		change(&bad)
+		if _, err = k.RequestSessionInterrupt(ctx, bad); !errors.Is(err, ErrInterruptionHeld) {
+			t.Fatal("uncommitted or stale interruption accepted", bad, err)
+		}
+	}
+	accepted, err := k.RequestSessionInterrupt(ctx, stop)
+	if err != nil || accepted.Request.Target != current.Target() {
+		t.Fatal(accepted, err)
+	}
+	if replay, err := k.RequestSessionInterrupt(ctx, stop); err != nil || !reflect.DeepEqual(replay, accepted) {
+		t.Fatal(replay, err)
+	}
+	if err = k.CheckManagedRunSend(ctx, "main-owner"); !errors.Is(err, ErrInterruptionHeld) {
+		t.Fatal("interruption did not fence active run", err)
+	}
+	managedCapacity(t, k, 1)
+	var budget RunBudgetBinding
+	if err = k.Record(ctx, "run_budget", run.ID, &budget); err != nil || !reflect.DeepEqual(budget.Targets, []contract.Target{w.Target()}) {
+		t.Fatal("interrupt rewrote original budget", budget, err)
+	}
+}

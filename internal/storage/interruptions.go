@@ -105,7 +105,18 @@ func (k *KernelStore) RequestSessionInterrupt(ctx context.Context, r SessionInte
 		if err = completionRecord(ctx, tx, "run_budget", r.RunID, &budget); err != nil {
 			return result, err
 		}
-		if budget.SessionID != b.ID || !slices.Contains(budget.Targets, r.Target) {
+		var snapshotID, threadID string
+		if err = tx.QueryRowContext(ctx, "SELECT snapshot_id,thread_id FROM kernel_run_bindings WHERE run_id=?", r.RunID).Scan(&snapshotID, &threadID); err != nil {
+			return result, err
+		}
+		if budget.RunID != r.RunID || budget.SessionID != b.ID || budget.SnapshotID != snapshotID || budget.ThreadID != threadID || threadID != b.ThreadID {
+			return result, ErrInterruptionHeld
+		}
+		targets, err := effectiveRunTargetsTx(ctx, tx, b, r.RunID, snapshotID, budget.Targets)
+		if err != nil {
+			return result, err
+		}
+		if !slices.Contains(targets, r.Target) {
 			return result, ErrInterruptionHeld
 		}
 	} else {
