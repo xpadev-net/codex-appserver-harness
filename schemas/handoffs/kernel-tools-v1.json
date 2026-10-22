@@ -446,6 +446,73 @@
     },
     {
       "type": "function",
+      "name": "context_read",
+      "description": "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 2048,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "section": {
+            "enum": [
+              "request",
+              "criteria",
+              "policy",
+              "direction"
+            ],
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "section",
+          "offset",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
       "name": "artifact_read",
       "description": "Version 1 controller operation: artifact_read. Accepted work is not completed work; wait on the returned subscription.",
       "inputSchema": {
@@ -812,6 +879,73 @@
         "required": [
           "schema_version",
           "target"
+        ],
+        "type": "object"
+      },
+      "deferLoading": false
+    },
+    {
+      "type": "function",
+      "name": "context_read",
+      "description": "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "maximum": 2048,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "section": {
+            "enum": [
+              "request",
+              "criteria",
+              "policy",
+              "direction"
+            ],
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "plan_revision": {
+                "type": "integer"
+              },
+              "policy_revision": {
+                "type": "integer"
+              },
+              "scope_revision": {
+                "type": "integer"
+              },
+              "wave_id": {
+                "maxLength": 16384,
+                "type": "string"
+              }
+            },
+            "required": [
+              "wave_id",
+              "scope_revision",
+              "plan_revision",
+              "policy_revision"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "section",
+          "offset",
+          "limit"
         ],
         "type": "object"
       },
