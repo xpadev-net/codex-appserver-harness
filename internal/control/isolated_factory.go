@@ -392,7 +392,9 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 		if strings.HasPrefix(name, "credential.") || strings.HasPrefix(name, "url.") || name == "core.sshcommand" || name == "core.askpass" || name == "core.gitproxy" || strings.HasPrefix(name, "remote.") && strings.HasSuffix(name, ".proxy") || strings.HasPrefix(name, "http.") && (strings.HasSuffix(name, "extraheader") || strings.HasSuffix(name, "cookiefile") || strings.HasSuffix(name, "proxy") || strings.HasSuffix(name, "sslkey") || strings.HasSuffix(name, "sslcert")) {
 			return errors.New("Git authentication settings cannot be mounted in a worker")
 		}
-		if strings.HasPrefix(name, "remote.") && (strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl")) {
+		// Git transports also read submodule and LFS URL overrides. Apply the
+		// same inline-auth rule to URL-valued metadata regardless of its section.
+		if strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl") || strings.HasSuffix(name, ".lfsurl") || strings.HasSuffix(name, ".lfspushurl") {
 			value, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--get-all", rawName), environment, workspace)
 			if err != nil {
 				return errors.New("Git remote configuration cannot be checked")

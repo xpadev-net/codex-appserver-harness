@@ -239,7 +239,7 @@ func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *t
 }
 
 func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
-	for _, setting := range []string{"remote.origin.url", "remote.backup\u00a0mirror.url", "multi-remote", "remote.origin.proxy", "core.askpass", "core.gitproxy", "credential.helper", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
+	for _, setting := range []string{"remote.origin.url", "remote.backup\u00a0mirror.url", "submodule.private.url", "lfs.url", "remote.origin.lfsurl", "remote.origin.lfspushurl", "multi-remote", "remote.origin.proxy", "core.askpass", "core.gitproxy", "credential.helper", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
 		t.Run(setting, func(t *testing.T) {
 			k, b := taskFixture(t)
 			key := setting
