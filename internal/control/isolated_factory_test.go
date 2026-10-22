@@ -474,3 +474,34 @@ func TestIsolatedGitPlainWorkspaceDoesNotDiscoverParentRepository(t *testing.T) 
 		t.Fatal("plain workspace inherited a parent repository", dir, err)
 	}
 }
+
+func TestIsolatedFactoryKeepsUnconfirmedGitProbeCleanup(t *testing.T) {
+	for _, stage := range []string{"plain-resolution", "repository-resolution", "common-dir", "config-names", "remote-values"} {
+		t.Run(stage, func(t *testing.T) {
+			k, b := taskFixture(t)
+			if stage != "plain-resolution" {
+				for _, args := range [][]string{{"init", "--quiet", b.CWD}, {"-C", b.CWD, "config", "remote.origin.url", "https://github.com/owner/repository"}} {
+					if err := exec.Command("git", args...).Run(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			injected := false
+			probe := func(ctx context.Context, program string, args, environment []string, cwd string) (string, error) {
+				if program == "/usr/bin/git" && ((stage == "plain-resolution" || stage == "repository-resolution") && slices.Contains(args, "--is-inside-work-tree") || stage == "common-dir" && slices.Contains(args, "--git-common-dir") || stage == "config-names" && slices.Contains(args, "--name-only") || stage == "remote-values" && slices.Contains(args, "--get-all")) {
+					injected = true
+					return "", errors.Join(process.ErrUnconfirmed, errors.New("injected cleanup failure"))
+				}
+				return isolatedProbe(ctx, program, args, environment, cwd)
+			}
+			p, err := (IsolatedFactory{Config: isolatedConfig(t, k.Root), probe: probe}).Open(context.Background(), Launch{Binding: b})
+			if p != nil {
+				_ = p.Close()
+				t.Fatal("uncertain probe cleanup started app-server")
+			}
+			if !injected || !errors.Is(err, process.ErrUnconfirmed) || errors.Is(err, ErrNotStarted) {
+				t.Fatal("uncertain cleanup became a not-started proof", err)
+			}
+		})
+	}
+}

@@ -33,7 +33,11 @@ type IsolatedConfig struct {
 	GitDirectories    []string // Canonical approved metadata roots for linked worktrees.
 }
 
-type IsolatedFactory struct{ Config IsolatedConfig }
+type runtimeProbe func(context.Context, string, []string, []string, string) (string, error)
+type IsolatedFactory struct {
+	Config IsolatedConfig
+	probe  runtimeProbe
+}
 
 // Host probes and the namespace launcher must not resolve helpers from mutable
 // repository/node_modules directories inherited through the controller's PATH.
@@ -77,6 +81,10 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 			return nil, err
 		}
 		return nil, errors.Join(ErrNotStarted, err)
+	}
+	probe := f.probe
+	if probe == nil {
+		probe = isolatedProbe
 	}
 	c := f.Config
 	if !c.IsolationVerified || c.LauncherContract != "argv_passthrough_v1" || len(c.Launcher) == 0 || c.Model == "" || c.Model != launch.Binding.Model {
@@ -163,7 +171,7 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	if err != nil {
 		return fail(err)
 	}
-	gitdir, err := isolatedGitDirectory(ctx, workspace, home, root, auth, c.GitDirectories)
+	gitdir, err := isolatedGitDirectoryWithProbe(ctx, workspace, home, root, auth, c.GitDirectories, probe)
 	if err != nil {
 		return fail(err)
 	}
@@ -216,13 +224,13 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 		hidden = append(hidden, filepath.Join(absolute, "gh"))
 	}
 	args := append([]string{}, c.Launcher[1:]...)
-	probe := append(append([]string{}, args...), "sh", "-c", `for path in "$@"; do test ! -e "$path" || exit 1; done`, "probe")
-	probe = append(probe, hidden...)
-	if _, err = isolatedProbe(ctx, launcher, probe, environment, workspace); err != nil {
+	probeArgs := append(append([]string{}, args...), "sh", "-c", `for path in "$@"; do test ! -e "$path" || exit 1; done`, "probe")
+	probeArgs = append(probeArgs, hidden...)
+	if _, err = probe(ctx, launcher, probeArgs, environment, workspace); err != nil {
 		return fail(errors.Join(errors.New("worker isolation probe failed; app-server was not started"), err))
 	}
 	versionArgs := append(append([]string{}, args...), binary, "--version")
-	version, err := isolatedProbe(ctx, launcher, versionArgs, environment, workspace)
+	version, err := probe(ctx, launcher, versionArgs, environment, workspace)
 	if err != nil || strings.TrimSpace(version) != "codex-cli 0.163.0" {
 		return fail(errors.Join(errors.New("isolated native Codex version does not match the pinned protocol"), err))
 	}
@@ -282,6 +290,9 @@ func isolatedProbe(ctx context.Context, program string, args, environment []stri
 }
 
 func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth string, approved []string) (string, error) {
+	return isolatedGitDirectoryWithProbe(ctx, workspace, home, root, auth, approved, isolatedProbe)
+}
+func isolatedGitDirectoryWithProbe(ctx context.Context, workspace, home, root, auth string, approved []string, probe runtimeProbe) (string, error) {
 	git, err := existingAbsolute("/usr/bin/git")
 	if err != nil {
 		return "", err
@@ -290,12 +301,15 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 		return "", errors.New("trusted system Git executable required")
 	}
 	environment := []string{"PATH=" + isolatedPath, "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_CEILING_DIRECTORIES=" + filepath.Dir(workspace)}
-	inside, err := isolatedProbe(ctx, git, []string{"rev-parse", "--is-inside-work-tree"}, environment, workspace)
+	inside, err := probe(ctx, git, []string{"rev-parse", "--is-inside-work-tree"}, environment, workspace)
+	if errors.Is(err, process.ErrUnconfirmed) {
+		return "", err
+	}
 	if err != nil {
 		// A repository marker that cannot be resolved is uncertainty, never a
 		// reason to mount arbitrary metadata or ignore a corrupted worktree.
 		if _, statErr := os.Lstat(filepath.Join(workspace, ".git")); !os.IsNotExist(statErr) {
-			return "", errors.New("session Git metadata cannot be resolved")
+			return "", errors.Join(errors.New("session Git metadata cannot be resolved"), err)
 		}
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -313,7 +327,7 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 	if strings.TrimSpace(inside) != "true" {
 		return "", errors.New("session must be a worktree or a plain directory")
 	}
-	dir, err := isolatedProbe(ctx, git, []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, environment, workspace)
+	dir, err := probe(ctx, git, []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, environment, workspace)
 	if err != nil {
 		return "", err
 	}
@@ -337,7 +351,7 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 			return "", errors.New("external Git metadata has not been approved for this runtime")
 		}
 	}
-	if err = validateGitAuthentication(ctx, git, environment, workspace, nil); err != nil {
+	if err = validateGitAuthentication(ctx, git, environment, workspace, nil, probe); err != nil {
 		return "", err
 	}
 	// The entire approved common directory is readable, including configuration
@@ -363,24 +377,24 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 		if err != nil || !info.Mode().IsRegular() {
 			return "", errors.New("Git configuration must be regular")
 		}
-		if err = validateGitAuthentication(ctx, git, environment, workspace, []string{"--file", path}); err != nil {
+		if err = validateGitAuthentication(ctx, git, environment, workspace, []string{"--file", path}, probe); err != nil {
 			return "", err
 		}
 	}
-	if err = validateSubmoduleAuthentication(ctx, git, environment, workspace, filepath.Join(canonical, "modules")); err != nil {
+	if err = validateSubmoduleAuthentication(ctx, git, environment, workspace, filepath.Join(canonical, "modules"), probe); err != nil {
 		return "", err
 	}
 	return canonical, nil
 }
 
-func validateGitAuthentication(ctx context.Context, git string, environment []string, workspace string, selector []string) error {
+func validateGitAuthentication(ctx context.Context, git string, environment []string, workspace string, selector []string, probe runtimeProbe) error {
 	// Read-only metadata is still readable by the worker. Refuse effective Git
 	// authentication configuration instead of mounting controller credentials.
 	// Host/global inputs are suppressed in environment. Omitting --local keeps
 	// extensions.worktreeConfig in the effective view, alongside common config.
-	names, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--name-only", "--list"), environment, workspace)
+	names, err := probe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--name-only", "--list"), environment, workspace)
 	if err != nil {
-		return errors.New("Git configuration cannot be checked")
+		return errors.Join(errors.New("Git configuration cannot be checked"), err)
 	}
 	for _, rawName := range strings.Split(names, "\x00") {
 		if rawName == "" {
@@ -413,9 +427,9 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 			return errors.New("unapproved Git configuration cannot enter worker metadata")
 		}
 		if strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl") || strings.HasSuffix(name, ".lfsurl") || strings.HasSuffix(name, ".lfspushurl") {
-			value, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--get-all", rawName), environment, workspace)
+			value, err := probe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--get-all", rawName), environment, workspace)
 			if err != nil {
-				return errors.New("Git remote configuration cannot be checked")
+				return errors.Join(errors.New("Git remote configuration cannot be checked"), err)
 			}
 			for _, remote := range strings.Split(value, "\x00") {
 				if remote == "" {
@@ -445,7 +459,7 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 // Nested submodules carry independent configs inside the mounted common
 // directory. Descend module-name containers, but skip object stores once an
 // actual Git metadata root is identified. Enumeration and nesting are bounded.
-func validateSubmoduleAuthentication(ctx context.Context, git string, environment []string, workspace, modules string) error {
+func validateSubmoduleAuthentication(ctx context.Context, git string, environment []string, workspace, modules string, probe runtimeProbe) error {
 	visited := 0
 	var inspect func(string, int) error
 	inspect = func(root string, depth int) error {
@@ -504,7 +518,7 @@ func validateSubmoduleAuthentication(ctx context.Context, git string, environmen
 				if err != nil || !info.Mode().IsRegular() {
 					return errors.New("submodule config must be regular")
 				}
-				if err = validateGitAuthentication(ctx, git, environment, workspace, []string{"--file", config}); err != nil {
+				if err = validateGitAuthentication(ctx, git, environment, workspace, []string{"--file", config}, probe); err != nil {
 					return err
 				}
 			}
