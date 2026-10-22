@@ -417,6 +417,7 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 		return receipt, err
 	}
 	revision := wave.PlanRevision
+	replans := 0
 	if previousCount > 0 {
 		if mode == "parent" && wave.Replans >= wave.Policy.Limits.Replans {
 			return receipt, invalidPlanAdmission("replan budget exhausted")
@@ -430,11 +431,13 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 		}
 		if mode == "parent" {
 			wave.Replans++
+			replans = 1
 		}
 	}
 	receipt.Target = target
 	receipt.Target.PlanRevision = revision
 	newPhases, newTasks := 0, 0
+	fixPhases := map[string]bool{}
 	included := map[string]bool{}
 	for position, phaseSpec := range plan.Phases {
 		phaseID := structureID("phase-", wave.ID, phaseSpec.ID)
@@ -496,6 +499,9 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 			if !errors.Is(err, sql.ErrNoRows) {
 				return receipt, err
 			}
+			if mode == "parent" && spec.Kind == "fix" {
+				fixPhases[phaseID] = true
+			}
 			sessionID := structureID("session-", wave.ID, spec.ID)
 			task := domain.Task{ID: taskID, WaveID: wave.ID, PhaseID: phaseID, LocalID: spec.ID, ScopeRevision: wave.ScopeRevision, PlanRevision: revision, PolicyRevision: wave.Policy.Revision, SessionID: sessionID, ParentSessionID: wave.OrchestratorSessionID, State: contract.TaskReady, Spec: spec, InputDigest: inputs}
 			raw, err := json.Marshal(task)
@@ -532,6 +538,13 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	if newPhases > wave.Policy.Limits.Phases-wave.PhasesCreated || newTasks > wave.Policy.Limits.Tasks-wave.TasksCreated {
 		return receipt, invalidPlanAdmission("cumulative structure budget exhausted")
 	}
+	// Parent exception plans share the same cumulative fix budget as automatic
+	// templates. A phase is one parallel batch; sequential fix phases each
+	// reserve a round. Carried completed fixes consume no new round.
+	if len(fixPhases) > wave.Policy.Limits.FixRounds-wave.FixRounds {
+		return receipt, invalidPlanAdmission("cumulative fix budget exhausted")
+	}
+	wave.FixRounds += len(fixPhases)
 	// Retiring an omitted, stopped Task is an explicit effect of this adopted plan.
 	rows, err := tx.QueryContext(ctx, "SELECT id FROM kernel_tasks WHERE wave_id=?", wave.ID)
 	if err != nil {
@@ -596,7 +609,10 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 			return receipt, err
 		}
 	}
-	for kind, amount := range map[string]int{"phases": newPhases, "tasks": newTasks} {
+	for kind, amount := range map[string]int{"phases": newPhases, "tasks": newTasks, "replan": replans, "fix_round": len(fixPhases)} {
+		if amount == 0 {
+			continue
+		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_budget_ledger(wave_id,operation_key,kind,amount,unknown,payload) VALUES(?,?,?,?,0,?)", wave.ID, "plan:"+key, kind, amount, []byte(`{}`)); err != nil {
 			return receipt, err
 		}
