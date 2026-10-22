@@ -1,0 +1,37 @@
+{
+  "authentication": "authorized session access token; refresh remains source-owned",
+  "credential_values_recorded": false,
+  "k_workflow_acceptance": false,
+  "launcher_sha256": "13d738b10f13a37c472f499c7c6e05317311796802bdad36faa5261c7bff75c9",
+  "model_calls": 0,
+  "native_version": "codex-cli 0.163.0",
+  "observations": [
+    {
+      "external_auth_login": true,
+      "group_stopped": true,
+      "initialize_nanos": 572894612,
+      "initialized": true,
+      "logical_account_binding": true,
+      "probe_nanos": 281898165,
+      "role": "orchestrator",
+      "rss_method": "linux_proc_tree_rss_sampled_sum",
+      "rss_sample_bytes": 127062016,
+      "stop_nanos": 8075288
+    },
+    {
+      "external_auth_login": true,
+      "group_stopped": true,
+      "initialize_nanos": 677674110,
+      "initialized": true,
+      "logical_account_binding": true,
+      "probe_nanos": 285005398,
+      "role": "task",
+      "rss_method": "linux_proc_tree_rss_sampled_sum",
+      "rss_sample_bytes": 125386752,
+      "stop_nanos": 6578811
+    }
+  ],
+  "observed_at": "2026-10-22T15:32:32.968678725Z",
+  "stage": "Task_5 session access-token authentication probe",
+  "thread_or_turn_started": false
+}

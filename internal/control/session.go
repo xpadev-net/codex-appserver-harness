@@ -143,7 +143,16 @@ func (o *owner) ensure(ctx context.Context) (*codex.SessionRPC, error) {
 			return fail(err)
 		}
 	}
-	o.rpc = codex.NewSessionRPC(o.ctx, transport, handler)
+	if auth, ok := transport.(interface {
+		TokenProvider() codex.ChatGPTTokenProvider
+	}); ok {
+		o.rpc, err = codex.NewAuthenticatedSessionRPC(o.ctx, transport, handler, auth.TokenProvider())
+		if err != nil {
+			return fail(err)
+		}
+	} else {
+		o.rpc = codex.NewSessionRPC(o.ctx, transport, handler)
+	}
 	if err = o.rpc.Initialize(ctx); err != nil {
 		// Keep the initialized adapter for shutdown, never retry initialize/start.
 		o.startErr = err

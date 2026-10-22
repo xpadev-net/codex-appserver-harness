@@ -17,6 +17,9 @@ import (
 // and approved configuration/assets are restored on each launch. OAuth refresh
 // tokens must be owned by a central provider, never cloned across profiles.
 func sessionProfile(template, home string) (string, error) {
+	return sessionProfileWithAuth(template, home, false)
+}
+func sessionProfileWithAuth(template, home string, externalAuthentication bool) (string, error) {
 	profile := filepath.Join(home, "codex")
 	if err := os.MkdirAll(profile, 0700); err != nil {
 		return "", err
@@ -43,6 +46,12 @@ func sessionProfile(template, home string) (string, error) {
 		return "", err
 	}
 	for _, name := range []string{"auth.json", "config.toml", "AGENTS.md", "AGENTS.override.md"} {
+		if name == "auth.json" && externalAuthentication {
+			if err = destination.RemoveAll(name); err != nil {
+				return "", err
+			}
+			continue
+		}
 		info, err := source.Lstat(name)
 		if os.IsNotExist(err) {
 			if err = destination.RemoveAll(name); err != nil {
