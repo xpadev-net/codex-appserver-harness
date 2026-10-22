@@ -129,7 +129,7 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	if pathContains(workspace, root) || pathContains(auth, root) || pathContains(auth, workspace) || pathContains(auth, binary) || pathContains(auth, launcher) {
 		return fail(errors.New("runtime workspace/state/executable/auth paths overlap"))
 	}
-	if pathContains(root, workspace) && !pathContains(filepath.Join(root, "workspaces"), workspace) {
+	if pathContains(root, workspace) && (workspace == filepath.Join(root, "workspaces") || !pathContains(filepath.Join(root, "workspaces"), workspace)) {
 		return fail(errors.New("session workspace must not expose controller internals"))
 	}
 	controllerHome := os.Getenv("CODEX_HOME")
@@ -175,17 +175,32 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	}
 	// A real sentinel makes the boundary probe meaningful even before the daemon
 	// has created its socket. The launcher mounts only the allowed descendants.
-	sentinel, err := os.CreateTemp(root, ".launch-probe-")
-	if err != nil {
-		return fail(err)
+
+	hidden := []string{auth, filepath.Join(root, "state.db"), filepath.Join(root, ipc.SocketName), filepath.Join(userHome, ".config", "gh"), filepath.Join(userHome, ".git-credentials"), filepath.Join(controllerHome, "auth.json")}
+	// Probe each shared parent independently: mounting only worker-homes or
+	// workspaces can expose siblings while still hiding the controller root.
+	for _, directory := range []string{root, filepath.Dir(home), filepath.Join(root, "workspaces")} {
+		if _, err := os.Lstat(directory); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return fail(err)
+		}
+		canonical, err := existingAbsolute(directory)
+		if err != nil || canonical != directory {
+			return fail(errors.New("private probe directory must not redirect"))
+		}
+		sentinel, err := os.CreateTemp(directory, ".launch-probe-")
+		if err != nil {
+			return fail(err)
+		}
+		path := sentinel.Name()
+		if err = sentinel.Close(); err != nil {
+			_ = os.Remove(path)
+			return fail(err)
+		}
+		defer os.Remove(path)
+		hidden = append(hidden, path)
 	}
-	probePath := sentinel.Name()
-	if err = sentinel.Close(); err != nil {
-		_ = os.Remove(probePath)
-		return fail(err)
-	}
-	defer os.Remove(probePath)
-	hidden := []string{probePath, auth, filepath.Join(root, "state.db"), filepath.Join(root, ipc.SocketName), filepath.Join(userHome, ".config", "gh"), filepath.Join(userHome, ".git-credentials"), filepath.Join(controllerHome, "auth.json")}
 	if path := os.Getenv("GH_CONFIG_DIR"); path != "" {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
@@ -274,7 +289,7 @@ func isolatedGitDirectory(ctx context.Context, workspace, home, root, auth strin
 	if info, err := os.Stat(git); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Mode().Perm()&0022 != 0 || pathContains(root, git) || pathContains(workspace, git) || pathContains(auth, git) {
 		return "", errors.New("trusted system Git executable required")
 	}
-	environment := []string{"PATH=" + isolatedPath, "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
+	environment := []string{"PATH=" + isolatedPath, "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_CEILING_DIRECTORIES=" + filepath.Dir(workspace)}
 	inside, err := isolatedProbe(ctx, git, []string{"rev-parse", "--is-inside-work-tree"}, environment, workspace)
 	if err != nil {
 		// A repository marker that cannot be resolved is uncertainty, never a
@@ -394,6 +409,9 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 		}
 		// Git transports also read submodule and LFS URL overrides. Apply the
 		// same inline-auth rule to URL-valued metadata regardless of its section.
+		if !workerGitSetting(name) {
+			return errors.New("unapproved Git configuration cannot enter worker metadata")
+		}
 		if strings.HasSuffix(name, ".url") || strings.HasSuffix(name, ".pushurl") || strings.HasSuffix(name, ".lfsurl") || strings.HasSuffix(name, ".lfspushurl") {
 			value, err := isolatedProbe(ctx, git, append(append([]string{"config"}, selector...), "--null", "--includes", "--get-all", rawName), environment, workspace)
 			if err != nil {
@@ -405,7 +423,7 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 				}
 				if strings.Contains(remote, "://") {
 					u, err := url.Parse(remote)
-					if err != nil || u.RawQuery != "" || u.Fragment != "" || u.User != nil && (u.Scheme != "ssh" || u.User.Username() != "git") {
+					if err != nil || (u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "ssh" && u.Scheme != "git" && u.Scheme != "file") || u.RawQuery != "" || u.Fragment != "" || u.User != nil && (u.Scheme != "ssh" || u.User.String() != "git") {
 						return errors.New("Git remote carries unsupported inline authentication")
 					}
 					if u.User != nil {
@@ -413,6 +431,8 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 							return errors.New("Git remote carries inline authentication")
 						}
 					}
+				} else if strings.Contains(remote, "::") || strings.ContainsAny(remote, "\n\r\t") {
+					return errors.New("Git command transports cannot be mounted in a worker")
 				} else if user, _, found := strings.Cut(remote, "@"); found && user != "git" {
 					return errors.New("Git remote carries unsupported inline authentication")
 				}
@@ -495,4 +515,38 @@ func validateSubmoduleAuthentication(ctx context.Context, git string, environmen
 		})
 	}
 	return inspect(modules, 0)
+}
+
+// Expose only repository layout and basic ref/transport metadata. A denylist
+// cannot enumerate credential settings from every Git helper/extension (mail,
+// Perforce, LFS, custom tools). Unknown keys require an explicit policy change.
+func workerGitSetting(name string) bool {
+	switch name {
+	case "core.repositoryformatversion", "core.filemode", "core.bare", "core.logallrefupdates", "core.worktree", "core.ignorecase", "core.precomposeunicode", "core.symlinks", "core.autocrlf", "core.eol", "core.safecrlf", "core.quotepath", "core.sharedrepository", "core.protecthfs", "core.protectntfs", "core.sparsecheckout", "core.sparsecheckoutcone", "core.abbrev", "core.compression", "core.splitindex", "core.untrackedcache", "core.trustctime", "core.checkstat", "extensions.worktreeconfig", "extensions.objectformat", "extensions.compatobjectformat", "extensions.refstorage", "extensions.relativeworktrees", "user.name", "user.email", "lfs.url", "lfs.pushurl":
+		return true
+	}
+	split := strings.LastIndex(name, ".")
+	if split < 0 {
+		return false
+	}
+	field := name[split+1:]
+	if strings.HasPrefix(name, "remote.") {
+		switch field {
+		case "url", "pushurl", "fetch", "push", "tagopt", "prune", "prunetags", "mirror", "promisor", "partialclonefilter", "lfsurl", "lfspushurl":
+			return true
+		}
+	}
+	if strings.HasPrefix(name, "branch.") {
+		switch field {
+		case "remote", "merge", "pushremote", "rebase":
+			return true
+		}
+	}
+	if strings.HasPrefix(name, "submodule.") {
+		switch field {
+		case "url", "active", "branch", "ignore":
+			return true
+		}
+	}
+	return false
 }

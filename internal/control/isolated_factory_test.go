@@ -55,6 +55,12 @@ func isolatedFixture(args []string) {
 		if mode == "expose" {
 			os.Exit(21)
 		}
+		for _, path := range args[1:] {
+			parent := filepath.Dir(path)
+			if strings.HasPrefix(filepath.Base(path), ".launch-probe-") && (mode == "expose-workers" && parent == filepath.Dir(os.Getenv("HOME")) || mode == "expose-workspaces" && parent == filepath.Dir(os.Getenv("HARNESS_WORKSPACE"))) {
+				os.Exit(21)
+			}
+		}
 		return
 	}
 	if len(args) == 2 && args[1] == "--version" {
@@ -203,7 +209,7 @@ func TestIsolatedFactoryCommonParentTaskConfigurationAndNoGitWorkspace(t *testin
 }
 
 func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *testing.T) {
-	for _, kind := range []string{"unverified", "model", "contract", "expose", "wrong-version", "auth-overlap", "workspace-alias"} {
+	for _, kind := range []string{"unverified", "model", "contract", "expose", "expose-workers", "expose-workspaces", "wrong-version", "auth-overlap", "workspace-alias"} {
 		t.Run(kind, func(t *testing.T) {
 			k, b := taskFixture(t)
 			config := isolatedConfig(t, k.Root)
@@ -214,7 +220,7 @@ func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *t
 				config.Model = "other"
 			case "contract":
 				config.LauncherContract = "unknown"
-			case "expose", "wrong-version":
+			case "expose", "expose-workers", "expose-workspaces", "wrong-version":
 				config.Launcher[2] = kind
 			case "auth-overlap":
 				config.WorkerCodexHome = b.CWD
@@ -229,7 +235,10 @@ func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *t
 			// model. Successful admission is covered through Runtime above.
 			p, err := (IsolatedFactory{Config: config}).Open(context.Background(), Launch{Binding: b})
 			if p != nil || !errors.Is(err, ErrNotStarted) {
-				t.Fatal(p, err)
+				if p != nil {
+					_ = p.Close()
+				}
+				t.Fatal("expected rejection before app-server launch", err)
 			}
 			if _, err = os.Stat(filepath.Join(isolatedHome(config, b.ID), "observed.json")); !os.IsNotExist(err) {
 				t.Fatal("app-server started after a failed probe", err)
@@ -239,17 +248,23 @@ func TestIsolatedFactoryFailsClosedBeforeAppServerOnBadConfigurationOrProbe(t *t
 }
 
 func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
-	for _, setting := range []string{"remote.origin.url", "remote.backup\u00a0mirror.url", "submodule.private.url", "lfs.url", "remote.origin.lfsurl", "remote.origin.lfspushurl", "multi-remote", "remote.origin.proxy", "core.askpass", "core.gitproxy", "credential.helper", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
+	for _, setting := range []string{"remote.origin.url", "remote.backup\u00a0mirror.url", "submodule.private.url", "lfs.url", "remote.origin.lfsurl", "remote.origin.lfspushurl", "multi-remote", "ssh-password", "command-url", "remote.origin.proxy", "core.askpass", "core.gitproxy", "credential.helper", "sendemail.smtppass", "imap.pass", "git-p4.password", "unapproved.password", "http.https://github.com/.extraheader", "http.https://fixture-private-token@github.com/.sslverify", "worktree-header"} {
 		t.Run(setting, func(t *testing.T) {
 			k, b := taskFixture(t)
 			key := setting
-			if setting == "multi-remote" {
+			if setting == "multi-remote" || setting == "ssh-password" || setting == "command-url" {
 				key = "remote.origin.url"
 			}
 			if setting == "worktree-header" {
 				key = "http.https://github.com/.extraheader"
 			}
 			value := "https://fixture-private-token@github.com/owner/repository"
+			if setting == "ssh-password" {
+				value = "ssh://git:fixture-private-token@github.com/owner/repository"
+			}
+			if setting == "command-url" {
+				value = "ext::sh -c credential-command"
+			}
 			if strings.HasSuffix(setting, ".sslverify") {
 				value = "false"
 			}
@@ -272,7 +287,10 @@ func TestIsolatedFactoryRejectsReadableGitAuthenticationMetadata(t *testing.T) {
 			config := isolatedConfig(t, k.Root)
 			p, err := (IsolatedFactory{Config: config}).Open(context.Background(), Launch{Binding: b})
 			if p != nil || !errors.Is(err, ErrNotStarted) {
-				t.Fatal(p, err)
+				if p != nil {
+					_ = p.Close()
+				}
+				t.Fatal("expected rejection before app-server launch", err)
 			}
 			if strings.Contains(err.Error(), "fixture-private-token") {
 				t.Fatal("configuration error exposed a credential")
@@ -438,5 +456,21 @@ func TestIsolatedGitRejectsInactiveConditionalInclude(t *testing.T) {
 	}
 	if _, err = isolatedGitDirectory(context.Background(), b.CWD, t.TempDir(), k.Root, t.TempDir(), nil); err == nil {
 		t.Fatal("inactive include exposed unvalidated credentials")
+	}
+}
+
+func TestIsolatedGitPlainWorkspaceDoesNotDiscoverParentRepository(t *testing.T) {
+	parent := t.TempDir()
+	if err := exec.Command("git", "init", "--quiet", parent).Run(); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(parent, "plain")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	dir, err := isolatedGitDirectory(context.Background(), workspace, home, t.TempDir(), t.TempDir(), nil)
+	if err != nil || !pathContains(home, dir) {
+		t.Fatal("plain workspace inherited a parent repository", dir, err)
 	}
 }
