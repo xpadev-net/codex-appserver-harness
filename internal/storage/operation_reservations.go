@@ -183,7 +183,7 @@ func operationCapacityOwnerTx(ctx context.Context, tx *sql.Tx, r OperationCapaci
 	} else {
 		return errors.New("unknown operation source role")
 	}
-	if r.Kind != "runner" && (w.Policy.Stage != "P" || !w.Policy.Product) {
+	if (r.Kind == "pr" || r.Kind == "cloud_review") && (w.Policy.Stage != "P" || !w.Policy.Product) {
 		return errors.New("product operation requires trusted P policy")
 	}
 	return nil

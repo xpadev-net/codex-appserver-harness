@@ -403,3 +403,38 @@ func TestTaskSessionReservesOwnRunnerAndRejectsProductPausedTerminalAndForeignWo
 		})
 	}
 }
+
+func TestKPolicyAdmitsLocalGitAndExcludesSharedRepositoryAcrossWaves(t *testing.T) {
+	ctx := context.Background()
+	k, source := waveStoreFixture(t)
+	first, err := k.CreateWave(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.SourceID = "other-k-wave"
+	second, err := k.CreateWave(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := operationRepo(t)
+	a := OperationCapacityRequest{ID: "local-git-a", Kind: "git", SessionID: "main", Target: first.Target(), Repository: repo}
+	if _, err = k.ReserveOperationCapacity(ctx, a); err != nil {
+		t.Fatal("K local Git was incorrectly treated as a product operation", err)
+	}
+	b := a
+	b.ID = "local-git-b"
+	b.Target = second.Target()
+	if _, err = k.ReserveOperationCapacity(ctx, b); !errors.Is(err, ErrResourceBusy) {
+		t.Fatal("K Waves overlapped shared Git operation", err)
+	}
+	releaseOperation(t, k, a.ID, "process_stopped")
+	if _, err = k.ReserveOperationCapacity(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"pr", "cloud_review"} {
+		r := operationRequest(t, first, kind, "forbidden-"+kind)
+		if _, err = k.ReserveOperationCapacity(ctx, r); err == nil {
+			t.Fatal("K acquired product-only pool", kind)
+		}
+	}
+}
