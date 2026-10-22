@@ -25,11 +25,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt")
+		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt":
+	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -42,7 +42,13 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	id := fs.String("id", "", "Wave ID (inspect)")
 	after := fs.String("after", "", "last Wave/Task ID from a previous page")
 	afterPhase := fs.String("after-phase", "", "last Phase ID from a previous inspect page")
-	limit := fs.Int("limit", 64, "page size, 1..128")
+	defaultLimit := 64
+	if command == "watch" {
+		defaultLimit = contract.MaxStatePage
+	}
+	limit := fs.Int("limit", defaultLimit, "page size, 1..128 (watch: 1..32)")
+	cursor := fs.Int64("cursor", 0, "last successfully displayed state cursor (watch)")
+	once := fs.Bool("once", false, "read one stored page without a running daemon (watch)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -59,6 +65,8 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["after"], allowed["limit"] = true, true
 	case "inspect":
 		allowed["id"], allowed["after"], allowed["after-phase"], allowed["limit"] = true, true, true, true
+	case "watch":
+		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
 	var flagErr error
 	fs.Visit(func(f *flag.Flag) {
@@ -83,6 +91,8 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	defer k.Close()
 	switch command {
+	case "watch":
+		return watchEvents(ctx, k, *root, *cursor, *limit, *once, out)
 	case "pause", "resume", "cancel", "steer", "interrupt":
 		result, err := applyControlFile(ctx, k, command, *file)
 		if err != nil {

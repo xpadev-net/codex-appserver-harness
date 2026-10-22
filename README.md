@@ -35,7 +35,16 @@ JSON
 
 これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
-request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。kernelの実行daemon・watch・監査付き復旧CLIと実K受入は後続工程です。
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。kernelの実行daemon・監査付き復旧CLIと実K受入は後続工程です。
+
+### Cursor付きwatch
+
+```sh
+./harness wave watch --root /absolute/private/kernel --once --cursor 0 --limit 32
+./harness wave watch --root /absolute/private/kernel --cursor LAST_CURSOR --limit 32
+```
+
+JSON Linesでroot全体の保存済みイベントと`cursor`を返します。`--once`はdaemonなしで一ページを読みます。継続watchはprivate IPC daemonを利用し、切断後は最後に正常表示された`cursor`から再接続できます。空のheartbeatは重複表示せず、大きなpayloadはID・byte数の参照になります。watchはwakeや通知ACKを送らず、modelを起動しません。実行daemonのCLI接続は後続工程です。
 
 ### Wave / Task の優先操作
 

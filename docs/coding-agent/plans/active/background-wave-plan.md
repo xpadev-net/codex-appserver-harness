@@ -433,7 +433,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_9: Wave kernelの操作・観測とruntime統合（K）
 
 - status: in_progress
-- split: 新DB専用の設定version 2とwave init/create/list/inspectを追加する。GitHub/model起動なしで直接依頼を保存し、保存後hint・有界ページング・原本/Task/session/run/使用量の参照を提供する。既存DBの暗黙初期化/移行とrequest由来のpolicy変更は拒否する。版/key/理由を指定するpause/resume/cancel/steer/interruptもCLIへ接続し、保存後hint、Task限定操作、古い版/世代の拒否、cancel優先、unknown/未停止枠の保持を検証する。実行daemon、watch、監査付き復旧CLIと実K受入は後続slice。
+- split: 新DB専用の設定version 2とwave init/create/list/inspectを追加する。GitHub/model起動なしで直接依頼を保存し、保存後hint・有界ページング・原本/Task/session/run/使用量の参照を提供する。既存DBの暗黙初期化/移行とrequest由来のpolicy変更は拒否する。版/key/理由を指定するpause/resume/cancel/steer/interruptもCLIへ接続し、保存後hint、Task限定操作、古い版/世代の拒否、cancel優先、unknown/未停止枠の保持を検証する。cursor付きwatch/--onceを既存read-only state/IPCへ接続し、切断再接続、heartbeat重複抑止、大payload参照、出力失敗のcursor保持、閲覧によるwake/ACK/main turnゼロを検証する。実行daemon、監査付き復旧CLIと実K受入は後続slice。
 - type: impl
 - owns:
   - internal/service/cli.go
