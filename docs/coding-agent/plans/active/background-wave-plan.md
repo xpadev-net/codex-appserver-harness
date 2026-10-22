@@ -275,10 +275,13 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_5: イベントloopとprocess間wake
 
 - status: in_progress
-- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。PR #75で共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続した。本PRで非同期session loop、完了時の即時再評価、定期再照合、停止確認を待つshutdownとdeadlineの世代付き停止を追加する。ready/input/結果適用のWorkSourceはTask_6が接続し、production launcher設定、private IPC/hint、状態stream、優先操作と実測負荷試験は後続PRで接続する。
+- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。PR #75で共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続した。PR #76で非同期session loop、完了時の即時再評価、定期再照合、停止確認を待つshutdownとdeadlineの世代付き停止を追加した。本PRでprivate Unix socketのhint/read専用状態streamと永続event cursorの読み取り境界を追加する。ready/input/結果適用のWorkSourceはTask_6が接続し、runner notifier/daemon配線、production launcher設定、優先操作と実測負荷試験は後続PRで接続する。
 - type: impl
 - owns:
   - internal/control/**
+  - internal/ipc/**（private hint/read-only stream transport）
+  - internal/contract/state_stream.go（dispatch Targetと区別したevent DTO）
+  - internal/storage/state_events.go、internal/storage/state_events_test.go
   - internal/storage/managed_processes.go、internal/storage/managed_processes_test.go
   - internal/storage/sessions.go（共通予約helper・managed run認可・世代付き停止）
   - internal/process/**
