@@ -183,10 +183,7 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 		}
 		if decision.Action == "accept" {
 			if _, err = k.checkArtifactAcceptanceTx(ctx, tx, decision.Target, *decision.Acceptance); err != nil {
-				if errors.Is(err, ErrArtifactAcceptanceHeld) {
-					return receipt, errors.Join(ErrMainResultInvalid, err)
-				}
-				return receipt, err
+				return receipt, mainAcceptanceError(err)
 			}
 		}
 		for _, id := range decision.SubscriptionIDs {
@@ -212,7 +209,7 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 		if decision.Action == "accept" {
 			completion, err := k.completeGenericWaveTx(ctx, tx, b, runID, decision.Target, *decision.Acceptance, decision.Summary)
 			if err != nil {
-				return receipt, err
+				return receipt, mainAcceptanceError(err)
 			}
 			receipt.Completions = append(receipt.Completions, completion)
 		}
@@ -341,5 +338,17 @@ func (k *KernelStore) requeueCurrentMainInputsTx(ctx context.Context, tx *sql.Tx
 		}
 	}
 	_, err = tx.ExecContext(ctx, "UPDATE kernel_wake_intents SET state='superseded' WHERE session_id=? AND run_id=? AND state='bound'", b.ID, runID)
+	return err
+}
+
+// Reference/evidence errors are durable reconciliation holds, not retrying local
+// flights. Real DB and OS I/O failures retain their original error semantics.
+func mainAcceptanceError(err error) error {
+	if errors.Is(err, ErrArtifactAcceptanceHeld) {
+		return errors.Join(ErrMainResultInvalid, err)
+	}
+	if readinessHoldError(err) || errors.Is(err, ErrArtifactGrant) {
+		return errors.Join(ErrMainResultHeld, err)
+	}
 	return err
 }

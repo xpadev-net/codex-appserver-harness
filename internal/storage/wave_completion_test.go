@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -297,6 +298,43 @@ func TestMainAcceptanceWaitsForRunnerAndGitReservationRelease(t *testing.T) {
 			actual, err := k.Wave(ctx, w.ID)
 			if err != nil || actual.State != domain.WaveCompleted || actual.MainTurns != 1 {
 				t.Fatal(actual, err)
+			}
+		})
+	}
+}
+
+func TestMainAcceptanceClassifiesReferenceHoldsButPreservesIOFailures(t *testing.T) {
+	for _, missingObject := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing_reference", true: "io_failure"}[missingObject], func(t *testing.T) {
+			ctx := context.Background()
+			k, _, b, run, result := waveCompletionFixture(t)
+			if missingObject {
+				if err := os.Remove(filepath.Join(k.Root, "objects", result.Decisions[0].Acceptance.Outputs[0])); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				result.Decisions[0].Acceptance.Outputs = []string{"nonexistent"}
+				result.Decisions[0].Acceptance.Evaluations[0].ArtifactID = "nonexistent"
+				raw, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.Final = string(raw)
+				raw, err = json.Marshal(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = k.DB.ExecContext(ctx, "UPDATE records SET payload=? WHERE kind='agent_run' AND id=?", raw, run.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := k.ApplyMainResult(ctx, b.ID, run.ID)
+			if missingObject {
+				if !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrMainResultHeld) || errors.Is(err, ErrMainResultInvalid) {
+					t.Fatal("OS error misclassified", err)
+				}
+			} else if !errors.Is(err, ErrMainResultHeld) {
+				t.Fatal("reference error retained local flight", err)
 			}
 		})
 	}
