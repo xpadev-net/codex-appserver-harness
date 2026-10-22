@@ -277,3 +277,25 @@ func TestPlanningPagesDoNotChargeOrReserve(t *testing.T) {
 		t.Fatal("invalid planning bound")
 	}
 }
+
+func TestPlanningRequeuesCurrentInitialInputAfterSharedJudgmentIsSuperseded(t *testing.T) {
+	ctx := context.Background()
+	k, b, waves, run, _ := mainResultFixture(t)
+	saveMainCompletion(t, k, b, run, mainResult(t, b, waves, "report"), true)
+	direction := mustDirection(t, k, waves[0])
+	application, err := k.ApplyMainResult(ctx, b.ID, run.ID)
+	if err != nil || application.State != "archived" {
+		t.Fatal(application, err)
+	}
+	page, err := k.PlanningInputs(ctx, b.ID, "", 128)
+	if err != nil || !reflect.DeepEqual(page.Targets, []contract.Target{waves[1].Target()}) {
+		t.Fatal("other Wave's undecided initial request was lost", page, err)
+	}
+	if _, err = k.ApplyWaveDirection(ctx, direction.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err = k.PlanningInputs(ctx, b.ID, "", 128)
+	if err != nil || len(page.Targets) != 2 {
+		t.Fatal("new scope and preserved input cannot progress", page, err)
+	}
+}

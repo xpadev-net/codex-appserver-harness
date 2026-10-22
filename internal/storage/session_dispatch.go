@@ -105,7 +105,10 @@ type PlanningInputPage struct {
 
 // PlanningInputs selects only new, currently eligible planning reasons. A saved
 // run budget already addressing this exact target suppresses automatic replay,
-// including a previous report, failure or unknown outcome. Messages/notifications
+// including a previous report, failure or unknown outcome. A safely archived
+// shared main judgment leaves its still-current initial Wave inputs undecided;
+// those targets may be selected again, as with requeued wake notifications.
+// Messages/notifications
 // use their separate durable wake path. New scope can supply a new initial reason.
 func (k *KernelStore) PlanningInputs(ctx context.Context, sessionID, after string, limit int) (PlanningInputPage, error) {
 	out := PlanningInputPage{Targets: []contract.Target{}}
@@ -170,7 +173,10 @@ func (k *KernelStore) PlanningInputs(ctx context.Context, sessionID, after strin
 		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records r,json_each(r.payload,'$.targets') t
  WHERE r.kind='run_budget' AND json_extract(r.payload,'$.session_id')=?
  AND json_extract(t.value,'$.wave_id')=? AND json_extract(t.value,'$.scope_revision')=?
- AND json_extract(t.value,'$.plan_revision')=? AND json_extract(t.value,'$.policy_revision')=?)`, b.ID, w.ID, w.ScopeRevision, w.PlanRevision, w.Policy.Revision).Scan(&addressed); err != nil {
+ AND json_extract(t.value,'$.plan_revision')=? AND json_extract(t.value,'$.policy_revision')=?
+ AND NOT EXISTS(SELECT 1 FROM records a JOIN kernel_run_bindings b ON b.run_id=a.id
+ WHERE a.kind='main_result_application' AND a.id=r.id AND b.session_id=json_extract(r.payload,'$.session_id')
+ AND b.applied=1 AND b.process_stopped=1 AND json_extract(a.payload,'$.state')='archived'))`, b.ID, w.ID, w.ScopeRevision, w.PlanRevision, w.Policy.Revision).Scan(&addressed); err != nil {
 			return out, err
 		}
 		if !addressed {
