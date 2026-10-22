@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 )
 
 // This launcher is deliberately a stub. It tests runtime configuration and
@@ -387,5 +389,54 @@ func TestIsolatedGitProbeDoesNotExecuteInheritedPathPrograms(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("controller executed a mutable PATH Git helper", err)
+	}
+}
+
+func TestIsolatedProbeStopsWrapperChildrenBeforeReaping(t *testing.T) {
+	for _, ending := range []string{"wait", "exit 0"} {
+		dir := t.TempDir()
+		childPath := filepath.Join(dir, "child")
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		before := time.Now()
+		_, err := isolatedProbe(ctx, "/bin/sh", []string{"-c", `sleep 30 & printf '%s' "$!" > "$1"; ` + ending, "probe", childPath}, []string{"PATH=" + isolatedPath}, dir)
+		cancel()
+		if ending == "wait" && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		if time.Since(before) > 2*time.Second {
+			t.Fatal("probe cancellation waited for descendants", time.Since(before), err)
+		}
+		raw, readErr := os.ReadFile(childPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		pid, parseErr := strconv.Atoi(string(raw))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if process.Alive(process.Identity{PID: pid}) {
+			t.Fatal("probe child survived", pid, err)
+		}
+	}
+}
+func TestIsolatedGitRejectsInactiveConditionalInclude(t *testing.T) {
+	k, b := taskFixture(t)
+	if err := exec.Command("git", "init", "--quiet", b.CWD).Run(); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(b.CWD, ".git", "config")
+	file, err := os.OpenFile(config, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString("\n[includeIf \"onbranch:never-active-reference-branch\"]\npath = auth.inc\n")
+	if closeErr := file.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	if err = os.WriteFile(filepath.Join(b.CWD, ".git", "auth.inc"), []byte("[http]\nextraHeader = fixture-private-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = isolatedGitDirectory(context.Background(), b.CWD, t.TempDir(), k.Root, t.TempDir(), nil); err == nil {
+		t.Fatal("inactive include exposed unvalidated credentials")
 	}
 }

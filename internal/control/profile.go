@@ -1,6 +1,8 @@
 package control
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -11,8 +13,9 @@ import (
 )
 
 // A shared authentication/configuration template is never mounted in a worker.
-// Each persistent session owns its native thread store. Existing session auth
-// can retain refreshes; approved configuration/assets are restored per launch.
+// Each persistent session owns its native thread store. Static authentication
+// and approved configuration/assets are restored on each launch. OAuth refresh
+// tokens must be owned by a central provider, never cloned across profiles.
 func sessionProfile(template, home string) (string, error) {
 	profile := filepath.Join(home, "codex")
 	if err := os.MkdirAll(profile, 0700); err != nil {
@@ -42,27 +45,13 @@ func sessionProfile(template, home string) (string, error) {
 	for _, name := range []string{"auth.json", "config.toml", "AGENTS.md", "AGENTS.override.md"} {
 		info, err := source.Lstat(name)
 		if os.IsNotExist(err) {
-			if name != "auth.json" {
-				if err = destination.RemoveAll(name); err != nil {
-					return "", err
-				}
+			if err = destination.RemoveAll(name); err != nil {
+				return "", err
 			}
 			continue
 		}
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
 			return "", errors.New("worker profile template file must be regular and bounded")
-		}
-		if name == "auth.json" {
-			old, err := destination.Lstat(name)
-			if err == nil {
-				if !old.Mode().IsRegular() {
-					return "", errors.New("session authentication must not redirect")
-				}
-				continue
-			}
-			if !os.IsNotExist(err) {
-				return "", err
-			}
 		}
 		input, err := source.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 		if err != nil {
@@ -79,7 +68,15 @@ func sessionProfile(template, home string) (string, error) {
 			return "", err
 		}
 		path := temp.Name()
-		n, copyErr := io.Copy(temp, io.LimitReader(input, (1<<20)+1))
+		var auth bytes.Buffer
+		reader := io.Reader(input)
+		if name == "auth.json" {
+			reader = io.TeeReader(input, &auth)
+		}
+		n, copyErr := io.Copy(temp, io.LimitReader(reader, (1<<20)+1))
+		if copyErr == nil && name == "auth.json" {
+			copyErr = validateStaticAuthentication(auth.Bytes())
+		}
 		inputErr := input.Close()
 		if copyErr == nil && n > 1<<20 {
 			copyErr = errors.New("worker profile file grew beyond its bound")
@@ -158,4 +155,23 @@ func copyProfileAssets(sourcePath string, destination *os.Root, name string) err
 		remaining -= n
 		return errors.Join(copyErr, closeErr)
 	})
+}
+
+// Static API keys have no rotating refresh ownership. ChatGPT OAuth must use a
+// centralized token provider (a separate runtime slice); rejecting it here keeps
+// new or existing session profiles from becoming independent refresh owners.
+func validateStaticAuthentication(raw []byte) error {
+	var auth struct {
+		Mode *string `json:"auth_mode"`
+		Key  string  `json:"OPENAI_API_KEY"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&auth) != nil || auth.Key == "" || auth.Mode != nil && *auth.Mode != "apikey" {
+		return errors.New("profile authentication requires a static API key; OAuth requires a central provider")
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return errors.New("invalid static authentication")
+	}
+	return nil
 }

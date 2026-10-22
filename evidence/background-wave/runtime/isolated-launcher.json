@@ -8,26 +8,26 @@
   "observations": [
     {
       "group_stopped": true,
-      "initialize_nanos": 542106589,
+      "initialize_nanos": 505712765,
       "initialized": true,
-      "probe_nanos": 231186149,
+      "probe_nanos": 269434954,
       "role": "orchestrator",
       "rss_method": "linux_proc_tree_rss_sampled_sum",
-      "rss_sample_bytes": 108965888,
-      "stop_nanos": 6560135
+      "rss_sample_bytes": 114868224,
+      "stop_nanos": 6826128
     },
     {
       "group_stopped": true,
-      "initialize_nanos": 536969334,
+      "initialize_nanos": 527617503,
       "initialized": true,
-      "probe_nanos": 360450031,
+      "probe_nanos": 280830859,
       "role": "task",
       "rss_method": "linux_proc_tree_rss_sampled_sum",
-      "rss_sample_bytes": 108728320,
-      "stop_nanos": 6563335
+      "rss_sample_bytes": 111919104,
+      "stop_nanos": 6529188
     }
   ],
-  "observed_at": "2026-10-22T14:37:49.368317148Z",
+  "observed_at": "2026-10-22T14:50:46.79840764Z",
   "stage": "Task_5 model-free process probe",
   "thread_or_turn_started": false
 }

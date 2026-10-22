@@ -11,8 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
+	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
@@ -69,7 +72,12 @@ func existingAbsolute(path string) (string, error) {
 // identical executable, environment policy and app-server flags; the approved
 // binding supplies CWD/model/thread sandbox through the common SessionDriver.
 func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, error) {
-	fail := func(err error) (Process, error) { return nil, errors.Join(ErrNotStarted, err) }
+	fail := func(err error) (Process, error) {
+		if errors.Is(err, process.ErrUnconfirmed) {
+			return nil, err
+		}
+		return nil, errors.Join(ErrNotStarted, err)
+	}
 	c := f.Config
 	if !c.IsolationVerified || c.LauncherContract != "argv_passthrough_v1" || len(c.Launcher) == 0 || c.Model == "" || c.Model != launch.Binding.Model {
 		return fail(errors.New("verified common launcher contract and matching model required"))
@@ -196,12 +204,12 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	probe := append(append([]string{}, args...), "sh", "-c", `for path in "$@"; do test ! -e "$path" || exit 1; done`, "probe")
 	probe = append(probe, hidden...)
 	if _, err = isolatedProbe(ctx, launcher, probe, environment, workspace); err != nil {
-		return fail(errors.New("worker isolation probe failed; app-server was not started"))
+		return fail(errors.Join(errors.New("worker isolation probe failed; app-server was not started"), err))
 	}
 	versionArgs := append(append([]string{}, args...), binary, "--version")
 	version, err := isolatedProbe(ctx, launcher, versionArgs, environment, workspace)
 	if err != nil || strings.TrimSpace(version) != "codex-cli 0.163.0" {
-		return fail(errors.New("isolated native Codex version does not match the pinned protocol"))
+		return fail(errors.Join(errors.New("isolated native Codex version does not match the pinned protocol"), err))
 	}
 	command := append(append([]string{}, args...), binary, "app-server", "--listen", "stdio://", "--disable", "goals", "--disable", "multi_agent", "--disable", "multi_agent_v2")
 	return (CommandFactory{Build: func(context.Context, Launch) (Command, error) {
@@ -221,11 +229,35 @@ func (b *probeOutput) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func isolatedProbe(ctx context.Context, program string, args, environment []string, cwd string) (string, error) {
-	cmd := exec.CommandContext(ctx, program, args...)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	cmd := exec.Command(program, args...)
 	cmd.Env, cmd.Dir = environment, cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 250 * time.Millisecond
 	var output probeOutput
 	cmd.Stdout = &output
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	identity := process.Identify(cmd.Process.Pid)
+	// Do not reap the leader before stopping descendants, including a wrapper
+	// which exits normally while a child holds stdout. PID identity stays owned.
+	leaderErr := process.WaitLeaderExit(ctx, identity)
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	// This is the synchronous owner before its ONLY Wait. Even a zombie
+	// leader retains the original PGID number until reaping; no context watcher
+	// can send a later signal after Wait. Kill children before inherited pipes.
+	signalErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if errors.Is(signalErr, syscall.ESRCH) {
+		signalErr = nil
+	}
+	_ = cmd.Process.Kill() // Owned process handle, including identity-read failure.
+	stopErr := process.WaitStopped(cleanup, identity)
+	waitErr := cmd.Wait()
+	if err := errors.Join(leaderErr, signalErr, stopErr, waitErr); err != nil {
 		return "", err
 	}
 	if output.truncated {
@@ -340,6 +372,12 @@ func validateGitAuthentication(ctx context.Context, git string, environment []st
 			continue
 		}
 		name := strings.ToLower(rawName)
+		// Conditions can be inactive while their target files remain visible in the
+		// read-only metadata mount. Reject all includes instead of trusting the
+		// current branch/worktree condition to hide credentials.
+		if name == "include.path" || strings.HasPrefix(name, "includeif.") {
+			return errors.New("Git includes cannot be mounted in a worker")
+		}
 		if strings.HasPrefix(name, "http.") {
 			if split := strings.LastIndex(rawName, "."); split > len("http.") {
 				scope := rawName[len("http."):split]

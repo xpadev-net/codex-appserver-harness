@@ -15,7 +15,7 @@ func TestSessionProfilesSeparateThreadStoresAndRestoreApprovedConfiguration(t *t
 			t.Fatal(err)
 		}
 	}
-	write(filepath.Join(template, "auth.json"), "fixture-source-auth", 0600)
+	write(filepath.Join(template, "auth.json"), `{"OPENAI_API_KEY":"fixture-source-key"}`, 0600)
 	write(filepath.Join(template, "config.toml"), `model_reasoning_effort = "high"`, 0600)
 	if err := os.MkdirAll(filepath.Join(template, "skills", "approved"), 0700); err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestSessionProfilesSeparateThreadStoresAndRestoreApprovedConfiguration(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(filepath.Join(a, "auth.json"), "fixture-refreshed-session-auth", 0600)
+	write(filepath.Join(a, "auth.json"), `{"OPENAI_API_KEY":"unapproved-session-key"}`, 0600)
 	write(filepath.Join(a, "config.toml"), "worker-mutated", 0600)
 	write(filepath.Join(a, "thread-history"), "private session A history", 0600)
 	b, err := sessionProfile(template, homeB)
@@ -39,9 +39,9 @@ func TestSessionProfilesSeparateThreadStoresAndRestoreApprovedConfiguration(t *t
 		t.Fatal(err)
 	}
 	for _, check := range []struct{ path, want string }{
-		{filepath.Join(template, "auth.json"), "fixture-source-auth"},
-		{filepath.Join(a, "auth.json"), "fixture-refreshed-session-auth"},
-		{filepath.Join(b, "auth.json"), "fixture-source-auth"},
+		{filepath.Join(template, "auth.json"), `{"OPENAI_API_KEY":"fixture-source-key"}`},
+		{filepath.Join(a, "auth.json"), `{"OPENAI_API_KEY":"fixture-source-key"}`},
+		{filepath.Join(b, "auth.json"), `{"OPENAI_API_KEY":"fixture-source-key"}`},
 		{filepath.Join(a, "config.toml"), `model_reasoning_effort = "high"`},
 		{filepath.Join(b, "config.toml"), `model_reasoning_effort = "high"`},
 		{filepath.Join(a, "thread-history"), "private session A history"},
@@ -131,5 +131,20 @@ func TestSessionProfileRejectsRedirectsSpecialFilesAndOversizeInput(t *testing.T
 				t.Fatal("profile preparation modified another path", err)
 			}
 		})
+	}
+}
+
+func TestSessionProfileRejectsClonedOAuthRefreshOwnership(t *testing.T) {
+	for _, raw := range []string{`{"auth_mode":"chatgpt","tokens":{"refresh_token":"fixture-refresh"}}`, `{"tokens":{"refresh_token":"fixture-refresh"}}`} {
+		template, home := t.TempDir(), t.TempDir()
+		if err := os.WriteFile(filepath.Join(template, "auth.json"), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sessionProfile(template, home); err == nil {
+			t.Fatal("OAuth credentials copied into an independent profile")
+		}
+		if _, err := os.Stat(filepath.Join(home, "codex", "auth.json")); !os.IsNotExist(err) {
+			t.Fatal("rejected OAuth auth file was published", err)
+		}
 	}
 }
