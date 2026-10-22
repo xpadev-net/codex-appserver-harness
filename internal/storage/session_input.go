@@ -71,6 +71,8 @@ type sessionManifest struct {
 	Tasks            []domain.Task                  `json:"tasks"`
 	Results          map[string]contract.TaskResult `json:"results"`
 	TaskApplications []ResultApplication            `json:"task_applications"`
+	TemplateContexts map[string]json.RawMessage     `json:"template_contexts"`
+	TemplateSubjects map[string]TemplateSubject     `json:"template_subjects"`
 	MainDecisions    []appliedMainDecision          `json:"main_decisions"`
 	Artifacts        []domain.Artifact              `json:"artifacts"`
 	Subscriptions    []inputSubscription            `json:"subscriptions"`
@@ -237,7 +239,7 @@ func (k *KernelStore) inputManifestTx(ctx context.Context, tx *sql.Tx, b contrac
 }
 
 func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (sessionManifest, error) {
-	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
+	m := sessionManifest{SchemaVersion: 1, SessionID: b.ID, Kind: b.Kind, Wave: w, Tasks: []domain.Task{}, Results: map[string]contract.TaskResult{}, TaskApplications: []ResultApplication{}, MainDecisions: []appliedMainDecision{}, TemplateContexts: map[string]json.RawMessage{}, TemplateSubjects: map[string]TemplateSubject{}, Artifacts: []domain.Artifact{}, Subscriptions: []inputSubscription{}}
 	tokens, unknown, saturated, err := waveTokensTx(ctx, tx, w.ID)
 	if err != nil {
 		return m, err
@@ -286,6 +288,28 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			continue
 		}
 		m.Tasks = append(m.Tasks, task)
+		var templateOwner string
+		var templateContext []byte
+		contextErr := tx.QueryRowContext(ctx, "SELECT work_item_id,payload FROM records WHERE kind='template_task_context' AND id=?", task.ID).Scan(&templateOwner, &templateContext)
+		if contextErr == nil {
+			if templateOwner != w.ID || !json.Valid(templateContext) {
+				return m, errors.New("input template context binding conflict")
+			}
+			m.TemplateContexts[task.ID] = json.RawMessage(templateContext)
+		} else if !errors.Is(contextErr, sql.ErrNoRows) {
+			return m, contextErr
+		}
+		var subject TemplateSubject
+		contextErr = completionRecord(ctx, tx, "template_subject", task.ID, &subject)
+		if contextErr == nil {
+			if subject.TaskID != task.ID || subject.Target != task.Target() {
+				return m, errors.New("input template subject binding conflict")
+			}
+			m.TemplateSubjects[task.ID] = subject
+		} else if !errors.Is(contextErr, sql.ErrNoRows) {
+			return m, contextErr
+		}
+
 		applicationIDs, err := inputIDsTx(ctx, tx, "SELECT a.id FROM records a JOIN kernel_run_bindings r ON r.run_id=a.id WHERE a.kind='task_result_application' AND a.work_item_id=? AND r.session_id=? AND r.applied=1 ORDER BY a.rowid", task.ID, task.SessionID)
 		if err != nil {
 			return m, err

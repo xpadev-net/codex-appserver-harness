@@ -484,3 +484,55 @@ func TestDirectionInputOmitsObsoletePlanBeforeReplanning(t *testing.T) {
 		t.Fatal("superseded plan leaked into new direction input", m)
 	}
 }
+
+func TestTemplateFixInputRetainsItsFindingAssignment(t *testing.T) {
+	ctx := context.Background()
+	first := kernelTemplate()
+	second := kernelTemplate()
+	second.ID = "test-owner"
+	second.Classifications = []string{"test_defect"}
+	first.FixInstruction = "fix assigned findings"
+	second.FixInstruction = first.FixInstruction
+	k, w, source, _ := templateFixture(t, false, []contract.FixReviewTemplate{first, second}, []string{"artifact_defect", "test_defect"})
+	expansion, err := k.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: w.Target(), ReviewTaskID: source.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string][]string{}
+	for _, id := range expansion.Admission.CreatedTaskIDs {
+		task, err := k.Task(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Spec.Kind != "fix" {
+			continue
+		}
+		snapshot, err := k.BuildSessionInput(ctx, task.SessionID, []contract.Target{task.Target()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := storedManifest(t, k, snapshot)
+		var assignment struct {
+			TemplateID    string   `json:"template_id"`
+			FindingIDs    []string `json:"finding_ids"`
+			SourceResults []string `json:"source_result_ids"`
+			InputDigest   string   `json:"input_digest"`
+			ExpansionKey  string   `json:"expansion_key"`
+		}
+		if err = json.Unmarshal(m.TemplateContexts[task.ID], &assignment); err != nil {
+			t.Fatal(err)
+		}
+		if assignment.InputDigest != expansion.InputDigest || assignment.ExpansionKey != expansion.Key || len(assignment.SourceResults) == 0 {
+			t.Fatal("unbound template assignment", assignment)
+		}
+		for _, resultID := range assignment.SourceResults {
+			if _, ok := m.Results[resultID]; !ok {
+				t.Fatal("assignment source findings absent", resultID)
+			}
+		}
+		found[assignment.TemplateID] = assignment.FindingIDs
+	}
+	if !reflect.DeepEqual(found[first.ID], []string{"finding-0"}) || !reflect.DeepEqual(found[second.ID], []string{"finding-1"}) {
+		t.Fatal("template responsibilities lost", found)
+	}
+}
