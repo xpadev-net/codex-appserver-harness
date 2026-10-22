@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,15 +225,19 @@ func TestParentAttentionBlockedTaskPauseAndResolvedUnknownRun(t *testing.T) {
 	}
 }
 
-func TestParentAttentionMissingEvidenceIsHeldAndRestorationPreventsWake(t *testing.T) {
+func TestParentAttentionExpiredEvidenceIsHeldAndRestorationPreventsWake(t *testing.T) {
 	ctx := context.Background()
 	k, w, _, artifact := templateFixture(t, true, []contract.FixReviewTemplate{kernelTemplate()}, nil)
-	path := filepath.Join(k.Root, "objects", artifact.ID)
-	data, err := os.ReadFile(path)
+	expired := artifact
+	expired.State, expired.ExpiredAt = "expired", k.clock()
+	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.Remove(path); err != nil {
+	if err = saveArtifact(ctx, tx, expired); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || !changed {
@@ -244,11 +247,21 @@ func TestParentAttentionMissingEvidenceIsHeldAndRestorationPreventsWake(t *testi
 	if err != nil || len(pending) != 1 || pending[0].Reason != "task_evidence_unavailable" {
 		t.Fatal(pending, err)
 	}
+	if _, err = k.BuildSessionInput(ctx, w.OrchestratorSessionID, []contract.Target{w.Target()}); err != nil {
+		t.Fatal("held evidence prevented parent context reconstruction", err)
+	}
 	set := mustReady(t, k, w)
 	if len(set.Tasks) != 0 {
-		t.Fatal("missing evidence advanced Wave", set)
+		t.Fatal("expired evidence advanced Wave", set)
 	}
-	if err = os.WriteFile(path, data, 0600); err != nil {
+	tx, err = k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveArtifact(ctx, tx, artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	pending, err = k.PendingWakeNotifications(ctx, w.OrchestratorSessionID, 16)
