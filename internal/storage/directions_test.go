@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -265,5 +266,69 @@ func TestWaveDirectionUpdatesOnlyExplicitCriteriaAndRejectsMainToolDispatch(t *t
 	current, err := k.Wave(ctx, w.ID)
 	if err != nil || !reflect.DeepEqual(current.Criteria, r.Criteria) || current.OriginalRequest != w.OriginalRequest || current.Policy != w.Policy {
 		t.Fatal("direction lost provenance or changed policy", current, err)
+	}
+}
+
+func TestWaveDirectionOldPhaseEvidenceDoesNotBlockControllerArtifactCollection(t *testing.T) {
+	ctx := context.Background()
+	k, b, run, result := recordedTaskResultFixture(t, nil)
+	base := k.clock()
+	k.Now = func() time.Time { return base }
+	if err := k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyTaskResult(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err := k.Wave(ctx, b.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Policy.Limits.RetentionSeconds = 1
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveWave(ctx, tx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	other, err := k.CreateWave(ctx, WaveRequest{OrchestratorSessionID: w.OrchestratorSessionID, Source: "direct", SourceID: "other", OriginalRequest: "independent report", Criteria: w.Criteria, Policy: w.Policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := k.AdoptPlan(ctx, other.Target(), "initial", storagePlanFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := k.Task(ctx, plan.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := completeTemplateTask(t, k, task, "independent current Phase evidence", "", nil)
+	d := mustDirection(t, k, w)
+	if _, err = k.ApplyWaveDirection(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal("redirected Wave blocked controller collection", err)
+	}
+	old, err := k.Artifact(ctx, result.Artifacts[0])
+	if err != nil || old.State != "committed" {
+		t.Fatal("direction bypassed historical retention", old, err)
+	}
+	k.Now = func() time.Time { return base.Add(2 * time.Second) }
+	if err = k.CollectArtifacts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	old, err = k.Artifact(ctx, result.Artifacts[0])
+	if err != nil || old.State != "expired" {
+		t.Fatal("superseded evidence did not follow retention", old, err)
+	}
+	current, err := k.Artifact(ctx, proof.ID)
+	if err != nil || current.State != "committed" {
+		t.Fatal("unrelated current Phase evidence was collected", current, err)
 	}
 }
