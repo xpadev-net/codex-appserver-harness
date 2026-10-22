@@ -43,7 +43,10 @@ func OpenKernel(path string) (*KernelStore, error) {
 	}
 	inspected, err := inspectDatabaseFileWith(path, func(db *sql.DB, version int) error {
 		if version == KernelSchemaVersion {
-			return validateKernelSchema(db)
+			if err := validateKernelSchema(db); err != nil {
+				return err
+			}
+			return validateKernelRunBudgetFormat(db)
 		}
 		return nil
 	})
@@ -89,6 +92,9 @@ func OpenKernel(path string) (*KernelStore, error) {
 		}
 	} else {
 		if err = validateKernelSchema(db); err != nil {
+			return nil, err
+		}
+		if err = validateKernelRunBudgetFormat(db); err != nil {
 			return nil, err
 		}
 	}

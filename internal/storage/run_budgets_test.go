@@ -1,14 +1,17 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -323,5 +326,117 @@ func TestBaselineTurnUsageCannotBeAttributedToNewRun(t *testing.T) {
 	total := int64(9999)
 	if err = k.ObserveRunTokens(ctx, RunTokenObservation{SessionID: b.ID, RunID: run.ID, ThreadID: run.ThreadID, TurnID: run.TurnID, TotalForRun: &total, Final: true}); err == nil {
 		t.Fatal("old baseline turn cost was charged to new run")
+	}
+}
+
+func TestSharedWakeRebuildsAfterDelayedBudgetExhaustion(t *testing.T) {
+	ctx := context.Background()
+	k, first, tasks := mailboxFixture(t)
+	b, run, _ := reserveBudgetMain(t, k, "before-wake", first.Target())
+	finishBudgetMain(t, k, b, run)
+	other, err := k.CreateWave(ctx, WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "budget-other", OriginalRequest: "another", Criteria: first.Criteria, Policy: first.Policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := k.AdoptPlan(ctx, other.Target(), "initial", storagePlanFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTask, err := k.Task(ctx, plan.CreatedTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []domain.Task{tasks[0], otherTask} {
+		if _, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: task.SessionID, Target: task.Target(), Key: "budget-question", Recipient: "parent", Body: "clarify"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := k.PendingWakeNotifications(ctx, "main", 10)
+	if err != nil || len(pending) != 2 {
+		t.Fatal(pending, err)
+	}
+	req := WakeRequest{SessionID: "main", Key: "budget-batch", NotificationIDs: []string{pending[0].ID, pending[1].ID}}
+	wake, err := k.ReserveWake(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observeBudgetTokens(t, k, run.ID, first.Policy.Limits.Tokens, true)
+	if _, err := k.ReserveWake(ctx, req); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("replay accepted exhausted input", err)
+	}
+	prepared := prepareWakeSession(t, k, "main")
+	if err := k.ReserveSessionRun(ctx, prepared, wake.Snapshot, wakeStartingRun(k, prepared, wake)); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("bound exhausted wake", err)
+	}
+	if _, err := k.ReconcileUnstartedWake(ctx, wake.Intent.ID); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("retired with live process", err)
+	}
+	if err := k.MarkSessionStopped(ctx, "main", prepared.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	retired, err := k.ReconcileUnstartedWake(ctx, wake.Intent.ID)
+	if err != nil || retired.Intent.State != "superseded" {
+		t.Fatal(retired, err)
+	}
+	if _, err := k.ReconcileUnstartedWake(ctx, wake.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = k.PendingWakeNotifications(ctx, "main", 10)
+	if err != nil || len(pending) != 1 || pending[0].Target != other.Target() {
+		t.Fatal(pending, err)
+	}
+	var retained int
+	if err := k.DB.QueryRow("SELECT count(*) FROM kernel_notifications WHERE session_id='main' AND state='pending' AND run_id='' AND id IN (?,?)", req.NotificationIDs[0], req.NotificationIDs[1]).Scan(&retained); err != nil || retained != 2 {
+		t.Fatal("input history lost", retained, err)
+	}
+	next, err := k.ReserveWake(ctx, WakeRequest{SessionID: "main", Key: "budget-rebuilt", NotificationIDs: []string{pending[0].ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared = prepareWakeSession(t, k, "main")
+	if err := k.ReserveSessionRun(ctx, prepared, next.Snapshot, wakeStartingRun(k, prepared, next)); err != nil {
+		t.Fatal("healthy Wave stuck", err)
+	}
+}
+
+func TestOpenKernelRefusesRunsWithoutBudgetBindingsBeforeWriting(t *testing.T) {
+	k, waves := budgetWaves(t, domain.DefaultKernelLimits(), 1)
+	b, run, _ := reserveBudgetMain(t, k, "old-format", waves[0].Target())
+	finishBudgetMain(t, k, b, run)
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind='run_budget'"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(k.Root, "kernel.db")
+	// Obtain the actual path without depending on the fixture's basename.
+	var seq int
+	var name string
+	if err := k.DB.QueryRow("PRAGMA database_list").Scan(&seq, &name, &path); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenKernel(path)
+	if err == nil {
+		reopened.Close()
+		t.Fatal("old runs accepted without accounting")
+	}
+	if !strings.Contains(err.Error(), "offline reconciliation/migration required") {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("refusal changed DB", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0640 {
+		t.Fatal("refusal changed permissions", info, err)
 	}
 }

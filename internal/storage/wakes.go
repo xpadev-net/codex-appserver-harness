@@ -165,6 +165,13 @@ func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b cont
 	if obsoleteWakeNotification(b, wave, n, k.clock()) || wave.Paused {
 		return ErrWakeHeld
 	}
+	held, err := wakeBudgetHeldTx(ctx, tx, b, wave)
+	if err != nil {
+		return err
+	}
+	if held {
+		return ErrWakeHeld
+	}
 	if b.Kind == "orchestrator" && wave.OrchestratorSessionID == b.ID {
 		return nil
 	}
@@ -493,7 +500,8 @@ func (k *KernelStore) finishWakeTx(ctx context.Context, tx *sql.Tx, sessionID, r
 
 // ReconcileUnstartedWake retires an obsolete intent only after proving that no
 // run was reserved and no prepared process remains. Other still-current Waves
-// in a shared main batch return to pending; pause alone never retires a wake.
+// in a shared main batch return to pending. Exhausted budgets also retire an
+// unstarted batch, retaining its inputs as pending; pause alone never retires it.
 func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (WakeReservation, error) {
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
@@ -527,6 +535,7 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 	}
 	obsolete := map[string]bool{}
 	hasObsolete := false
+	budgetHeld := map[string]bool{}
 	for _, notificationID := range w.Intent.NotificationIDs {
 		n, err := notificationTx(ctx, tx, notificationID)
 		if err != nil {
@@ -538,6 +547,12 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 		}
 		old := obsoleteWakeNotification(b, wave, n, k.clock())
 		obsolete[n.ID], hasObsolete = old, hasObsolete || old
+		held, err := wakeBudgetHeldTx(ctx, tx, b, wave)
+		if err != nil {
+			return w, err
+		}
+		budgetHeld[n.ID] = held
+		hasObsolete = hasObsolete || held
 	}
 	if !hasObsolete {
 		return w, ErrWakeHeld
@@ -572,7 +587,7 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_wake_intents SET state='superseded' WHERE id=?", id); err != nil {
 		return w, err
 	}
-	if err = kernelRecordTx(ctx, tx, "wake_disposition", id, b.ID, map[string]any{"reason": "unstarted input superseded or terminal", "obsolete_notifications": obsolete, "created_at": k.clock()}); err != nil {
+	if err = kernelRecordTx(ctx, tx, "wake_disposition", id, b.ID, map[string]any{"reason": "unstarted input superseded, terminal or budget held", "obsolete_notifications": obsolete, "budget_held_notifications": budgetHeld, "created_at": k.clock()}); err != nil {
 		return w, err
 	}
 	w.Intent.State = "superseded"

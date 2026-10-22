@@ -95,6 +95,44 @@ func (k *KernelStore) WaveRunBudget(ctx context.Context, waveID string) (WaveRun
 	r := WaveRunBudget{WaveID: waveID, ObservedTokens: tokens, UnobservedRuns: unknown, Saturated: saturated, TokenLimit: w.Policy.Limits.Tokens, MainTurns: w.MainTurns, MainTurnLimit: w.Policy.Limits.MainTurns, Deadline: w.Deadline, DeadlineExceeded: !k.clock().Before(w.Deadline)}
 	return r, tx.Commit()
 }
+
+// Budget holds preserve pending inputs while allowing another Wave in a shared
+// wake to progress. Thread limits require rotation, so do not retire their input.
+func wakeBudgetHeldTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (bool, error) {
+	used, _, saturated, err := waveTokensTx(ctx, tx, w.ID)
+	if err != nil {
+		return false, err
+	}
+	if saturated || used >= w.Policy.Limits.Tokens {
+		return true, nil
+	}
+	if b.Kind == "orchestrator" {
+		return w.MainTurns >= w.Policy.Limits.MainTurns, nil
+	}
+	if b.Kind == "task" {
+		task, err := loadTask(ctx, tx, b.TaskID)
+		if err != nil {
+			return false, err
+		}
+		return task.Attempts >= w.Policy.Limits.TaskAttempts, nil
+	}
+	return false, nil
+}
+
+// Existing schema-v2 runs predate durable budget bindings. Refuse them before
+// any write rather than silently treating historic consumption as zero.
+func validateKernelRunBudgetFormat(db *sql.DB) error {
+	var missing int
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM kernel_run_bindings b
+ LEFT JOIN records r ON r.kind='run_budget' AND r.id=b.run_id WHERE r.id IS NULL)`).Scan(&missing); err != nil {
+		return err
+	}
+	if missing != 0 {
+		return errors.New("kernel run budget bindings missing; explicit offline reconciliation/migration required")
+	}
+	return nil
+}
+
 func mainBudgetTargets(b contract.SessionBinding, snapshot contract.InputSnapshot) ([]contract.Target, error) {
 	var input struct {
 		SchemaVersion int               `json:"schema_version"`
