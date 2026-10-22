@@ -275,11 +275,12 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_5: イベントloopとprocess間wake
 
 - status: in_progress
-- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。PR #75で共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続した。PR #76で非同期session loop、完了時の即時再評価、定期再照合、停止確認を待つshutdownとdeadlineの世代付き停止を追加した。PR #77でprivate Unix socketのhint/read専用状態streamと永続event cursorの読み取り境界を追加した。PR #78で既存daemonのhint再照合、CLI/webhookの保存後wake、子group停止後のrunner結果公開とtrustedラッパーだけのjob ID通知を配線した。本PRで元process identityと子孫treeに基づく500ms周期のRSS取得をmanaged ownerへ接続し、終了時に観測済みpeak・方式・間隔を同じpreparationへ保存する。共有pageはprocessごとに加算し、走査中の生成/終了/親変更、daemon crash直前の未保存値は完全には捕捉しない。取得不能を0へ変換せず、RSSを停止証拠やmemory上限保証に使わない。ready/input/結果適用のWorkSourceはTask_6が接続し、Kernel daemon/production launcher設定、優先操作と実測負荷試験は後続PRで接続する。
+- split: PR #73でLinux process identity/group照合の共通化、Codex transportの終了一回化、起動ごとの停止証拠、停止未確認時の再起動抑止を追加した。PR #74でKernelのpreparation/owner/run固定・起動admission・read専用復旧予約・世代付き停止の原子的portを追加した。PR #75で共通SessionDriverの予約後にだけ起動するlazy process ownerと、停止証拠による枠返却・read専用照合・固定CWD/明示環境のfactoryを接続した。PR #76で非同期session loop、完了時の即時再評価、定期再照合、停止確認を待つshutdownとdeadlineの世代付き停止を追加した。PR #77でprivate Unix socketのhint/read専用状態streamと永続event cursorの読み取り境界を追加した。PR #78で既存daemonのhint再照合、CLI/webhookの保存後wake、子group停止後のrunner結果公開とtrustedラッパーだけのjob ID通知を配線した。PR #79で元process identityと子孫treeに基づく500ms周期のRSS取得をmanaged ownerへ接続し、終了時に観測済みpeak・方式・間隔を同じpreparationへ保存する。共有pageはprocessごとに加算し、走査中の生成/終了/親変更、daemon crash直前の未保存値は完全には捕捉しない。取得不能を0へ変換せず、RSSを停止証拠やmemory上限保証に使わない。本PRでWave/Taskのpause/resume/cancelを版・理由・一意key付きのtrusted operator transactionとして保存し、既存の送信前gateへ接続する。pauseは既送信runを変更せず、cancel後の結果は停止確認後にarchiveし、再送/replayやresumeで終端を戻さない。ready/input/結果適用のWorkSourceはTask_6が接続し、Kernel daemon/production launcher設定、版付き方向修正・明示interruptと実測負荷試験は後続PRで接続する。
 - type: impl
 - owns:
   - internal/control/**
   - internal/storage/process_metrics.go、internal/storage/process_metrics_test.go（RSS方式・間隔と世代付き観測）
+  - internal/storage/operator_controls.go、internal/storage/operator_controls_test.go（operatorのpause/resume/cancel）
   - internal/ipc/**（private hint/read-only stream transport）
   - internal/contract/state_stream.go（dispatch Targetと区別したevent DTO）
   - internal/storage/state_events.go、internal/storage/state_events_test.go
