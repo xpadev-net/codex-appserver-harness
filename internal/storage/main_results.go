@@ -222,6 +222,13 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 	return receipt, k.finishMainResultTx(ctx, tx, b, receipt, "applied")
 }
 func (k *KernelStore) finishMainResultTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, receipt MainResultApplication, outcome string) error {
+	if err := k.finishMainResultEffectsTx(ctx, tx, b, receipt, outcome); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (k *KernelStore) finishMainResultEffectsTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, receipt MainResultApplication, outcome string) error {
 	if err := kernelRecordTx(ctx, tx, "main_result_application", receipt.RunID, b.ID, receipt); err != nil {
 		return err
 	}
@@ -252,7 +259,7 @@ func (k *KernelStore) finishMainResultTx(ctx context.Context, tx *sql.Tx, b cont
 		if err := k.requeueCurrentMainInputsTx(ctx, tx, b, receipt.RunID); err != nil {
 			return err
 		}
-		return tx.Commit()
+		return nil
 	}
 	if err := k.finishWakeTx(ctx, tx, b.ID, receipt.RunID, outcome); err != nil {
 		return err
@@ -260,7 +267,7 @@ func (k *KernelStore) finishMainResultTx(ctx context.Context, tx *sql.Tx, b cont
 	if err := k.finishDirectOperationInputsTx(ctx, tx, b.ID, receipt.RunID, outcome); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // A stale Wave cannot consume another Wave's current undecided input. Retire
