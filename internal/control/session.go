@@ -39,6 +39,7 @@ type owner struct {
 	closeErr                   error
 	released                   bool
 	rss                        <-chan *int64
+	afterCommit                func()
 }
 
 func newOwner(ctx context.Context, k *storage.KernelStore, f Factory, sessionID, runID, mode string, now func() time.Time) (*owner, error) {
@@ -138,7 +139,7 @@ func (o *owner) ensure(ctx context.Context) (*codex.SessionRPC, error) {
 	o.rss = sampleRSS(o.ctx, identity)
 	var handler codex.ToolHandler
 	if o.mode == "execute" {
-		handler, err = worker.KernelToolHandler(o.sessionID, o.runID, contract.KernelGateway{Backend: o.store})
+		handler, err = worker.KernelToolHandler(o.sessionID, o.runID, contract.KernelGateway{Backend: signalingKernelBackend{KernelToolBackend: o.store, afterCommit: o.afterCommit}})
 		if err != nil {
 			return fail(err)
 		}
@@ -299,9 +300,10 @@ func (o *owner) Close() error {
 }
 
 type Runtime struct {
-	Store   *storage.KernelStore
-	Factory Factory
-	Now     func() time.Time
+	Store      *storage.KernelStore
+	Factory    Factory
+	Now        func() time.Time
+	OnMutation func() // nonblocking, payload-free hint after a committed tool mutation
 }
 type ExecuteRequest struct {
 	SessionID    string
@@ -346,6 +348,7 @@ func (r Runtime) Execute(ctx context.Context, request ExecuteRequest) (out Outco
 	if err != nil {
 		return out, err
 	}
+	o.afterCommit = r.OnMutation
 	var run contract.SessionRun
 	defer func() { err = errors.Join(err, o.Close()); out = o.outcome(run) }()
 	prepared, err := o.driver().Prepare(o.ctx, request.SessionID)

@@ -320,16 +320,24 @@ func (k *KernelStore) AdoptPlan(ctx context.Context, target contract.Target, key
 	}
 	return receipt, tx.Commit()
 }
+
+var ErrPlanAdmission = errors.New("invalid plan admission")
+var ErrPlanAdmissionHeld = errors.New("plan admission requires reconciliation")
+
+func invalidPlanAdmission(message string) error {
+	return fmt.Errorf("%w: %s", ErrPlanAdmission, message)
+}
+
 func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contract.Target, key string, plan contract.PlanProposal) (PlanAdmission, error) {
 	return k.adoptPlanModeTx(ctx, tx, target, key, plan, "parent")
 }
 func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target contract.Target, key string, plan contract.PlanProposal, mode string) (PlanAdmission, error) {
 	receipt := PlanAdmission{Mode: mode, RequestTarget: target, Key: key, Plan: plan, CreatedTaskIDs: []string{}, CarriedTaskIDs: []string{}}
 	if mode != "parent" && mode != "template" {
-		return receipt, errors.New("invalid plan adoption authority")
+		return receipt, invalidPlanAdmission("invalid plan adoption authority")
 	}
 	if strings.TrimSpace(key) == "" || len(key) > 256 || !target.Valid() {
-		return receipt, errors.New("versioned adoption key required")
+		return receipt, invalidPlanAdmission("versioned adoption key required")
 	}
 	digest, err := contentDigest(plan)
 	if err != nil {
@@ -348,7 +356,7 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 			priorMode = "parent"
 		}
 		if prior.Digest != digest || prior.RequestTarget != target || priorMode != mode {
-			return receipt, errors.New("plan replay identity conflict")
+			return receipt, invalidPlanAdmission("plan replay identity conflict")
 		}
 		return prior, nil
 	}
@@ -360,17 +368,17 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 		return receipt, err
 	}
 	if wave.Target() != target || wave.DispatchPaused() || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
-		return receipt, errors.New("stale/terminal/paused/expired Wave")
+		return receipt, invalidPlanAdmission("stale/terminal/paused/expired Wave")
 	}
 	if err = domain.ValidateWavePlan(wave, plan); err != nil {
-		return receipt, err
+		return receipt, errors.Join(ErrPlanAdmission, err)
 	}
 	var active int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM kernel_sessions s JOIN kernel_tasks t ON t.id=s.task_id WHERE t.wave_id=? AND (s.active_run_id<>'' OR s.process_stopped=0 OR s.creating<>0)", wave.ID).Scan(&active); err != nil {
 		return receipt, err
 	}
 	if active > 0 {
-		return receipt, errors.New("reconcile and stop active Task processes before replanning")
+		return receipt, ErrPlanAdmissionHeld
 	}
 	var mainRaw []byte
 	var main contract.SessionBinding
@@ -387,7 +395,7 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	revision := wave.PlanRevision
 	if previousCount > 0 {
 		if mode == "parent" && wave.Replans >= wave.Policy.Limits.Replans {
-			return receipt, errors.New("replan budget exhausted")
+			return receipt, invalidPlanAdmission("replan budget exhausted")
 		}
 		var current int
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM kernel_plans WHERE wave_id=? AND revision=?", wave.ID, revision).Scan(&current); err != nil {
@@ -415,7 +423,7 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 				return receipt, err
 			}
 			if !reflect.DeepEqual(existing.Spec, phaseSpec) || existing.Position != position {
-				return receipt, errors.New("phase identities are immutable; use a fresh phase key")
+				return receipt, invalidPlanAdmission("phase identities are immutable; use a fresh phase key")
 			}
 		}
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -436,14 +444,23 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 			included[taskID] = true
 			inputs, err := k.taskInputDigestTx(ctx, tx, wave, spec)
 			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return receipt, errors.Join(ErrPlanAdmission, err)
+				}
+				if readinessHoldError(err) {
+					return receipt, errors.Join(ErrPlanAdmissionHeld, err)
+				}
 				return receipt, err
 			}
 			existing, err := loadTask(ctx, tx, taskID)
 			if err == nil {
 				if existing.State != contract.TaskCompleted || existing.ScopeRevision != wave.ScopeRevision || existing.PolicyRevision != wave.Policy.Revision || existing.PhaseID != phaseID || !reflect.DeepEqual(existing.Spec, spec) || existing.ResultID == "" || existing.InputDigest != inputs {
-					return receipt, errors.New("only unchanged completed Task results may be explicitly carried; allocate fresh Task/phase keys")
+					return receipt, invalidPlanAdmission("only unchanged completed Task results may be explicitly carried; allocate fresh Task/phase keys")
 				}
 				if _, err = k.completedTaskResultTx(ctx, tx, wave, existing); err != nil {
+					if readinessHoldError(err) {
+						return receipt, errors.Join(ErrPlanAdmissionHeld, err)
+					}
 					return receipt, err
 				}
 				if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_plan_bindings(wave_id,revision,task_id,source_result_id,input_digest) VALUES(?,?,?,?,?)", wave.ID, revision, taskID, existing.ResultID, inputs); err != nil {
@@ -489,7 +506,7 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 		}
 	}
 	if newPhases > wave.Policy.Limits.Phases-wave.PhasesCreated || newTasks > wave.Policy.Limits.Tasks-wave.TasksCreated {
-		return receipt, errors.New("cumulative structure budget exhausted")
+		return receipt, invalidPlanAdmission("cumulative structure budget exhausted")
 	}
 	// Retiring an omitted, stopped Task is an explicit effect of this adopted plan.
 	rows, err := tx.QueryContext(ctx, "SELECT id FROM kernel_tasks WHERE wave_id=?", wave.ID)

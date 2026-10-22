@@ -39,6 +39,8 @@ func (w SessionWork) identity() (string, string, error) {
 }
 
 type WorkPage struct {
+	Recheck bool // durable completion applied during startup scan; restart cursor once
+
 	Work      []SessionWork
 	NextAfter string
 }
@@ -95,7 +97,15 @@ type Loop struct {
 }
 
 func NewLoop(runtime Runtime, source WorkSource) *Loop {
-	return &Loop{Runtime: runtime, Source: source, wake: make(chan struct{}, 1)}
+	l := &Loop{Runtime: runtime, Source: source, wake: make(chan struct{}, 1)}
+	previous := runtime.OnMutation
+	l.Runtime.OnMutation = func() {
+		if previous != nil {
+			previous()
+		}
+		l.Wake()
+	}
+	return l
 }
 
 // Wake is deliberately payload-free and coalesced; all useful facts must have
@@ -255,6 +265,10 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 					// Continue a bounded page immediately, rather than waiting 60 seconds
 					// when a source page has only busy or rejected entries.
 					if page.NextAfter != "" && page.NextAfter != previousCursor {
+						scan = true
+					}
+					if page.Recheck {
+						workCursor = ""
 						scan = true
 					}
 				}

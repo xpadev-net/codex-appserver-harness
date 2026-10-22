@@ -333,6 +333,9 @@ func (k *KernelStore) finishTaskResultTx(ctx context.Context, tx *sql.Tx, b cont
 	if err := kernelRecordTx(ctx, tx, "session_run_disposition", receipt.RunID, b.ID, map[string]string{"reason": "Task result application"}); err != nil {
 		return err
 	}
+	if err := clearSessionRunHoldTx(ctx, tx, b.ID, receipt.RunID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE kernel_run_bindings SET applied=1 WHERE run_id=?", receipt.RunID); err != nil {
 		return err
 	}

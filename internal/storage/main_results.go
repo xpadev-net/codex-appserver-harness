@@ -191,6 +191,12 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 		if decision.Action == "plan" {
 			plan, err := k.adoptPlanTx(ctx, tx, decision.Target, "main-result:"+runID, *decision.Plan)
 			if err != nil {
+				if errors.Is(err, ErrPlanAdmission) {
+					return receipt, errors.Join(ErrMainResultInvalid, err)
+				}
+				if errors.Is(err, ErrPlanAdmissionHeld) {
+					return receipt, errors.Join(ErrMainResultHeld, err)
+				}
 				return receipt, err
 			}
 			receipt.Plans = append(receipt.Plans, plan)
@@ -204,6 +210,9 @@ func (k *KernelStore) finishMainResultTx(ctx context.Context, tx *sql.Tx, b cont
 		return err
 	}
 	if err := kernelRecordTx(ctx, tx, "session_run_disposition", receipt.RunID, b.ID, map[string]string{"reason": "main result " + receipt.State}); err != nil {
+		return err
+	}
+	if err := clearSessionRunHoldTx(ctx, tx, b.ID, receipt.RunID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE kernel_run_bindings SET applied=1 WHERE run_id=?", receipt.RunID); err != nil {
