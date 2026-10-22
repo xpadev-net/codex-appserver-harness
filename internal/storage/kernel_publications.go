@@ -325,8 +325,11 @@ func (k *KernelStore) ReconcileKernelPublications(ctx context.Context, limit int
 		return report, err
 	}
 	for _, pub := range publications {
-		if _, err = k.ImportArtifact(ctx, pub.Import, []byte(pub.Content)); err != nil {
+		if _, err = k.importArtifact(ctx, pub.Import, []byte(pub.Content), true); err != nil {
 			report.Pending = append(report.Pending, pub.Operation.ID)
+			if ctx.Err() != nil {
+				return report, ctx.Err()
+			}
 			continue
 		}
 		reply, err := k.kernelPublicationReply(ctx, pub, nil, false)

@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -453,5 +456,67 @@ func TestKernelPublicationLateUnknownCannotOverrideCompletedDelivery(t *testing.
 	items, err := k.Notifications(ctx, b.ID, 0, 10)
 	if err != nil || len(items) != 1 || items[0].State != "bound_to_tool" || items[0].RunID != run.ID {
 		t.Fatal("late unknown reply recreated completed input", items, err)
+	}
+}
+
+func TestKernelPublicationReconciliationSkipsLockedObjectAndKeepsProgress(t *testing.T) {
+	ctx := context.Background()
+	k, wave, _, b, run := kernelToolFixture(t, "task")
+	restore := blockArtifactDirectory(t, k)
+	gateway := contract.KernelGateway{Backend: k}
+	replies := []contract.ToolReply{}
+	for i := range 2 {
+		call := publicationCall(t, b, run, wave.Target(), fmt.Sprintf("locked case %d", i))
+		call.CallID = fmt.Sprintf("locked-%d", i)
+		reply, err := gateway.Handle(ctx, call)
+		if err != nil || reply.State != "unknown" {
+			t.Fatal(reply, err)
+		}
+		replies = append(replies, reply)
+	}
+	restore()
+	if replies[0].OperationID > replies[1].OperationID {
+		replies[0], replies[1] = replies[1], replies[0]
+	}
+	file, err := os.OpenFile(filepath.Join(k.Root, "objects", replies[0].ResourceID), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	type result struct {
+		report KernelPublicationReconciliation
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() { report, err := k.ReconcileKernelPublications(ctx, 2); done <- result{report, err} }()
+	select {
+	case got := <-done:
+		if got.err != nil || len(got.report.Pending) != 1 || got.report.Pending[0] != replies[0].OperationID || len(got.report.Completed) != 1 || got.report.Completed[0] != replies[1].OperationID {
+			t.Fatal(got.report, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		<-done
+		t.Fatal("locked object blocked bounded recovery of later bytes")
+	}
+	waiting, err := os.OpenFile(filepath.Join(k.Root, "objects", replies[0].ResourceID), os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiting.Close()
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+	if err = lockArtifactWriter(deadline, waiting, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("normal writer ignored context cancellation", err)
+	}
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := k.ReconcileKernelPublications(ctx, 2); err != nil || len(report.Completed) != 1 || len(report.Pending) != 0 {
+		t.Fatal(report, err)
 	}
 }

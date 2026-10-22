@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -290,6 +291,9 @@ func (k *KernelStore) reserveArtifactTx(ctx context.Context, tx *sql.Tx, request
 // bytes, then commits the immutable manifest/event. Crash retries use the same
 // ID; staged imports continue to consume capacity until resolved.
 func (k *KernelStore) ImportArtifact(ctx context.Context, request ArtifactImport, data []byte) (domain.Artifact, error) {
+	return k.importArtifact(ctx, request, data, false)
+}
+func (k *KernelStore) importArtifact(ctx context.Context, request ArtifactImport, data []byte, nonblocking bool) (domain.Artifact, error) {
 	a, err := k.reserveArtifact(ctx, request, data)
 	if err != nil {
 		return a, err
@@ -311,7 +315,7 @@ func (k *KernelStore) ImportArtifact(ctx context.Context, request ArtifactImport
 		return a, err
 	}
 	defer file.Close()
-	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err = lockArtifactWriter(ctx, file, nonblocking); err != nil {
 		return a, err
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
@@ -350,6 +354,27 @@ func (k *KernelStore) ImportArtifact(ctx context.Context, request ArtifactImport
 		return a, err
 	}
 	return k.commitArtifact(ctx, a)
+}
+func lockArtifactWriter(ctx context.Context, file *os.File, nonblocking bool) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if nonblocking || (!errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN)) {
+			return err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 func privateArtifactFile(file *os.File) error {
 	info, err := file.Stat()
