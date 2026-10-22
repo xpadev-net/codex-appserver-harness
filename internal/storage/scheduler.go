@@ -237,6 +237,38 @@ func (k *KernelStore) activePhaseTx(ctx context.Context, tx *sql.Tx, target cont
 			}
 		}
 		if complete {
+			phaseReason := ""
+			for _, task := range tasks {
+				if task.Spec.Kind != "review" {
+					continue
+				}
+				result, err := k.completedTaskResultTx(ctx, tx, wave, task)
+				if err != nil {
+					return set, nil, false, err
+				}
+				reason := ""
+				if result.Review == nil || result.Review.Verdict == "inconclusive" {
+					reason = "review_inconclusive"
+				} else if result.Review.Verdict == "findings" {
+					expanded, err := expandedReviewResultTx(ctx, tx, wave, task)
+					if err != nil {
+						return set, nil, false, err
+					}
+					if !expanded {
+						reason = "review_findings"
+					}
+				}
+				if reason != "" {
+					phaseReason = reason
+					if reason == "review_inconclusive" {
+						break
+					}
+				}
+			}
+			if phaseReason != "" {
+				set.PhaseID, set.Reason = phaseID, phaseReason
+				return set, tasks, false, nil
+			}
 			continue
 		}
 		set.PhaseID, set.State = phaseID, "active"

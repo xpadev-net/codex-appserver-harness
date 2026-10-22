@@ -46,6 +46,9 @@ type templateAssignment struct {
 // call a model, accept a generated plan, or authorize a Task to create Tasks.
 // P's verification/runner/candidate transitions are connected by Task_7/8.
 func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request TemplateExpansionRequest) (TemplateExpansion, error) {
+	return k.expandReviewTemplates(ctx, request, false)
+}
+func (k *KernelStore) expandReviewTemplates(ctx context.Context, request TemplateExpansionRequest, automatic bool) (TemplateExpansion, error) {
 	var receipt TemplateExpansion
 	if !request.Target.Valid() || request.ReviewTaskID == "" {
 		return receipt, errors.New("versioned review expansion request required")
@@ -75,6 +78,11 @@ func (k *KernelStore) ExpandReviewTemplates(ctx context.Context, request Templat
 	}
 	if wave.Policy.Stage != "K" || wave.Policy.Product {
 		return receipt, fmt.Errorf("%w: product expansion needs independent verification adapter", ErrTemplateNeedsMain)
+	}
+	if automatic {
+		if err = idleTemplateParentTx(ctx, tx, wave); err != nil {
+			return receipt, err
+		}
 	}
 	var raw []byte
 	if err = tx.QueryRowContext(ctx, "SELECT payload FROM kernel_plans WHERE wave_id=? AND revision=?", wave.ID, wave.PlanRevision).Scan(&raw); err != nil {
@@ -845,6 +853,9 @@ func pinClonedReviewSubjectTx(ctx context.Context, tx *sql.Tx, wave domain.Wave,
 
 func cloneTemplateMetadataTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, oldLocal, newLocal, key string, clones map[string]string, templates []contract.FixReviewTemplate) error {
 	oldID, newID := structureID("task-", wave.ID, oldLocal), structureID("task-", wave.ID, newLocal)
+	if err := kernelRecordTx(ctx, tx, "template_task_clone", newID, oldID, templateTaskClone{OriginalID: oldID, ReplacementID: newID, ExpansionKey: key}); err != nil {
+		return err
+	}
 	var lineage templateReviewLineage
 	err := completionRecord(ctx, tx, "template_review_lineage", oldID, &lineage)
 	if err == nil {
