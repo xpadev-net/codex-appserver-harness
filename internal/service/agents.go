@@ -62,6 +62,24 @@ func (l LiveAgents) Run(ctx context.Context, w domain.WorkItem, op domain.Operat
 	if !l.Config.IsolationVerified {
 		return worker.Run{}, errors.New("execution isolation is not verified")
 	}
+	var previousProcess AgentProcess
+	if err := l.Store.Record(ctx, "agent_process", op.ID, &previousProcess); err == nil {
+		var proof AgentStopProof
+		if previousProcess.OperationID != op.ID || previousProcess.WorkItemID != w.ID {
+			return worker.Run{}, errors.New("saved agent process source conflict")
+		}
+		if err := l.Store.Record(ctx, "agent_stop_proof", op.ID, &proof); err != nil {
+			if !missing(err) {
+				return worker.Run{}, err
+			}
+			return worker.Run{}, process.ErrUnconfirmed
+		}
+		if !agentProofMatches(previousProcess, proof) {
+			return worker.Run{}, process.ErrUnconfirmed
+		}
+	} else if !missing(err) {
+		return worker.Run{}, err
+	}
 	home := filepath.Join(l.Config.Root, "worker-homes", w.ID)
 	if err := os.MkdirAll(home, 0700); err != nil {
 		return worker.Run{}, err
@@ -314,7 +332,7 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			return err
 		}
 	}
-	if errors.Is(runErr, ErrDispatchHeld) {
+	if errors.Is(runErr, ErrDispatchHeld) && !errors.Is(runErr, process.ErrUnconfirmed) {
 		return c.Store.ReturnUnsent(context.WithoutCancel(ctx), op.ID, "operator state changed before turn/start")
 	}
 	if runErr != nil && !errors.Is(runErr, process.ErrUnconfirmed) && r.ID != "" && (r.State == "unknown" || r.State == "starting") && ctx.Err() == nil {
@@ -325,7 +343,7 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 			}
 		}
 	}
-	if r.ID != "" {
+	if r.ID != "" || errors.Is(runErr, process.ErrUnconfirmed) {
 		active := runErr != nil && !errors.Is(runErr, process.ErrUnconfirmed) && (r.State == "unknown" || r.State == "starting" || r.State == "running" || r.State == "inProgress")
 		if err = c.Store.Put(context.WithoutCancel(ctx), "reconcile_needed", w.ID, w.ID, ReconcileIntent{OperationID: op.ID, Active: active}); err != nil {
 			return err
@@ -335,7 +353,11 @@ func (c *Controller) agent(ctx context.Context, w domain.WorkItem, op domain.Ope
 		if r.ID != "" {
 			_ = c.Store.Put(context.WithoutCancel(ctx), "last_run", w.ID, w.ID, r)
 		}
-		return c.reject(context.WithoutCancel(ctx), w, op, fmt.Sprintf("agent %s; inspect run %s and resume information", r.State, op.ID))
+		reason := fmt.Sprintf("agent %s; inspect run %s and resume information", r.State, op.ID)
+		if errors.Is(runErr, process.ErrUnconfirmed) {
+			reason = "agent process stopping is unconfirmed; inspect operation " + op.ID
+		}
+		return c.reject(context.WithoutCancel(ctx), w, op, reason)
 	}
 	if r.State != "completed" {
 		return errors.New("agent adapter returned success without completed turn")

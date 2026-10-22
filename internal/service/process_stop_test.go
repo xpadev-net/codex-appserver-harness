@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,5 +115,83 @@ func TestUnconfirmedStopCannotAutomaticallyLaunchReconciliation(t *testing.T) {
 	}
 	if fake.calls != 1 {
 		t.Fatal("poll restarted unknown process", fake.calls)
+	}
+}
+
+type heldUnconfirmedStopAgent struct{ calls int }
+
+func (a *heldUnconfirmedStopAgent) Run(context.Context, domain.WorkItem, domain.Operation, string, any) (worker.Run, error) {
+	a.calls++
+	return worker.Run{}, errors.Join(ErrDispatchHeld, process.ErrUnconfirmed)
+}
+func TestUnconfirmedStoppingTakesPriorityOverHeldDispatch(t *testing.T) {
+	c, _, _, _ := setup(t)
+	fake := &heldUnconfirmedStopAgent{}
+	c.Agents = fake
+	drive(t, c, 4)
+	if fake.calls != 1 {
+		t.Fatal("held dispatch discarded stopping failure", fake.calls)
+	}
+	w, err := c.Store.Get(context.Background(), "w")
+	if err != nil || w.Phase != domain.Blocked || !strings.Contains(w.Reason, "stopping is unconfirmed") {
+		t.Fatal(w, err)
+	}
+}
+
+type startupUnconfirmedStopAgent struct{ calls int }
+
+func (a *startupUnconfirmedStopAgent) Run(_ context.Context, _ domain.WorkItem, op domain.Operation, _ string, _ any) (worker.Run, error) {
+	a.calls++
+	if a.calls <= 2 {
+		return worker.Run{ID: op.ID, ThreadID: "thread", State: "unknown"}, errors.New("lost response")
+	}
+	return worker.Run{}, process.ErrUnconfirmed
+}
+func TestEmptyRunStoppingFailureClearsOldReconciliationIntent(t *testing.T) {
+	c, _, _, _ := setup(t)
+	fake := &startupUnconfirmedStopAgent{}
+	c.Agents = fake
+	drive(t, c, 2)
+	if fake.calls != 2 {
+		t.Fatal(fake.calls)
+	}
+	drive(t, c, 2)
+	if fake.calls != 3 {
+		t.Fatal(fake.calls)
+	}
+	var intent ReconcileIntent
+	if err := c.Store.Record(context.Background(), "reconcile_needed", "w", &intent); err != nil || intent.Active {
+		t.Fatal(intent, err)
+	}
+	drive(t, c, 2)
+	if fake.calls != 3 {
+		t.Fatal("empty startup result retained restart authority", fake.calls)
+	}
+}
+func TestLiveAgentAdmissionRefusesUnconfirmedPreviousGenerationBeforeLaunch(t *testing.T) {
+	ctx := context.Background()
+	c, _, _, _ := setup(t)
+	w, err := c.Store.Get(ctx, "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := domain.Operation{ID: "previous-startup"}
+	p := AgentProcess{Generation: "unconfirmed-generation", OperationID: op.ID, WorkItemID: w.ID}
+	if err := c.Store.Put(ctx, "agent_process", op.ID, w.ID, p); err != nil {
+		t.Fatal(err)
+	}
+	// The configured executable/launcher are intentionally absent. Admission
+	// must reject before probing or launching them, including after restart.
+	run, err := (LiveAgents{Config: c.Config, Store: c.Store}).Run(ctx, w, op, "unused", nil)
+	if !errors.Is(err, process.ErrUnconfirmed) || run.ID != "" {
+		t.Fatal(run, err)
+	}
+	old := p
+	old.Generation = "older-generation"
+	if err := recordAgentStop(ctx, c.Store, old, "not_started"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (LiveAgents{Config: c.Config, Store: c.Store}).Run(ctx, w, op, "unused", nil); !errors.Is(err, process.ErrUnconfirmed) {
+		t.Fatal(err)
 	}
 }

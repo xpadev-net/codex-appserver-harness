@@ -63,7 +63,12 @@ func StartCommand(ctx context.Context, binary string, args, environment []string
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = environment
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	var groupKillOnce sync.Once
+	var groupKillErr error
+	cmd.Cancel = func() error {
+		groupKillOnce.Do(func() { groupKillErr = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+		return groupKillErr
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -113,6 +118,9 @@ func (c *Client) GroupStopped() bool { return c.groupStopped.Load() }
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		c.cancel()
+		// The context watcher may skip Cancel after the leader exits. Signal the
+		// group synchronously while the unreaped leader still owns its PID.
+		_ = c.cmd.Cancel()
 		_ = c.in.Close()
 		// The owned leader may have changed groups. Kill its unreaped process
 		// handle too, without signaling another process group's numeric PID.

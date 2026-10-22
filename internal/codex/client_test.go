@@ -8,9 +8,12 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"io"
 	"os"
+	"runtime"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestTerminalReadRepeatable(t *testing.T) {
@@ -123,5 +126,26 @@ func TestCloseConfirmsAfterCancellationButNeverWithMissingIdentity(t *testing.T)
 				t.Fatal("cancelled context hid actual stopping proof", err)
 			}
 		})
+	}
+}
+
+func TestCloseSignalsGroupBeforeContextWatcherCanSkipCancellation(t *testing.T) {
+	prior := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(prior)
+	for i := range 20 {
+		c, err := StartCommand(context.Background(), "sh", []string{"-c", "sleep 30 & wait"}, os.Environ())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Let the child fork without letting the Go context watcher race ahead of
+		// Close. The direct group signal must precede leader reaping on every run.
+		ts := syscall.NsecToTimespec(int64(10 * time.Millisecond))
+		syscall.RawSyscall(syscall.SYS_NANOSLEEP, uintptr(unsafe.Pointer(&ts)), 0, 0)
+		runtime.KeepAlive(&ts)
+		err = c.Close()
+		if !c.GroupStopped() {
+			_ = syscall.Kill(-c.ProcessIdentity().PID, syscall.SIGKILL)
+			t.Fatal("child survived leader shutdown", i, err)
+		}
 	}
 }
