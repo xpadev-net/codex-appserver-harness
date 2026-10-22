@@ -185,3 +185,31 @@ func (k *KernelStore) PlanningInputs(ctx context.Context, sessionID, after strin
 	}
 	return out, nil
 }
+
+// RunnableWake checks a saved unstarted intent without changing its ID, input
+// batch or snapshot. Runtime admission must check these conditions again.
+func (k *KernelStore) RunnableWake(ctx context.Context, id string) (WakeReservation, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return WakeReservation{}, err
+	}
+	defer tx.Rollback()
+	wake, err := wakeTx(ctx, tx, id)
+	if err != nil {
+		return wake, err
+	}
+	if wake.Intent.State != "reserved" {
+		return wake, ErrWakeHeld
+	}
+	state, err := sessionDispatchStateTx(ctx, tx, wake.Intent.SessionID)
+	if err != nil {
+		return wake, err
+	}
+	if state.Run != nil || state.Creating || !state.ProcessStopped || state.Wake == nil || state.Wake.Intent.ID != id {
+		return wake, ErrWakeHeld
+	}
+	if err = k.checkWakeTargetsTx(ctx, tx, state.Binding, wake.Intent); err != nil {
+		return wake, err
+	}
+	return wake, nil
+}

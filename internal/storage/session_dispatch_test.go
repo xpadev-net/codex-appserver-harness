@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -297,5 +298,32 @@ func TestPlanningRequeuesCurrentInitialInputAfterSharedJudgmentIsSuperseded(t *t
 	page, err = k.PlanningInputs(ctx, b.ID, "", 128)
 	if err != nil || len(page.Targets) != 2 {
 		t.Fatal("new scope and preserved input cannot progress", page, err)
+	}
+}
+
+func TestRunnableWakeRechecksSavedTargetsWithoutReservingRun(t *testing.T) {
+	ctx := context.Background()
+	k, w, task, _, request := wakeFixture(t)
+	wake, err := k.ReserveWake(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := k.RunnableWake(ctx, wake.Intent.ID)
+	if err != nil || !reflect.DeepEqual(ready, wake) {
+		t.Fatal(ready, err)
+	}
+	if _, err = k.ApplyOperatorControl(ctx, OperatorControl{Key: "pause-before-model", Target: w.Target(), TaskID: task.ID, Action: "pause", Reason: "hold notification"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.RunnableWake(ctx, wake.Intent.ID); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("pause ignored by ready wake", err)
+	}
+	var runs int
+	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_run_bindings").Scan(&runs); err != nil || runs != 0 {
+		t.Fatal(runs, err)
+	}
+	replay, err := k.Wake(ctx, wake.Intent.ID)
+	if err != nil || !reflect.DeepEqual(replay, wake) {
+		t.Fatal("eligibility read changed saved input", replay, err)
 	}
 }

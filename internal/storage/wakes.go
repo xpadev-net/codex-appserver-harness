@@ -18,6 +18,7 @@ import (
 )
 
 var ErrWakeHeld = errors.New("wake is held by session state or current policy")
+var ErrWakeInputLimit = errors.New("wake input exceeds the bounded snapshot representation")
 var ErrWakeScopeLimit = errors.New("wake exceeds the main Wave batch limit")
 var ErrWakeBusy = errors.New("session already has an unfinished wake")
 
@@ -410,7 +411,7 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 		return reservation, err
 	}
 	if err = contract.ValidateSessionInput(rawInput); err != nil {
-		return reservation, err // Leave every selected input pending for a smaller batch.
+		return reservation, errors.Join(ErrWakeInputLimit, err) // Leave every selected input pending for a smaller batch.
 	}
 	intent.RunID, err = opaqueID("run-")
 	if err != nil {
