@@ -807,3 +807,106 @@ func TestKernelSourceMaintainsMainThreadOnlyForNextMeaningfulInput(t *testing.T)
 	}
 	assertCapacity(t, k, 0)
 }
+
+func TestWavePlanToolStartsBackgroundTaskBeforeMainTurnEnds(t *testing.T) {
+	ctx := context.Background()
+	k, err := storage.OpenKernel(filepath.Join(t.TempDir(), "private", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if _, err = k.CreateOrchestrator(ctx, "main", "configured", t.TempDir(), "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	wave, err := k.CreateWave(ctx, storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "registered-request", OriginalRequest: "research and report", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "provide evidence"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "K", Limits: domain.DefaultKernelLimits()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &observingKernelSource{KernelSource: NewKernelSource(k), completed: make(chan Completion, 8)}
+	parentReady := make(chan *sourceToolProcess, 1)
+	factory := factoryFunc(func(_ context.Context, l Launch) (Process, error) {
+		p := fake(l.Binding)
+		p.threadID = l.Binding.ThreadID
+		if p.threadID == "" {
+			p.threadID = "thread-" + l.Binding.ID
+		}
+		p.turnID = "turn-" + l.Process.Request.RunID
+		if l.Binding.Kind == "orchestrator" {
+			p.manualCompletion = true
+			wrapped := &sourceToolProcess{fakeProcess: p, replies: make(chan codex.Message, 8)}
+			parentReady <- wrapped
+			return wrapped, nil
+		}
+		p.final = sourceWaiting(t, k, l.Binding)
+		return p, nil
+	})
+	loop := NewLoop(Runtime{Store: k, Factory: factory}, source)
+	loop.ReconcileEvery = time.Hour
+	cancel, _ := loopStart(t, loop)
+	defer cancel()
+	parent := await(t, parentReady)
+	var state storage.SessionDispatchState
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err = k.SessionDispatchState(ctx, "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Run != nil && state.Run.TurnID != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if state.Run == nil || state.Run.TurnID == "" {
+		t.Fatal("main turn never started")
+	}
+	invoke := func(name, callID string, args any) contract.ToolReply {
+		raw, _ := json.Marshal(args)
+		params, _ := json.Marshal(codex.DynamicToolCall{ThreadID: state.Binding.ThreadID, TurnID: state.Run.TurnID, CallID: callID, Tool: name, Arguments: raw})
+		parent.queue <- codex.Message{ID: json.RawMessage(`"` + callID + `"`), Method: "item/tool/call", Params: params}
+		reply := await(t, parent.replies)
+		if reply.Error != nil {
+			t.Fatal(reply.Error)
+		}
+		var dynamic codex.DynamicToolResponse
+		if err = json.Unmarshal(reply.Result, &dynamic); err != nil || !dynamic.Success || len(dynamic.ContentItems) != 1 {
+			t.Fatal(dynamic, err)
+		}
+		var result contract.ToolReply
+		if err = json.Unmarshal([]byte(dynamic.ContentItems[0].Text), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	created := invoke("wave_create", "create", contract.CreateWaveRequest{SchemaVersion: 1, RequestID: wave.SourceID})
+	if created.State != "accepted" || created.ResourceID != wave.ID {
+		t.Fatal(created)
+	}
+	task := contract.TaskSpec{ID: "work", Kind: "work", Instruction: "research", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{}}
+	proposal := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "research", Tasks: []contract.TaskSpec{task}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{task.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	accepted := invoke("wave_plan", "plan", contract.PlanWaveRequest{SchemaVersion: 1, Target: wave.Target(), Plan: proposal})
+	if accepted.State != "accepted" || len(accepted.SubscriptionIDs) != 1 {
+		t.Fatal(accepted)
+	}
+	completed := await(t, source.completed)
+	if completed.SessionID == "main" || completed.Err != nil {
+		t.Fatal("background Task did not progress independently", completed)
+	}
+	still, err := k.SessionDispatchState(ctx, "main")
+	if err != nil || still.Run == nil || still.ProcessStopped {
+		t.Fatal("Wave call waited for main turn completion", still, err)
+	}
+	final := contract.MainResult{SchemaVersion: 1, SessionID: "main", Decisions: []contract.MainDecision{{Target: wave.Target(), Action: "wait", Summary: "accepted background work", SubscriptionIDs: accepted.SubscriptionIDs, Remaining: []string{}, Blockers: []string{}}}}
+	raw, _ := json.Marshal(final)
+	params, _ := json.Marshal(map[string]any{"threadId": state.Binding.ThreadID, "turn": map[string]any{"id": state.Run.TurnID, "status": "completed", "items": []any{map[string]any{"type": "agentMessage", "text": string(raw)}}}})
+	parent.queue <- codex.Message{Method: "turn/completed", Params: params}
+	completed = await(t, source.completed)
+	if completed.SessionID != "main" || completed.Err != nil {
+		t.Fatal(completed)
+	}
+	after, err := k.Wave(ctx, wave.ID)
+	if err != nil || after.TasksCreated != 1 || after.Replans != 0 || after.State == domain.WaveCompleted {
+		t.Fatal("accepted was confused with completed", after, err)
+	}
+	assertCapacity(t, k, 0)
+}

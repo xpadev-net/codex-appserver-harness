@@ -95,17 +95,24 @@ func subscriptionTx(ctx context.Context, q queryer, id string) (Subscription, er
 }
 
 func (k *KernelStore) Subscribe(ctx context.Context, request SubscriptionRequest) (Subscription, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return Subscription{}, err
+	}
+	defer tx.Rollback()
+	sub, err := k.subscribeRequestTx(ctx, tx, request)
+	if err != nil {
+		return sub, err
+	}
+	return sub, tx.Commit()
+}
+func (k *KernelStore) subscribeRequestTx(ctx context.Context, tx *sql.Tx, request SubscriptionRequest) (Subscription, error) {
 	var s Subscription
 	if !request.Target.Valid() || request.SessionID == "" || strings.TrimSpace(request.Key) == "" || len(request.Key) > 256 || (request.Kind != "task_terminal" && request.Kind != "wave_terminal") || (request.Kind == "task_terminal" && request.TaskID == "") || (request.Kind == "wave_terminal" && request.TaskID != "") {
 		return s, errors.New("invalid subscription request")
 	}
 	id := structureID("subscription-", request.SessionID, request.Key)
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return s, err
-	}
-	defer tx.Rollback()
-	s, err = subscriptionTx(ctx, tx, id)
+	s, err := subscriptionTx(ctx, tx, id)
 	if err == nil {
 		if s.Request != request {
 			return s, errors.New("subscription key reused with different arguments")
@@ -179,7 +186,7 @@ func (k *KernelStore) Subscribe(ctx context.Context, request SubscriptionRequest
 	if err = k.observeSubscriptionTx(ctx, tx, s, "", sequence); err != nil {
 		return s, err
 	}
-	return s, tx.Commit()
+	return s, nil
 }
 
 func currentObservedTaskTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task) error {

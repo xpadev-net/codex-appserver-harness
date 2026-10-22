@@ -44,10 +44,11 @@ func (k *KernelStore) contextSliceTx(ctx context.Context, tx *sql.Tx, b contract
 		if scope.Target() != r.Target || b.Closed || b.Kind == "orchestrator" && scope.OrchestratorSessionID != b.ID || b.Kind == "task" && b.Target != r.Target || b.Kind != "orchestrator" && b.Kind != "task" {
 			return result, errors.New("context reader is outside the current Wave contract")
 		}
-		data, digest, err := k.inputManifestTx(ctx, tx, b, r)
+		data, digest, sourceTarget, err := k.inputManifestTx(ctx, tx, b, r)
 		if err != nil {
 			return result, err
 		}
+		r.Target = sourceTarget // returned bytes keep the immutable original input label
 		return contextBytes(data, r, "application/json", digest)
 	}
 	wave, err := loadWave(ctx, tx, r.Target.WaveID)

@@ -54,20 +54,20 @@ func (k *KernelStore) ensureOperationSubscriptionTx(ctx context.Context, tx *sql
 }
 func (k *KernelStore) applyKernelPublication(ctx context.Context, call contract.ToolInvocation, request *contract.PublishArtifactRequest, guard func(contract.SessionAuthority) error) (contract.ToolReply, error) {
 	var reply contract.ToolReply
+	digest, err := contentDigest(request)
+	if err != nil {
+		return reply, err
+	}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return reply, err
 	}
 	defer tx.Rollback()
-	authority, binding, snapshotID, err := k.kernelToolAuthorityTx(ctx, tx, call, request.Target)
+	authority, binding, snapshotID, err := k.kernelToolAuthorityTx(ctx, tx, call, request.Target, digest)
 	if err != nil {
 		return reply, err
 	}
 	if err = guard(authority); err != nil {
-		return reply, err
-	}
-	digest, err := contentDigest(request)
-	if err != nil {
 		return reply, err
 	}
 	var pub kernelPublication

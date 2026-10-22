@@ -59,7 +59,7 @@ func kernelToolTarget(command any) (string, contract.Target) {
 // kernelToolAuthorityTx binds a server-observed early turn only to the already
 // reserved, active run whose known history baseline excludes that turn. This
 // permits a tool call before turn/start replies without accepting an old turn.
-func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, call contract.ToolInvocation, target contract.Target) (contract.SessionAuthority, contract.SessionBinding, string, error) {
+func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, call contract.ToolInvocation, target contract.Target, argumentDigest string) (contract.SessionAuthority, contract.SessionBinding, string, error) {
 	var a contract.SessionAuthority
 	b, err := sessionBindingTx(ctx, tx, call.SessionID)
 	if err != nil {
@@ -135,15 +135,29 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 		if err = json.Unmarshal(raw, &scope); err != nil || scope.SchemaVersion != 1 || scope.SessionID != b.ID {
 			return a, b, "", errors.New("main tool requires a controller-scoped snapshot")
 		}
+		effective, err := effectiveRunTargetsTx(ctx, tx, b, call.RunID, snapshotID, scope.Targets)
+		if err != nil {
+			return a, b, "", err
+		}
 		if call.Name != "wave_create" {
 			wave, err := loadWaveToolScope(ctx, tx, target.WaveID)
 			if err != nil {
 				return a, b, "", err
 			}
-			if wave.OrchestratorSessionID != b.ID || !slices.Contains(scope.Targets, wave.Target()) {
+			if wave.OrchestratorSessionID != b.ID || !slices.Contains(effective, wave.Target()) {
 				return a, b, "", errors.New("main tool target is outside this run's Wave scope")
 			}
 			a.Target, a.Paused = wave.Target(), wave.DispatchPaused()
+			if target != wave.Target() {
+				replay, err := completedReplayTargetTx(ctx, tx, b, call, target, snapshotID, argumentDigest, scope.Targets, effective)
+				if err != nil {
+					return a, b, "", err
+				}
+				if replay {
+					a.Target = target
+				}
+			}
+
 			if !k.clock().Before(wave.Deadline) {
 				return a, b, "", errors.New("tool target Wave deadline exceeded")
 			}
@@ -166,21 +180,28 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	if publication, ok := command.(*contract.PublishArtifactRequest); ok {
 		return k.applyKernelPublication(ctx, call, publication, guard)
 	}
+	digest, err := contentDigest(command)
+	if err != nil {
+		return reply, err
+	}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return reply, err
 	}
 	defer tx.Rollback()
-	a, b, snapshotID, err := k.kernelToolAuthorityTx(ctx, tx, call, target)
+	a, b, snapshotID, err := k.kernelToolAuthorityTx(ctx, tx, call, target, digest)
 	if err != nil {
 		return reply, err
 	}
 	if err = guard(a); err != nil {
 		return reply, err
 	}
-	digest, err := contentDigest(command)
-	if err != nil {
-		return reply, err
+	if request, ok := command.(*contract.CreateWaveRequest); ok {
+		wave, err := k.registeredToolWaveTx(ctx, tx, b, call.RunID, snapshotID, request.RequestID)
+		if err != nil {
+			return reply, err
+		}
+		target = wave.Target()
 	}
 	var oldRaw, oldReply []byte
 	var oldName, oldDigest, oldThread, state string
@@ -204,6 +225,27 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	op := kernelToolOperation{ID: structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID), SessionID: b.ID, RunID: call.RunID, ThreadID: b.ThreadID, TurnID: call.TurnID, CallID: call.CallID, Name: call.Name, ArgumentDigest: digest, Target: target, SnapshotID: snapshotID, CreatedAt: k.clock()}
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
+	case *contract.CreateWaveRequest:
+		reply, err = k.acceptWaveToolTx(ctx, tx, op, b, target, nil)
+		if err != nil {
+			return reply, err
+		}
+	case *contract.PlanWaveRequest:
+		if b.Kind != "orchestrator" {
+			return reply, errors.New("Task cannot submit a Wave plan")
+		}
+		admission, err := k.adoptPlanTx(ctx, tx, target, op.ID, r.Plan)
+		if err != nil {
+			return reply, err
+		}
+		if err = saveRunPlanTransitionTx(ctx, tx, op, admission); err != nil {
+			return reply, err
+		}
+		reply, err = k.acceptWaveToolTx(ctx, tx, op, b, admission.Target, &admission)
+		if err != nil {
+			return reply, err
+		}
+
 	case *contract.ContextReadRequest:
 		content, err := k.contextSliceTx(ctx, tx, b, *r)
 		if err != nil {
