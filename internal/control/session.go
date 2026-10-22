@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -205,6 +206,21 @@ func (o *owner) Call(ctx context.Context, method string, params, result any) err
 		if err = o.store.CheckManagedRunSend(ctx, o.id); err != nil {
 			return err
 		}
+	}
+	if o.mode == "recovery" && method == "thread/read" {
+		var response json.RawMessage
+		err = rpc.Call(ctx, method, params, &response)
+		errorDigest := ""
+		if err != nil {
+			errorDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(err.Error())))
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_, recordErr := o.store.RecordHistoryRead(cleanup, o.id, o.reservation.Binding.ThreadID, response, errorDigest)
+		if err == nil && result != nil {
+			err = json.Unmarshal(response, result)
+		}
+		return errors.Join(err, recordErr)
 	}
 	return rpc.Call(ctx, method, params, result)
 }
