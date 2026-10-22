@@ -634,6 +634,9 @@ func (k *KernelStore) ArchiveSessionRun(ctx context.Context, sessionID, runID, r
 	if err = kernelRecordTx(ctx, tx, "session_run_disposition", runID, sessionID, map[string]string{"reason": reason}); err != nil {
 		return err
 	}
+	if err = clearSessionRunHoldTx(ctx, tx, sessionID, runID); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_run_bindings SET applied=1 WHERE run_id=?", runID); err != nil {
 		return err
 	}

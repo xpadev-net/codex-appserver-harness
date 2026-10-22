@@ -532,3 +532,215 @@ func TestKernelToolMessageWakesChildWhileMainTurnContinues(t *testing.T) {
 		t.Fatal("sender turn had to finish before recipient resumed", still, err)
 	}
 }
+
+func sourceReplan(t *testing.T, k *storage.KernelStore, b contract.SessionBinding, phase string) (*KernelSource, SessionWork, Outcome) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := k.SendMessage(ctx, storage.MessageRequest{SenderSessionID: b.ID, Target: b.Target, Key: "request-replan", Recipient: "parent", Body: "please replan the remaining work"}); err != nil {
+		t.Fatal(err)
+	}
+	source := NewKernelSource(k)
+	work := sourceTaskWork(t, source, b.ParentSessionID)
+	spec := contract.TaskSpec{ID: "new-work", Kind: "work", Instruction: "updated research", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{}}
+	proposal := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: phase, Tasks: []contract.TaskSpec{spec}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{spec.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	result := contract.MainResult{SchemaVersion: 1, SessionID: b.ParentSessionID, Decisions: []contract.MainDecision{{Target: b.Target, Action: "plan", Plan: &proposal, Summary: "replan", SubscriptionIDs: []string{}, Remaining: []string{}, Blockers: []string{}}}}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := (Runtime{Store: k, Factory: factoryFunc(func(_ context.Context, l Launch) (Process, error) {
+		p := fake(l.Binding)
+		p.threadID = "main-replan"
+		p.final = string(raw)
+		return p, nil
+	})}).Execute(ctx, *work.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source, work, out
+}
+func TestKernelSourcePermanentPlanRejectionReleasesLocalCompletion(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	source, work, out := sourceReplan(t, k, b, "research") // existing immutable phase, different spec
+	if err := source.Complete(ctx, Completion{SessionID: b.ParentSessionID, RunID: work.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal("permanent plan failure retained local flight", err)
+	}
+	state, err := k.SessionDispatchState(ctx, b.ParentSessionID)
+	if err != nil || state.Run == nil {
+		t.Fatal("invalid output was discarded", state, err)
+	}
+	page, err := source.Ready(ctx, "", 128)
+	if err != nil || len(page.Work) != 2 {
+		t.Fatal("unrelated Tasks cannot progress", page, err)
+	}
+	for _, work := range page.Work {
+		sid, _, _ := work.identity()
+		if sid == b.ParentSessionID {
+			t.Fatal("invalid plan retried a model")
+		}
+	}
+}
+func TestKernelSourcePlanStorageFailureRemainsRetryable(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	source, work, out := sourceReplan(t, k, b, "fresh-phase")
+	if _, err := k.DB.Exec("CREATE TRIGGER fail_source_plan BEFORE INSERT ON kernel_phases BEGIN SELECT RAISE(ABORT,'storage failure'); END"); err != nil {
+		t.Fatal(err)
+	}
+	err := source.Complete(ctx, Completion{SessionID: b.ParentSessionID, RunID: work.Execute.RunID, Outcome: out})
+	if err == nil || errors.Is(err, storage.ErrMainResultInvalid) {
+		t.Fatal("storage failure classified as model rejection", err)
+	}
+	if _, err = k.DB.Exec("DROP TRIGGER fail_source_plan"); err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Complete(ctx, Completion{SessionID: b.ParentSessionID, RunID: work.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestKernelSourceClearsResolvedRunHoldForFutureMainInput(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	source, work, out := sourceReplan(t, k, b, "fresh-phase")
+	if _, err := k.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "pause-main-apply", Target: b.Target, Action: "pause", Reason: "pause result adoption"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Complete(ctx, Completion{SessionID: b.ParentSessionID, RunID: work.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='kernel_dispatch_hold' AND id=?", b.ParentSessionID).Scan(&count); err != nil || count != 1 {
+		t.Fatal("hold not saved", count, err)
+	}
+	if _, err := k.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "resume-main-apply", Target: b.Target, Action: "resume", Reason: "adopt saved judgment"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.Exec("CREATE TRIGGER fail_hold_cleanup BEFORE DELETE ON records WHEN OLD.kind='kernel_dispatch_hold' BEGIN SELECT RAISE(ABORT,'hold cleanup failed'); END"); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Complete(ctx, Completion{SessionID: b.ParentSessionID, RunID: work.Execute.RunID, Outcome: out}); err == nil {
+		t.Fatal("non-atomic result/hold transition accepted")
+	}
+	var applied bool
+	if err := k.DB.QueryRow("SELECT applied FROM kernel_run_bindings WHERE run_id=?", work.Execute.RunID).Scan(&applied); err != nil || applied {
+		t.Fatal("hold cleanup failure partially applied judgment", applied, err)
+	}
+	if _, err := k.DB.Exec("DROP TRIGGER fail_hold_cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Complete(ctx, Completion{SessionID: b.ParentSessionID, RunID: work.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='kernel_dispatch_hold' AND id=?", b.ParentSessionID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("successful application retained dispatch hold", count, err)
+	}
+	tasks, err := k.Tasks(ctx, b.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.State == contract.TaskReady {
+			if _, err = k.SendMessage(ctx, storage.MessageRequest{SenderSessionID: task.SessionID, Target: task.Target(), Key: "new-question", Recipient: "parent", Body: "next question"}); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	next := sourceTaskWork(t, source, b.ParentSessionID)
+	if next.Execute == nil || next.Execute.RunID == work.Execute.RunID {
+		t.Fatal("resolved hold suppressed future input", next)
+	}
+}
+func TestKernelSourcePauseAfterSelectionDoesNotCreatePermanentHold(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	source := NewKernelSource(k)
+	work := sourceTaskWork(t, source, b.ID)
+	if _, err := k.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "pause-before-admit", Target: b.Target, TaskID: b.TaskID, Action: "pause", Reason: "pause race"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	runtime := Runtime{Store: k, Factory: factoryFunc(func(_ context.Context, l Launch) (Process, error) {
+		calls++
+		p := fake(l.Binding)
+		p.threadID = "pause-retry"
+		p.final = sourceWaiting(t, k, l.Binding)
+		return p, nil
+	})}
+	out, err := runtime.Execute(ctx, *work.Execute)
+	if err == nil || calls != 0 {
+		t.Fatal("paused selection launched a process", calls, err)
+	}
+	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: work.Execute.RunID, Outcome: out, Err: err}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "resume-before-admit", Target: b.Target, TaskID: b.TaskID, Action: "resume", Reason: "resume race"}); err != nil {
+		t.Fatal(err)
+	}
+	next := sourceTaskWork(t, source, b.ID)
+	out, err = runtime.Execute(ctx, *next.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: next.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("non-start replayed a model", calls)
+	}
+}
+func TestKernelSourcePauseDuringWakePreparationRenewsUnstartedRun(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	source := NewKernelSource(k)
+	initial := sourceTaskWork(t, source, b.ID)
+	factory, _ := sourceFactory(t, k, "initial-wait")
+	out, err := (Runtime{Store: k, Factory: factory}).Execute(ctx, *initial.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: initial.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.SendMessage(ctx, storage.MessageRequest{SenderSessionID: b.ParentSessionID, Target: b.Target, Key: "resume-message", Recipient: b.TaskID, Body: "continue"}); err != nil {
+		t.Fatal(err)
+	}
+	wake := sourceTaskWork(t, source, b.ID)
+	var failedProcess *fakeProcess
+	out, err = (Runtime{Store: k, Factory: factoryFunc(func(_ context.Context, l Launch) (Process, error) {
+		if _, e := k.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "pause-in-preparation", Target: b.Target, TaskID: b.TaskID, Action: "pause", Reason: "pause before model"}); e != nil {
+			return nil, e
+		}
+		p := fake(l.Binding)
+		p.threadID = l.Binding.ThreadID
+		failedProcess = p
+		return p, nil
+	})}).Execute(ctx, *wake.Execute)
+	if err == nil {
+		t.Fatal("pause did not reject model admission")
+	}
+	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: wake.Execute.RunID, Outcome: out, Err: err}); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range failedProcess.methods {
+		if method == "turn/start" {
+			t.Fatal("model started despite pause")
+		}
+	}
+	if _, err = k.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "resume-after-preparation", Target: b.Target, TaskID: b.TaskID, Action: "resume", Reason: "resume known non-start"}); err != nil {
+		t.Fatal(err)
+	}
+	next := sourceTaskWork(t, source, b.ID)
+	if next.Execute.RunID == wake.Execute.RunID {
+		t.Fatal("reused the stopped owner's managed run claim")
+	}
+	factory, _ = sourceFactory(t, k, "resumed-turn")
+	out, err = (Runtime{Store: k, Factory: factory}).Execute(ctx, *next.Execute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: next.Execute.RunID, Outcome: out}); err != nil {
+		t.Fatal(err)
+	}
+}

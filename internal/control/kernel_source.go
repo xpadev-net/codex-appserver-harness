@@ -170,7 +170,20 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 			return nil, false, errors.New("source hold owner conflict")
 		}
 		if hold.PreparationID == b.PreparationID {
-			return nil, false, nil
+			var applied, stopped bool
+			e := s.Store.DB.QueryRowContext(ctx, "SELECT applied,process_stopped FROM kernel_run_bindings WHERE run_id=? AND session_id=?", hold.RunID, b.ID).Scan(&applied, &stopped)
+			if errors.Is(e, sql.ErrNoRows) {
+				return nil, false, nil
+			}
+			if e != nil {
+				return nil, false, e
+			}
+			if !applied || !stopped {
+				return nil, false, nil
+			}
+			if e = s.clearAppliedHold(ctx, b.ID, hold.RunID); e != nil {
+				return nil, false, e
+			}
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, false, err
@@ -242,7 +255,7 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 		}
 	}
 	if wake != nil {
-		return &SessionWork{Execute: &ExecuteRequest{SessionID: b.ID, RunID: wake.Intent.RunID, Snapshot: wake.Snapshot, OutputSchema: schema, Validate: validate}}, false, nil
+		return s.selected(ctx, ExecuteRequest{SessionID: b.ID, RunID: wake.Intent.RunID, Snapshot: wake.Snapshot, OutputSchema: schema, Validate: validate})
 	}
 	targets := []contract.Target{b.Target}
 	if b.Kind == "orchestrator" {
@@ -272,7 +285,23 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 	if err != nil {
 		return nil, false, err
 	}
-	return &SessionWork{Execute: &ExecuteRequest{SessionID: b.ID, RunID: runID, Snapshot: snapshot, OutputSchema: schema, Validate: validate}}, false, nil
+	return s.selected(ctx, ExecuteRequest{SessionID: b.ID, RunID: runID, Snapshot: snapshot, OutputSchema: schema, Validate: validate})
+}
+
+type dispatchSelection struct {
+	SessionID  string `json:"session_id"`
+	SnapshotID string `json:"snapshot_id"`
+}
+
+func (s *KernelSource) selected(ctx context.Context, r ExecuteRequest) (*SessionWork, bool, error) {
+	if err := s.Store.Put(ctx, "kernel_dispatch_selection", r.RunID, r.SessionID, dispatchSelection{SessionID: r.SessionID, SnapshotID: r.Snapshot.ID}); err != nil {
+		return nil, false, err
+	}
+	return &SessionWork{Execute: &r}, false, nil
+}
+func (s *KernelSource) clearAppliedHold(ctx context.Context, sid, runID string) error {
+	_, err := s.Store.DB.ExecContext(ctx, "DELETE FROM records WHERE kind='kernel_dispatch_hold' AND id=? AND json_extract(payload,'$.run_id')=?", sid, runID)
+	return err
 }
 func (s *KernelSource) hold(ctx context.Context, state storage.SessionDispatchState, runID, reason string) error {
 	return s.Store.Put(ctx, "kernel_dispatch_hold", state.Binding.ID, state.Binding.ID, sourceHold{SessionID: state.Binding.ID, RunID: runID, PreparationID: state.Binding.PreparationID, Reason: reason})
@@ -296,7 +325,7 @@ func (s *KernelSource) Complete(ctx context.Context, c Completion) error {
 			if !stopped {
 				return errors.New("applied run lacks physical stopping proof")
 			}
-			return nil
+			return s.clearAppliedHold(ctx, c.SessionID, c.RunID)
 		}
 	} else if !errors.Is(runErr, sql.ErrNoRows) {
 		return runErr
@@ -309,10 +338,43 @@ func (s *KernelSource) Complete(ctx context.Context, c Completion) error {
 		if runErr == nil {
 			return errors.New("undecided completion is not the active saved run")
 		}
-		if c.Err == nil || errors.Is(c.Err, context.Canceled) || errors.Is(c.Err, context.DeadlineExceeded) || errors.Is(c.Err, storage.ErrManagedProcessHeld) || errors.Is(c.Err, storage.ErrExecutionCapacity) {
+		if c.Err == nil {
 			return nil
 		}
-		return s.hold(ctx, state, c.RunID, "execution did not reserve a run; explicit dispatch reconciliation required")
+		gated := false
+		var selection dispatchSelection
+		selectionErr := s.Store.Record(ctx, "kernel_dispatch_selection", c.RunID, &selection)
+		if selectionErr == nil {
+			if selection.SessionID != c.SessionID {
+				return errors.New("dispatch selection owner mismatch")
+			}
+			gateErr := s.Store.CheckSessionInputGates(ctx, c.SessionID, selection.SnapshotID)
+			if errors.Is(gateErr, storage.ErrWakeHeld) {
+				gated = true
+			} else if gateErr != nil {
+				return gateErr
+			}
+		} else if !errors.Is(selectionErr, sql.ErrNoRows) {
+			return selectionErr
+		}
+		retryable := gated || errors.Is(c.Err, context.Canceled) || errors.Is(c.Err, context.DeadlineExceeded) || errors.Is(c.Err, storage.ErrManagedProcessHeld) || errors.Is(c.Err, storage.ErrExecutionCapacity)
+		if !retryable {
+			if err = s.hold(ctx, state, c.RunID, "execution did not reserve a run; explicit dispatch reconciliation required"); err != nil {
+				return err
+			}
+		}
+		// A saved model run never existed, so after the physical stop proof an
+		// unstarted wake can be released without replaying any model call. Fresh
+		// reservations must not reuse a run claim owned by the stopped preparation.
+		if state.Wake != nil && state.Wake.Intent.RunID == c.RunID && state.ProcessStopped && !state.Creating {
+			if err = s.Store.ReleaseUnstartedWake(ctx, state.Wake.Intent.ID, "preparation ended before model run reservation"); err != nil {
+				return err
+			}
+		}
+		s.mu.Lock()
+		delete(s.planningAfter, c.SessionID)
+		s.mu.Unlock()
+		return nil
 	}
 	if state.Run.ID != c.RunID {
 		return errors.New("completion does not match active saved run")
@@ -337,10 +399,16 @@ func (s *KernelSource) Complete(ctx context.Context, c Completion) error {
 			s.report(err)
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return s.clearAppliedHold(ctx, c.SessionID, c.RunID)
 	case "failed", "interrupted", "blocked":
 		if state.Binding.Kind == "task" {
-			return s.Store.ArchiveSessionRun(ctx, c.SessionID, c.RunID, "known stopped "+state.Run.State+" Task run requires recovery")
+			if err := s.Store.ArchiveSessionRun(ctx, c.SessionID, c.RunID, "known stopped "+state.Run.State+" Task run requires recovery"); err != nil {
+				return err
+			}
+			return s.clearAppliedHold(ctx, c.SessionID, c.RunID)
 		}
 		return s.hold(ctx, state, c.RunID, "known stopped main run requires explicit recovery")
 	case "starting", "running", "inProgress", "unknown":

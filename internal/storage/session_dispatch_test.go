@@ -327,3 +327,48 @@ func TestRunnableWakeRechecksSavedTargetsWithoutReservingRun(t *testing.T) {
 		t.Fatal("eligibility read changed saved input", replay, err)
 	}
 }
+
+func TestReleaseUnstartedWakePreservesInputsAndRequiresNoModelRun(t *testing.T) {
+	ctx := context.Background()
+	k, _, task, m, request := wakeFixture(t)
+	wake, err := k.ReserveWake(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := prepareWakeSession(t, k, task.SessionID)
+	if err = k.ReleaseUnstartedWake(ctx, wake.Intent.ID, "known non-start"); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("preparation was not stopped", err)
+	}
+	if err = k.MarkSessionStopped(ctx, b.ID, b.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.ReleaseUnstartedWake(ctx, wake.Intent.ID, "known non-start"); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.ReleaseUnstartedWake(ctx, wake.Intent.ID, "known non-start"); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.ReleaseUnstartedWake(ctx, wake.Intent.ID, "different reason"); err == nil {
+		t.Fatal("non-start audit reason overwritten")
+	}
+	entries, err := k.Mailbox(ctx, b.ID, 0, 10)
+	if err != nil || len(entries) != 1 || entries[0].Message.ID != m.ID || entries[0].State != "pending" || entries[0].RunID != "" {
+		t.Fatal(entries, err)
+	}
+	request.Key = "fresh-after-non-start"
+	next, err := k.ReserveWake(ctx, request)
+	if err != nil || next.Intent.RunID == wake.Intent.RunID {
+		t.Fatal(next, err)
+	}
+	b = prepareWakeSession(t, k, b.ID)
+	run := wakeStartingRun(k, b, next)
+	if err = k.ReserveSessionRun(ctx, b, next.Snapshot, run); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.ReleaseUnstartedWake(ctx, next.Intent.ID, "pretend model did not start"); !errors.Is(err, ErrWakeHeld) {
+		t.Fatal("journaled model input was replayed", err)
+	}
+}
