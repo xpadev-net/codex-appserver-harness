@@ -108,6 +108,10 @@ func (k *KernelStore) BeginMainThreadReplacement(ctx context.Context, expected c
 	return out, tx.Commit()
 }
 func (k *KernelStore) rotationSnapshotTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, snapshot contract.InputSnapshot) ([]contract.Target, error) {
+	return k.rotationSnapshotScopeTx(ctx, tx, b, snapshot, true)
+}
+
+func (k *KernelStore) rotationSnapshotScopeTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, snapshot contract.InputSnapshot, dispatchEligible bool) ([]contract.Target, error) {
 	if b.Kind != "orchestrator" || b.Closed || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) {
 		return nil, ErrMainRotationHeld
 	}
@@ -131,7 +135,7 @@ func (k *KernelStore) rotationSnapshotTx(ctx context.Context, tx *sql.Tx, b cont
 		if err != nil {
 			return nil, err
 		}
-		if w.OrchestratorSessionID != b.ID || w.Target() != target || w.DispatchPaused() || !k.clock().Before(w.Deadline) {
+		if w.OrchestratorSessionID != b.ID || w.Target() != target || dispatchEligible && (w.DispatchPaused() || !k.clock().Before(w.Deadline)) {
 			return nil, ErrMainRotationHeld
 		}
 	}

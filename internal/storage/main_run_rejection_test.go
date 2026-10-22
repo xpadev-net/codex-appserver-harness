@@ -7,16 +7,22 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-func mainRejectionFixture(t *testing.T) (*KernelStore, contract.SessionBinding, []domain.Wave, contract.SessionRun, MainRunRejectionRequest) {
+func mainRejectionFixture(t *testing.T, outcomes ...string) (*KernelStore, contract.SessionBinding, []domain.Wave, contract.SessionRun, MainRunRejectionRequest) {
 	t.Helper()
 	ctx := context.Background()
 	k, b, waves, run, _ := mainResultFixture(t)
 	run.State, run.TurnID, run.Final = "completed", "main-turn", "invalid main output"
+	if len(outcomes) > 0 {
+		run.State = outcomes[0]
+		run.TurnID = ""
+		run.Final = ""
+	}
 	if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
 		t.Fatal(err)
 	}
@@ -263,5 +269,59 @@ func TestMainRejectionReturnsSharedMessagesToPending(t *testing.T) {
 	newer, err := k.ReserveWake(ctx, WakeRequest{SessionID: b.ID, Key: "retry-shared", NotificationIDs: []string{pending[0].ID, pending[1].ID}, IncludeSessionContext: true})
 	if err != nil || newer.Intent.RunID == run.ID {
 		t.Fatal(newer, err)
+	}
+}
+
+func TestKnownMainRejectionSettlesDirectionPauseAndDeadlineWithoutGrantingDispatch(t *testing.T) {
+	for _, mode := range []string{"direction", "pause", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, b, waves, _, request := mainRejectionFixture(t, "failed")
+			var direction WaveDirection
+			switch mode {
+			case "direction":
+				direction = mustDirection(t, k, waves[0])
+				if _, err := k.ApplyWaveDirection(ctx, direction.ID); !errors.Is(err, ErrDirectionHeld) {
+					t.Fatal("unsettled run did not hold direction", err)
+				}
+			case "pause":
+				mustControl(t, k, operatorRequest(waves[0], "pause", "pause", ""))
+			case "deadline":
+				expired := waves[0].Deadline
+				if waves[1].Deadline.After(expired) {
+					expired = waves[1].Deadline
+				}
+				k.Now = func() time.Time { return expired.Add(time.Second) }
+			}
+			if _, err := k.RejectStoppedMainRun(ctx, request); err != nil {
+				t.Fatal("dispatch gate prevented stopped-run settlement", err)
+			}
+			if err := k.CheckSessionInputGates(ctx, b.ID, request.Snapshot.ID); err == nil {
+				t.Fatal("rejection granted old gated dispatch")
+			}
+			eligible, err := k.PlanningInputs(ctx, b.ID, "", 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, target := range eligible.Targets {
+				if mode == "deadline" || target.WaveID == waves[0].ID {
+					t.Fatal("gated Wave became runnable", eligible)
+				}
+			}
+			if mode == "direction" {
+				if _, err = k.ApplyWaveDirection(ctx, direction.ID); err != nil {
+					t.Fatal("rejection did not unblock direction", err)
+				}
+				current, err := k.Wave(ctx, waves[0].ID)
+				if err != nil || current.ScopeRevision != waves[0].ScopeRevision+1 || current.PendingDirectionID != "" || current.MainTurns != 1 {
+					t.Fatal(current, err)
+				}
+			} else if mode == "pause" {
+				current, err := k.Wave(ctx, waves[0].ID)
+				if err != nil || !current.Paused {
+					t.Fatal("rejection removed operator pause", current, err)
+				}
+			}
+		})
 	}
 }

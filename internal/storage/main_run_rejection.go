@@ -121,7 +121,10 @@ func (k *KernelStore) RejectStoppedMainRun(ctx context.Context, r MainRunRejecti
 	if err != nil {
 		return out, err
 	}
-	nextTargets, err := k.rotationSnapshotTx(ctx, tx, b, r.Snapshot)
+	// Settling a known stopped run is independent of permission to send its
+	// successor. In particular a queued direction waits for this disposition;
+	// ordinary Source/Runtime gates continue to hold dispatch until it applies.
+	nextTargets, err := k.rotationSnapshotScopeTx(ctx, tx, b, r.Snapshot, false)
 	if err != nil {
 		return out, err
 	}
