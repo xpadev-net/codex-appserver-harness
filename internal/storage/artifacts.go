@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -163,15 +164,22 @@ func resultArtifactReferences(result contract.TaskResult) []string {
 	return unique
 }
 func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImport, data []byte) (domain.Artifact, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	defer tx.Rollback()
+	a, err := k.reserveArtifactTx(ctx, tx, request, data)
+	if err != nil {
+		return a, err
+	}
+	return a, tx.Commit()
+}
+func (k *KernelStore) reserveArtifactTx(ctx context.Context, tx *sql.Tx, request ArtifactImport, data []byte) (domain.Artifact, error) {
 	var a domain.Artifact
 	if strings.TrimSpace(request.Key) == "" || len(request.Key) > 256 {
 		return a, errors.New("Artifact import key required")
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return a, err
-	}
-	defer tx.Rollback()
 	digest := fmt.Sprintf("%x", sha256.Sum256(data))
 	identity, err := contentDigest(struct {
 		Request ArtifactImport
@@ -215,8 +223,12 @@ func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImpor
 		if task.Paused || task.State.Terminal() || request.Origin.Kind != "task" || request.Origin.Reference != task.ID {
 			return a, errors.New("Task cannot invent Artifact provenance")
 		}
+	} else if request.Origin.Kind == "session" {
+		if request.Origin.Reference != b.ID {
+			return a, errors.New("main cannot invent session provenance")
+		}
 	} else if request.Origin.Kind != "repository" && request.Origin.Kind != "external" {
-		return a, errors.New("main imports require explicit repository/external provenance")
+		return a, errors.New("main imports require explicit repository/external/session provenance")
 	}
 	if int64(len(data)) > w.Policy.Limits.ArtifactBytes {
 		return a, errors.New("Artifact byte limit exceeded")
@@ -272,13 +284,16 @@ func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImpor
 	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_budget_ledger(wave_id,operation_key,kind,amount,unknown,payload) VALUES(?,?,'artifact_bytes',?,0,?)", w.ID, a.ID, a.Bytes, []byte(`{}`)); err != nil {
 		return a, err
 	}
-	return a, tx.Commit()
+	return a, nil
 }
 
 // ImportArtifact first commits a capacity reservation, then saves and fsyncs the
 // bytes, then commits the immutable manifest/event. Crash retries use the same
 // ID; staged imports continue to consume capacity until resolved.
 func (k *KernelStore) ImportArtifact(ctx context.Context, request ArtifactImport, data []byte) (domain.Artifact, error) {
+	return k.importArtifact(ctx, request, data, false)
+}
+func (k *KernelStore) importArtifact(ctx context.Context, request ArtifactImport, data []byte, nonblocking bool) (domain.Artifact, error) {
 	a, err := k.reserveArtifact(ctx, request, data)
 	if err != nil {
 		return a, err
@@ -300,7 +315,7 @@ func (k *KernelStore) ImportArtifact(ctx context.Context, request ArtifactImport
 		return a, err
 	}
 	defer file.Close()
-	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err = lockArtifactWriter(ctx, file, nonblocking); err != nil {
 		return a, err
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
@@ -339,6 +354,27 @@ func (k *KernelStore) ImportArtifact(ctx context.Context, request ArtifactImport
 		return a, err
 	}
 	return k.commitArtifact(ctx, a)
+}
+func lockArtifactWriter(ctx context.Context, file *os.File, nonblocking bool) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if nonblocking || (!errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN)) {
+			return err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 func privateArtifactFile(file *os.File) error {
 	info, err := file.Stat()
@@ -401,7 +437,10 @@ func (k *KernelStore) commitArtifact(ctx context.Context, a domain.Artifact) (do
 		return a, err
 	}
 	if current.State == "committed" {
-		return current, nil
+		if err = k.finishKernelPublicationTx(ctx, tx, current); err != nil {
+			return current, err
+		}
+		return current, tx.Commit()
 	}
 	if !reflect.DeepEqual(current, a) || a.State != "staged" {
 		return a, errors.New("Artifact changed before manifest commit")
@@ -418,6 +457,9 @@ func (k *KernelStore) commitArtifact(ctx context.Context, a domain.Artifact) (do
 	// publication in a newer direction/replan.
 	w.ScopeRevision, w.PlanRevision, w.Policy.Revision = a.ScopeRevision, a.PlanRevision, a.PolicyRevision
 	if err = k.waveEventTx(ctx, tx, w, "artifact_committed", a.TaskID, a.ID+":committed", a); err != nil {
+		return a, err
+	}
+	if err = k.finishKernelPublicationTx(ctx, tx, a); err != nil {
 		return a, err
 	}
 	return a, tx.Commit()

@@ -485,6 +485,9 @@ func (k *KernelStore) ArchiveSessionRun(ctx context.Context, sessionID, runID, r
 	if err = k.finishWakeTx(ctx, tx, sessionID, runID, wakeOutcome); err != nil {
 		return err
 	}
+	if err = k.finishDirectOperationInputsTx(ctx, tx, sessionID, runID, wakeOutcome); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

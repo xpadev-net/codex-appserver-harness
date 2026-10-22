@@ -54,9 +54,12 @@ func (a Artifact) Validate() error {
 		return err
 	}
 	switch a.Origin.Kind {
-	case "task", "repository", "external":
+	case "task", "repository", "external", "session":
 	default:
 		return errors.New("unsupported Artifact origin")
+	}
+	if a.Origin.Kind == "session" && (a.TaskID != "" || a.Origin.Reference != a.SessionID) {
+		return errors.New("session Artifact origin mismatch")
 	}
 	if a.Origin.Kind == "task" && (a.TaskID == "" || a.Origin.Reference != a.TaskID) {
 		return errors.New("Task Artifact origin mismatch")
