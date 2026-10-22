@@ -217,6 +217,12 @@ func protectPhaseEvidenceTx(ctx context.Context, tx *sql.Tx, protected map[strin
 		if err != nil {
 			return err
 		}
+		// A direction may advance scope before a replacement plan is adopted.
+		// Its outgoing bindings remain historical, even while PlanRevision still
+		// identifies the last stored plan. Their artifacts follow normal retention.
+		if task.ScopeRevision < wave.ScopeRevision {
+			continue
+		}
 		if err = currentObservedTaskTx(ctx, tx, wave, task); err != nil {
 			return err
 		}

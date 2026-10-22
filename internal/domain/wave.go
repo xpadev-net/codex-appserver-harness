@@ -68,6 +68,8 @@ type Wave struct {
 	Policy                WavePolicy      `json:"policy"`
 	State                 WaveState       `json:"state"`
 	Paused                bool            `json:"paused"`
+	PendingDirectionID    string          `json:"pending_direction_id,omitempty"`
+	DirectionID           string          `json:"direction_id,omitempty"`
 	Reason                string          `json:"reason"`
 	CreatedAt             time.Time       `json:"created_at"`
 	Deadline              time.Time       `json:"deadline"`
@@ -82,6 +84,10 @@ type Wave struct {
 func (w Wave) Target() contract.Target {
 	return contract.Target{WaveID: w.ID, ScopeRevision: w.ScopeRevision, PlanRevision: w.PlanRevision, PolicyRevision: w.Policy.Revision}
 }
+
+// A direction request stops new dispatch independently of manual pause. Resume
+// cannot remove that barrier before the stopped prior revision is settled.
+func (w Wave) DispatchPaused() bool { return w.Paused || w.PendingDirectionID != "" }
 func (w Wave) Validate() error {
 	if w.ID == "" || w.OrchestratorSessionID == "" || (w.Source != "direct" && w.Source != "github") || w.SourceID == "" || strings.TrimSpace(w.OriginalRequest) == "" || !utf8.ValidString(w.OriginalRequest) || len(w.OriginalRequest) > 8<<20 || w.ScopeRevision < 1 || w.PlanRevision < 1 || w.Policy.Revision < 1 || w.CreatedAt.IsZero() || !w.Deadline.After(w.CreatedAt) {
 		return errors.New("invalid Wave identity/request")

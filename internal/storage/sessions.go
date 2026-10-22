@@ -63,7 +63,7 @@ func sessionDispatchableTx(ctx context.Context, tx *sql.Tx, b contract.SessionBi
 	if err != nil {
 		return err
 	}
-	if task.State.Terminal() || task.Paused || wave.Paused || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || wave.Target() != task.Target() {
+	if task.State.Terminal() || task.Paused || wave.DispatchPaused() || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || wave.Target() != task.Target() {
 		return errors.New("Task/Wave is stale, paused or terminal")
 	}
 	return nil

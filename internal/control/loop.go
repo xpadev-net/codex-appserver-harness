@@ -124,7 +124,7 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 	results := make(chan Completion, 1)
 	abandon := make(chan struct{})
 	flights := map[string]*flight{}
-	var workCursor, processCursor, waveCursor, actionCursor string
+	var workCursor, processCursor, waveCursor, actionCursor, directionCursor string
 	// Always scan on startup. Loss of every hint merely defers a scan to ticker.
 	scan := true
 	defer func() {
@@ -170,6 +170,13 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 				l.report(e)
 			}
 			finish()
+			changed, e := l.maintainDirections(ctx, &directionCursor)
+			if e != nil {
+				l.report(e)
+			}
+			if changed {
+				workCursor = ""
+			}
 			if ctx.Err() != nil {
 				continue
 			}
@@ -320,6 +327,27 @@ func (l *Loop) maintain(ctx context.Context, flights map[string]*flight, process
 		errs = append(errs, l.maintainAction(ctx, a, flights))
 	}
 	return errors.Join(errs...)
+}
+
+// Apply directions after Complete has disposed prior results, before selecting
+// more work in the same event iteration. Failed application preserves the gate.
+func (l *Loop) maintainDirections(ctx context.Context, cursor *string) (bool, error) {
+	k := l.Runtime.Store
+	directions, err := k.PendingWaveDirections(ctx, *cursor, 128)
+	if err != nil {
+		return false, err
+	}
+	*cursor = directions.NextAfter
+	changed := false
+	var errs []error
+	for _, d := range directions.Directions {
+		result, err := k.ApplyWaveDirection(ctx, d.ID)
+		if err != nil && !errors.Is(err, storage.ErrDirectionHeld) {
+			errs = append(errs, err)
+		}
+		changed = changed || err == nil && result.State == "applied"
+	}
+	return changed, errors.Join(errs...)
 }
 func (l *Loop) maintainProcess(ctx context.Context, p storage.ManagedProcess, flights map[string]*flight) error {
 	if f := flights[p.Request.Binding.ID]; f != nil {

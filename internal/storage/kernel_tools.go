@@ -106,7 +106,7 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 		if wave.Target() != b.Target || task.ParentSessionID != wave.OrchestratorSessionID {
 			return a, b, "", errors.New("Task tool source has been superseded")
 		}
-		a.Target, a.Paused = wave.Target(), wave.Paused || task.Paused
+		a.Target, a.Paused = wave.Target(), wave.DispatchPaused() || task.Paused
 		a.Canceled = wave.State == domain.WaveCanceled
 		a.Closed = a.Closed || wave.State == domain.WaveCompleted
 		if !k.clock().Before(wave.Deadline) {
@@ -137,7 +137,7 @@ func (k *KernelStore) kernelToolAuthorityTx(ctx context.Context, tx *sql.Tx, cal
 			if wave.OrchestratorSessionID != b.ID || !slices.Contains(scope.Targets, wave.Target()) {
 				return a, b, "", errors.New("main tool target is outside this run's Wave scope")
 			}
-			a.Target, a.Paused = wave.Target(), wave.Paused
+			a.Target, a.Paused = wave.Target(), wave.DispatchPaused()
 			if !k.clock().Before(wave.Deadline) {
 				return a, b, "", errors.New("tool target Wave deadline exceeded")
 			}
@@ -311,7 +311,7 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 		PendingNotifications   int              `json:"pending_notifications"`
 		NextTasksAfter         string           `json:"next_tasks_after"`
 		NextSubscriptionsAfter string           `json:"next_subscriptions_after"`
-	}{Target: target, WaveState: wave.State, Paused: wave.Paused, SessionID: b.ID, TaskID: b.TaskID, Tasks: []taskState{}, SubscriptionIDs: []string{}}
+	}{Target: target, WaveState: wave.State, Paused: wave.DispatchPaused(), SessionID: b.ID, TaskID: b.TaskID, Tasks: []taskState{}, SubscriptionIDs: []string{}}
 	allowed := map[string]bool{}
 	if b.Kind == "task" {
 		task, err := loadTask(ctx, tx, b.TaskID)
@@ -323,7 +323,7 @@ func (k *KernelStore) kernelStateTx(ctx context.Context, tx *sql.Tx, b contract.
 			allowed[structureID("task-", wave.ID, dep.TaskID)] = true
 		}
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT t.id,t.state FROM kernel_tasks t JOIN kernel_plan_bindings p ON p.task_id=t.id WHERE p.wave_id=? AND p.revision=? AND ?=1 AND t.id>? ORDER BY t.id", wave.ID, wave.PlanRevision, tasksEnabled, tasksAfter)
+	rows, err := tx.QueryContext(ctx, "SELECT t.id,t.state FROM kernel_tasks t JOIN kernel_plan_bindings p ON p.task_id=t.id WHERE p.wave_id=? AND p.revision=? AND json_extract(t.payload,'$.scope_revision')=? AND json_extract(t.payload,'$.policy_revision')=? AND ?=1 AND t.id>? ORDER BY t.id", wave.ID, wave.PlanRevision, wave.ScopeRevision, wave.Policy.Revision, tasksEnabled, tasksAfter)
 	if err != nil {
 		return "", err
 	}
