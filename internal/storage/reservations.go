@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 var ErrExecutionCapacity = errors.New("controller execution capacity is exhausted")
@@ -179,6 +181,54 @@ func resourcePath(path string) (string, error) {
 	}
 	return filepath.Join(real, filepath.Base(path)), nil
 }
+
+// A subdirectory shares the checkout/index with its containing worktree. A
+// linked worktree has its own git-dir, while shared common-dir operations use
+// the separate repository lease in the operation scheduler.
+func worktreeResource(ctx context.Context, path string) (string, error) {
+	canonical, err := resourcePath(path)
+	if err != nil {
+		return "", err
+	}
+	existing := canonical
+	for {
+		info, err := os.Stat(existing)
+		if err == nil {
+			if !info.IsDir() {
+				return "", errors.New("workspace resource is not a directory")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", err
+		}
+		existing = parent
+	}
+	for directory := existing; ; directory = filepath.Dir(directory) {
+		_, err := os.Lstat(filepath.Join(directory, ".git"))
+		if err == nil {
+			identity, err := workspace.Git(ctx, existing, "rev-parse", "--absolute-git-dir")
+			if err != nil {
+				return "", err
+			}
+			identity = strings.TrimSpace(identity)
+			if !filepath.IsAbs(identity) {
+				return "", errors.New("Git returned a non-absolute worktree identity")
+			}
+			return resourcePath(identity)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		if filepath.Dir(directory) == directory {
+			return canonical, nil
+		}
+	}
+}
 func claimResourceTx(ctx context.Context, tx *sql.Tx, resource string, r ProcessReservation) (ResourceLease, error) {
 	lease := ResourceLease{Resource: resource, Generation: 1}
 	var owner, state string
@@ -269,7 +319,7 @@ func (k *KernelStore) reserveSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 		return ErrExecutionCapacity
 	}
 	r := ProcessReservation{Kind: "app_server", ID: b.PreparationID, SessionID: b.ID, WaveID: b.Target.WaveID, State: "held", PolicyRevision: p.Revision, Resources: []ResourceLease{}, CreatedAt: k.clock()}
-	path, err := resourcePath(b.CWD)
+	path, err := worktreeResource(ctx, b.CWD)
 	if err != nil {
 		return err
 	}
@@ -289,7 +339,7 @@ func (k *KernelStore) reserveSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 			rows.Close()
 			return err
 		}
-		otherPath, err := resourcePath(other.CWD)
+		otherPath, err := worktreeResource(ctx, other.CWD)
 		if err != nil {
 			rows.Close()
 			return err

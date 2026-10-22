@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 func capacityMain(t *testing.T, k *KernelStore, id, cwd string) contract.SessionBinding {
@@ -314,5 +316,41 @@ func TestCorruptExecutionPolicyCannotResetLimitsOrAdmitProcesses(t *testing.T) {
 	var stopped int
 	if err = k.DB.QueryRow("SELECT process_stopped FROM kernel_sessions WHERE id=?", b.ID).Scan(&stopped); err != nil || stopped != 1 {
 		t.Fatal(stopped, err)
+	}
+}
+
+func TestWorktreeLeaseCoversSubdirectoriesAndKeepsLinkedWorktreesIndependent(t *testing.T) {
+	ctx := context.Background()
+	k, _ := waveStoreFixture(t)
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init", "--initial-branch=trunk"}, {"config", "user.name", "test"}, {"config", "user.email", "test@example.invalid"}, {"-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "base"}} {
+		if _, err := workspace.Git(ctx, repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subdir := filepath.Join(repo, "subdir")
+	if err := os.Mkdir(subdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	a := capacityMain(t, k, "repo-root", repo)
+	b := capacityMain(t, k, "repo-child", subdir)
+	a = reserveSessionFixture(t, k, a)
+	if err := k.ReserveSessionThread(ctx, b); !errors.Is(err, ErrResourceBusy) {
+		t.Fatal("CWD within one worktree bypassed lease", err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if _, err := workspace.Git(ctx, repo, "worktree", "add", "-b", "linked", "--", linked, "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	c := capacityMain(t, k, "linked-tree", linked)
+	if err := k.ReserveSessionThread(ctx, c); err != nil {
+		t.Fatal("independent linked worktree could not reserve its own checkout", err)
+	}
+	// The same checkout may be used after its prior process is proven stopped.
+	if err := k.MarkSessionStopped(ctx, a.ID, a.PreparationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ReserveSessionThread(ctx, b); err != nil {
+		t.Fatal(err)
 	}
 }
