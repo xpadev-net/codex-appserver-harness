@@ -332,6 +332,17 @@ func (k *KernelStore) adoptPlanTx(ctx context.Context, tx *sql.Tx, target contra
 	return k.adoptPlanModeTx(ctx, tx, target, key, plan, "parent")
 }
 func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target contract.Target, key string, plan contract.PlanProposal, mode string) (PlanAdmission, error) {
+	// Optional empty source lists encode identically to absent lists. Normalize
+	// them before immutable-spec comparisons and replay receipts as well.
+	plan.Phases = append([]contract.PhaseSpec{}, plan.Phases...)
+	for i := range plan.Phases {
+		plan.Phases[i].Tasks = append([]contract.TaskSpec{}, plan.Phases[i].Tasks...)
+		for j := range plan.Phases[i].Tasks {
+			if len(plan.Phases[i].Tasks[j].SourceResultIDs) == 0 {
+				plan.Phases[i].Tasks[j].SourceResultIDs = nil
+			}
+		}
+	}
 	receipt := PlanAdmission{Mode: mode, RequestTarget: target, Key: key, Plan: plan, CreatedTaskIDs: []string{}, CarriedTaskIDs: []string{}}
 	if mode != "parent" && mode != "template" {
 		return receipt, invalidPlanAdmission("invalid plan adoption authority")
@@ -597,6 +608,13 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 }
 func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec) (string, error) {
 	references := map[string]string{}
+	sources, err := k.sourceResultDigestsTx(ctx, tx, wave, spec)
+	if err != nil {
+		return "", err
+	}
+	for key, digest := range sources {
+		references[key] = digest
+	}
 	for _, id := range spec.InputArtifactIDs {
 		artifact, err := k.currentArtifactTx(ctx, tx, wave, id)
 		if err != nil {
