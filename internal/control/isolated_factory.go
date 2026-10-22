@@ -24,6 +24,7 @@ import (
 // attestation about descendant containment; per-launch probes remain mandatory.
 type IsolatedConfig struct {
 	PrivateRoot       string
+	SessionAuthFile   string // Optional access-token source owned by the authorized session.
 	Model             string
 	CodexBinary       string
 	WorkerCodexHome   string // Dedicated authentication/configuration template.
@@ -167,7 +168,21 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	if err != nil || actualHome != home {
 		return fail(errors.New("sandbox home must not redirect through a symlink"))
 	}
-	profile, err := sessionProfile(auth, home)
+	var tokenSource *sessionTokenSource
+	if c.SessionAuthFile != "" {
+		path, err := existingAbsolute(c.SessionAuthFile)
+		if err != nil || path != c.SessionAuthFile || pathContains(workspace, path) || pathContains(home, path) {
+			return fail(errors.New("canonical private session authentication source required"))
+		}
+		source := sessionTokenSource{path: path}
+		credentials, err := source.Tokens(ctx)
+		if err != nil {
+			return fail(err)
+		}
+		source.account = credentials.AccountID
+		tokenSource = &source
+	}
+	profile, err := sessionProfileWithAuth(auth, home, tokenSource != nil)
 	if err != nil {
 		return fail(err)
 	}
@@ -177,7 +192,7 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	}
 	environment := []string{"PATH=" + isolatedPath, "HOME=" + home, "HARNESS_SANDBOX_HOME=" + home, "HARNESS_LAUNCH_MODE=worker", "CODEX_HOME=" + profile, "HARNESS_WORKSPACE=" + workspace, "HARNESS_CODEX_BINARY=" + binary, "HARNESS_GIT_DIR=" + gitdir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false", "SSH_ASKPASS=/bin/false"}
 	for _, name := range []string{"OPENAI_API_KEY", "OPENAI_BASE_URL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
-		if value, ok := os.LookupEnv(name); ok {
+		if value, ok := os.LookupEnv(name); ok && (name != "OPENAI_API_KEY" || tokenSource == nil) {
 			environment = append(environment, name+"="+value)
 		}
 	}
@@ -185,6 +200,9 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	// has created its socket. The launcher mounts only the allowed descendants.
 
 	hidden := []string{auth, filepath.Join(root, "state.db"), filepath.Join(root, ipc.SocketName), filepath.Join(userHome, ".config", "gh"), filepath.Join(userHome, ".git-credentials"), filepath.Join(controllerHome, "auth.json")}
+	if tokenSource != nil {
+		hidden = append(hidden, tokenSource.path)
+	}
 	// Probe each shared parent independently: mounting only worker-homes or
 	// workspaces can expose siblings while still hiding the controller root.
 	for _, directory := range []string{root, filepath.Dir(home), filepath.Join(root, "workspaces")} {
@@ -235,9 +253,16 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 		return fail(errors.Join(errors.New("isolated native Codex version does not match the pinned protocol"), err))
 	}
 	command := append(append([]string{}, args...), binary, "app-server", "--listen", "stdio://", "--disable", "goals", "--disable", "multi_agent", "--disable", "multi_agent_v2")
-	return (CommandFactory{Build: func(context.Context, Launch) (Command, error) {
+	transport, err := (CommandFactory{Build: func(context.Context, Launch) (Command, error) {
 		return Command{Program: launcher, Arguments: command, Environment: environment, ContainmentVerified: true}, nil
 	}}).Open(ctx, launch)
+	if err != nil {
+		return transport, err
+	}
+	if tokenSource != nil {
+		return authenticatedProcess{Process: transport, source: *tokenSource}, nil
+	}
+	return transport, nil
 }
 
 type probeOutput struct {

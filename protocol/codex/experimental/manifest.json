@@ -22,6 +22,10 @@
     "v2/ThreadReadResponse.json": "cabb1ed2c63497037d66eb12fb6f143916ee7a615aa7398b0d90f221f1899954",
     "DynamicToolCallParams.json": "401bba20cfbd95762bef0467d840430c46be53369093ad9f26425ba757e34efc",
     "DynamicToolCallResponse.json": "abb082cad67f11fcc98ba75f2eff75d7d1723af0c657655329b83ff160451a02",
-    "ServerRequest.json": "3d7bc481f84dc042984a74420e65c5a8d3c423f37a91b7d5df2365c903a12ac6"
+    "ServerRequest.json": "3d7bc481f84dc042984a74420e65c5a8d3c423f37a91b7d5df2365c903a12ac6",
+    "v2/LoginAccountParams.json": "48fb9bea54d7e0890052653ac06737efb3200ba2261515b2c4014027f36bea3d",
+    "v2/LoginAccountResponse.json": "72e6d77f49bc5809c3af50f183e2a0862dd8f7836816d4796ff69bb13eae0e89",
+    "ChatgptAuthTokensRefreshParams.json": "03b7a734b8b3180d9cb477b33564385d29b22a2528165a614891f13849060503",
+    "ChatgptAuthTokensRefreshResponse.json": "06d6b30436fc962d80b5d7920f8f323de12a052214d9148c5f0dfbaedd5eec6c"
   }
 }

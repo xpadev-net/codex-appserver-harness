@@ -44,6 +44,7 @@ type SessionRPC struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	handler    ToolHandler
+	auth       *sessionAuthentication
 	mu         sync.Mutex
 	sequence   int
 	calls      map[string]chan rpcReply
@@ -58,8 +59,11 @@ type SessionRPC struct {
 }
 
 func NewSessionRPC(ctx context.Context, stream Stream, handler ToolHandler) *SessionRPC {
+	return newSessionRPC(ctx, stream, handler, nil)
+}
+func newSessionRPC(ctx context.Context, stream Stream, handler ToolHandler, auth *sessionAuthentication) *SessionRPC {
 	ctx, cancel := context.WithCancel(ctx)
-	s := &SessionRPC{stream: stream, ctx: ctx, cancel: cancel, handler: handler, calls: map[string]chan rpcReply{}, wake: make(chan struct{}, 1), done: make(chan struct{}), requests: map[string]bool{}, handlers: make(chan struct{}, 32)}
+	s := &SessionRPC{auth: auth, stream: stream, ctx: ctx, cancel: cancel, handler: handler, calls: map[string]chan rpcReply{}, wake: make(chan struct{}, 1), done: make(chan struct{}), requests: map[string]bool{}, handlers: make(chan struct{}, 32)}
 	go s.pump()
 	return s
 }
@@ -121,13 +125,14 @@ func (s *SessionRPC) pump() {
 			}
 			continue
 		}
-		if m.Method != "item/tool/call" || s.handler == nil {
+		authRequest := m.Method == "account/chatgptAuthTokens/refresh" && s.auth != nil
+		if !authRequest && (m.Method != "item/tool/call" || s.handler == nil) {
 			s.publish(m)
 			s.finish(&RequestError{Request: m})
 			return
 		}
 		var call DynamicToolCall
-		if len(m.Params) > 64<<10 || json.Unmarshal(m.Params, &call) != nil || call.ThreadID == "" || call.TurnID == "" || call.CallID == "" || call.Tool == "" || !json.Valid(call.Arguments) {
+		if !authRequest && (len(m.Params) > 64<<10 || json.Unmarshal(m.Params, &call) != nil || call.ThreadID == "" || call.TurnID == "" || call.CallID == "" || call.Tool == "" || !json.Valid(call.Arguments)) {
 			s.finish(&RequestError{Request: m})
 			return
 		}
@@ -145,6 +150,10 @@ func (s *SessionRPC) pump() {
 		}
 		go func(m Message, call DynamicToolCall) {
 			defer func() { <-s.handlers }()
+			if authRequest {
+				s.respondAuthentication(m)
+				return
+			}
 			result, err := s.handler(s.ctx, call)
 			if err != nil {
 				result = DynamicToolResponse{Success: false, ContentItems: []ToolContent{{Type: "inputText", Text: "Controller rejected the tool request; inspect the saved operation."}}}
@@ -242,5 +251,8 @@ func (s *SessionRPC) Initialize(ctx context.Context) error {
 	if err := s.Call(ctx, "initialize", map[string]any{"clientInfo": map[string]string{"name": "background_wave_harness", "version": "1"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		return err
 	}
-	return s.stream.Send(map[string]any{"method": "initialized"})
+	if err := s.stream.Send(map[string]any{"method": "initialized"}); err != nil {
+		return err
+	}
+	return s.initializeAuthentication(ctx)
 }

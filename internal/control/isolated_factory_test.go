@@ -33,6 +33,8 @@ func TestMain(m *testing.M) {
 }
 
 type isolatedObservation struct {
+	Authenticated        bool     `json:"authenticated"`
+	HasAPIKey            bool     `json:"has_api_key"`
 	Arguments            []string `json:"arguments"`
 	Home                 string   `json:"home"`
 	CodexHome            string   `json:"codex_home"`
@@ -79,7 +81,7 @@ func isolatedFixture(args []string) {
 		os.Exit(23)
 	}
 	home := os.Getenv("HOME")
-	obs := isolatedObservation{Arguments: args[1:], Home: home, CodexHome: os.Getenv("CODEX_HOME"), Workspace: os.Getenv("HARNESS_WORKSPACE"), GitDirectory: os.Getenv("HARNESS_GIT_DIR"), Path: os.Getenv("PATH")}
+	obs := isolatedObservation{Arguments: args[1:], Home: home, CodexHome: os.Getenv("CODEX_HOME"), Workspace: os.Getenv("HARNESS_WORKSPACE"), GitDirectory: os.Getenv("HARNESS_GIT_DIR"), Path: os.Getenv("PATH"), HasAPIKey: os.Getenv("OPENAI_API_KEY") != ""}
 	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "HARNESS_CONTROLLER_SOCKET", "HARNESS_WEBHOOK_SECRET", "GIT_CONFIG_COUNT"} {
 		if _, present := os.LookupEnv(key); present {
 			obs.ForbiddenEnvironment = true
@@ -100,6 +102,17 @@ func isolatedFixture(args []string) {
 		switch msg.Method {
 		case "initialize":
 			reply = map[string]any{}
+		case "account/login/start":
+			var auth struct {
+				Type        string `json:"type"`
+				AccessToken string `json:"accessToken"`
+				Account     string `json:"chatgptAccountId"`
+			}
+			if json.Unmarshal(msg.Params, &auth) != nil || auth.Type != "chatgptAuthTokens" || auth.AccessToken == "" || auth.Account != "account" {
+				os.Exit(31)
+			}
+			obs.Authenticated = true
+			reply = map[string]any{"type": "chatgptAuthTokens"}
 		case "thread/start":
 			var p struct {
 				Sandbox      string `json:"sandbox"`
