@@ -337,6 +337,9 @@ func (k *KernelStore) finishTaskResultTx(ctx context.Context, tx *sql.Tx, b cont
 	if err := k.finishWakeTx(ctx, tx, b.ID, receipt.RunID, wakeOutcome); err != nil {
 		return err
 	}
+	if err := k.finishDirectOperationInputsTx(ctx, tx, b.ID, receipt.RunID, wakeOutcome); err != nil {
+		return err
+	}
 	wave, err := loadWave(ctx, tx, task.WaveID)
 	if err != nil {
 		return err

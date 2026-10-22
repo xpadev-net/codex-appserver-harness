@@ -163,15 +163,22 @@ func resultArtifactReferences(result contract.TaskResult) []string {
 	return unique
 }
 func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImport, data []byte) (domain.Artifact, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	defer tx.Rollback()
+	a, err := k.reserveArtifactTx(ctx, tx, request, data)
+	if err != nil {
+		return a, err
+	}
+	return a, tx.Commit()
+}
+func (k *KernelStore) reserveArtifactTx(ctx context.Context, tx *sql.Tx, request ArtifactImport, data []byte) (domain.Artifact, error) {
 	var a domain.Artifact
 	if strings.TrimSpace(request.Key) == "" || len(request.Key) > 256 {
 		return a, errors.New("Artifact import key required")
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return a, err
-	}
-	defer tx.Rollback()
 	digest := fmt.Sprintf("%x", sha256.Sum256(data))
 	identity, err := contentDigest(struct {
 		Request ArtifactImport
@@ -215,8 +222,12 @@ func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImpor
 		if task.Paused || task.State.Terminal() || request.Origin.Kind != "task" || request.Origin.Reference != task.ID {
 			return a, errors.New("Task cannot invent Artifact provenance")
 		}
+	} else if request.Origin.Kind == "session" {
+		if request.Origin.Reference != b.ID {
+			return a, errors.New("main cannot invent session provenance")
+		}
 	} else if request.Origin.Kind != "repository" && request.Origin.Kind != "external" {
-		return a, errors.New("main imports require explicit repository/external provenance")
+		return a, errors.New("main imports require explicit repository/external/session provenance")
 	}
 	if int64(len(data)) > w.Policy.Limits.ArtifactBytes {
 		return a, errors.New("Artifact byte limit exceeded")
@@ -272,7 +283,7 @@ func (k *KernelStore) reserveArtifact(ctx context.Context, request ArtifactImpor
 	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_budget_ledger(wave_id,operation_key,kind,amount,unknown,payload) VALUES(?,?,'artifact_bytes',?,0,?)", w.ID, a.ID, a.Bytes, []byte(`{}`)); err != nil {
 		return a, err
 	}
-	return a, tx.Commit()
+	return a, nil
 }
 
 // ImportArtifact first commits a capacity reservation, then saves and fsyncs the
@@ -401,7 +412,10 @@ func (k *KernelStore) commitArtifact(ctx context.Context, a domain.Artifact) (do
 		return a, err
 	}
 	if current.State == "committed" {
-		return current, nil
+		if err = k.finishKernelPublicationTx(ctx, tx, current); err != nil {
+			return current, err
+		}
+		return current, tx.Commit()
 	}
 	if !reflect.DeepEqual(current, a) || a.State != "staged" {
 		return a, errors.New("Artifact changed before manifest commit")
@@ -418,6 +432,9 @@ func (k *KernelStore) commitArtifact(ctx context.Context, a domain.Artifact) (do
 	// publication in a newer direction/replan.
 	w.ScopeRevision, w.PlanRevision, w.Policy.Revision = a.ScopeRevision, a.PlanRevision, a.PolicyRevision
 	if err = k.waveEventTx(ctx, tx, w, "artifact_committed", a.TaskID, a.ID+":committed", a); err != nil {
+		return a, err
+	}
+	if err = k.finishKernelPublicationTx(ctx, tx, a); err != nil {
 		return a, err
 	}
 	return a, tx.Commit()

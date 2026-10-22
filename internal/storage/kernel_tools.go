@@ -157,6 +157,9 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	if guard == nil || name == "" || name != call.Name || call.Namespace != "" || call.SessionID == "" || call.RunID == "" || call.ThreadID == "" || call.TurnID == "" || call.CallID == "" || len(call.Arguments) > contract.MaxSessionInput {
 		return reply, errors.New("invalid kernel tool invocation")
 	}
+	if publication, ok := command.(*contract.PublishArtifactRequest); ok {
+		return k.applyKernelPublication(ctx, call, publication, guard)
+	}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return reply, err
