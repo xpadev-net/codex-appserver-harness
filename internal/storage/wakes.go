@@ -143,18 +143,32 @@ func wakeTx(ctx context.Context, q queryer, id string) (WakeReservation, error) 
 func (k *KernelStore) Wake(ctx context.Context, id string) (WakeReservation, error) {
 	return wakeTx(ctx, k.DB, id)
 }
-func (k *KernelStore) wakeTargetTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, target contract.Target) error {
-	wave, err := loadWave(ctx, tx, target.WaveID)
+func obsoleteWakeNotification(b contract.SessionBinding, wave domain.Wave, n Notification, now time.Time) bool {
+	if b.Closed || wave.Target() != n.Target || !now.Before(wave.Deadline) {
+		return true
+	}
+	parent := b.Kind == "orchestrator" && wave.OrchestratorSessionID == b.ID
+	if !parent && (b.Kind != "task" || b.Target != n.Target || b.ParentSessionID != wave.OrchestratorSessionID) {
+		return true
+	}
+	terminal := wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted
+	if n.Kind == "wave_terminal" {
+		return !parent || !terminal || n.WaveState != wave.State || n.TaskID != ""
+	}
+	return terminal
+}
+func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, n Notification) error {
+	wave, err := loadWave(ctx, tx, n.Target.WaveID)
 	if err != nil {
 		return err
 	}
-	if b.Closed || wave.Target() != target || wave.Paused || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
+	if obsoleteWakeNotification(b, wave, n, k.clock()) || wave.Paused {
 		return ErrWakeHeld
 	}
 	if b.Kind == "orchestrator" && wave.OrchestratorSessionID == b.ID {
 		return nil
 	}
-	if b.Kind != "task" || b.Target != target {
+	if b.Kind != "task" || b.Target != n.Target {
 		return ErrWakeHeld
 	}
 	task, err := loadTask(ctx, tx, b.TaskID)
@@ -167,8 +181,15 @@ func (k *KernelStore) wakeTargetTx(ctx context.Context, tx *sql.Tx, b contract.S
 	return nil
 }
 func (k *KernelStore) checkWakeTargetsTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, intent WakeIntent) error {
-	for _, target := range intent.Targets {
-		if err := k.wakeTargetTx(ctx, tx, b, target); err != nil {
+	for _, id := range intent.NotificationIDs {
+		n, err := notificationTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if n.SessionID != b.ID {
+			return errors.New("wake input belongs to another session")
+		}
+		if err := k.wakeNotificationTx(ctx, tx, b, n); err != nil {
 			return err
 		}
 	}
@@ -194,7 +215,12 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 		return []Notification{}, nil
 	}
 	out := []Notification{}
-	gateCache := map[contract.Target]error{}
+	type gateKey struct {
+		Target   contract.Target
+		Terminal bool
+		State    domain.WaveState
+	}
+	gateCache := map[gateKey]error{}
 	var after int64
 	for {
 		rows, err := tx.QueryContext(ctx, "SELECT rowid,id FROM kernel_notifications WHERE session_id=? AND state='pending' AND run_id='' AND rowid>? ORDER BY rowid LIMIT 128", sessionID, after)
@@ -220,10 +246,11 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 			if err != nil {
 				return nil, err
 			}
-			gate, known := gateCache[n.Target]
+			key := gateKey{Target: n.Target, Terminal: n.Kind == "wave_terminal", State: n.WaveState}
+			gate, known := gateCache[key]
 			if !known {
-				gate = k.wakeTargetTx(ctx, tx, b, n.Target)
-				gateCache[n.Target] = gate
+				gate = k.wakeNotificationTx(ctx, tx, b, n)
+				gateCache[key] = gate
 			}
 			if errors.Is(gate, ErrWakeHeld) {
 				continue
@@ -319,7 +346,7 @@ func (k *KernelStore) ReserveWake(ctx context.Context, request WakeRequest) (Wak
 		if n.SessionID != b.ID || n.State != "pending" || n.RunID != "" {
 			return reservation, errors.New("wake input belongs to another session or run")
 		}
-		if err = k.wakeTargetTx(ctx, tx, b, n.Target); err != nil {
+		if err = k.wakeNotificationTx(ctx, tx, b, n); err != nil {
 			return reservation, err
 		}
 		if !seenTargets[n.Target.WaveID] {
@@ -461,14 +488,6 @@ func (k *KernelStore) finishWakeTx(ctx context.Context, tx *sql.Tx, sessionID, r
 	return err
 }
 
-func (k *KernelStore) obsoleteWakeTargetTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, target contract.Target) (bool, error) {
-	wave, err := loadWave(ctx, tx, target.WaveID)
-	if err != nil {
-		return false, err
-	}
-	return b.Closed || wave.Target() != target || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) || b.Kind == "orchestrator" && wave.OrchestratorSessionID != b.ID || b.Kind == "task" && b.Target != target, nil
-}
-
 // ReconcileUnstartedWake retires an obsolete intent only after proving that no
 // run was reserved and no prepared process remains. Other still-current Waves
 // in a shared main batch return to pending; pause alone never retires a wake.
@@ -505,12 +524,17 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 	}
 	obsolete := map[string]bool{}
 	hasObsolete := false
-	for _, target := range w.Intent.Targets {
-		old, err := k.obsoleteWakeTargetTx(ctx, tx, b, target)
+	for _, notificationID := range w.Intent.NotificationIDs {
+		n, err := notificationTx(ctx, tx, notificationID)
 		if err != nil {
 			return w, err
 		}
-		obsolete[target.WaveID], hasObsolete = old, hasObsolete || old
+		wave, err := loadWave(ctx, tx, n.Target.WaveID)
+		if err != nil {
+			return w, err
+		}
+		old := obsoleteWakeNotification(b, wave, n, k.clock())
+		obsolete[n.ID], hasObsolete = old, hasObsolete || old
 	}
 	if !hasObsolete {
 		return w, ErrWakeHeld
@@ -525,7 +549,7 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 			return w, errors.New("unstarted wake input binding conflict")
 		}
 		next, nextRun := "pending", ""
-		if obsolete[n.Target.WaveID] {
+		if obsolete[n.ID] {
 			next, nextRun = "archived", w.Intent.RunID
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE kernel_notifications SET state=?,run_id=? WHERE id=?", next, nextRun, n.ID); err != nil {
@@ -545,7 +569,7 @@ func (k *KernelStore) ReconcileUnstartedWake(ctx context.Context, id string) (Wa
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_wake_intents SET state='superseded' WHERE id=?", id); err != nil {
 		return w, err
 	}
-	if err = kernelRecordTx(ctx, tx, "wake_disposition", id, b.ID, map[string]any{"reason": "unstarted input superseded or terminal", "obsolete_waves": obsolete, "created_at": k.clock()}); err != nil {
+	if err = kernelRecordTx(ctx, tx, "wake_disposition", id, b.ID, map[string]any{"reason": "unstarted input superseded or terminal", "obsolete_notifications": obsolete, "created_at": k.clock()}); err != nil {
 		return w, err
 	}
 	w.Intent.State = "superseded"

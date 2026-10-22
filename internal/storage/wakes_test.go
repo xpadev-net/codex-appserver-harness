@@ -617,3 +617,94 @@ func TestSingleMaximumInlineMessageAlwaysFitsWakeTransport(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalWaveObservationCanWakeOnlyItsCurrentParent(t *testing.T) {
+	for _, state := range []domain.WaveState{domain.WaveCompleted, domain.WaveCanceled} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			k, wave, tasks := mailboxFixture(t)
+			if _, err := k.Subscribe(ctx, SubscriptionRequest{SessionID: "main", Target: wave.Target(), Key: "terminal", Kind: "wave_terminal"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: tasks[0].SessionID, Target: wave.Target(), Key: "parent", Recipient: "parent", Body: "ordinary parent input"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: "main", Target: wave.Target(), Key: "child", Recipient: tasks[0].ID, Body: "ordinary Task input"}); err != nil {
+				t.Fatal(err)
+			}
+			wave, err := k.Wave(ctx, wave.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wave.State, wave.CompletedAt = state, k.clock()
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = saveWave(ctx, tx, wave); err != nil {
+				t.Fatal(err)
+			}
+			if err = k.waveEventTx(ctx, tx, wave, "wave_"+string(state), "", wave.ID+":terminal", wave.Target()); err != nil {
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			pending, err := k.PendingWakeNotifications(ctx, "main", 10)
+			if err != nil || len(pending) != 1 || pending[0].Kind != "wave_terminal" || pending[0].WaveState != state {
+				t.Fatal("parent lost terminal startup reason", pending, err)
+			}
+			if child, err := k.PendingWakeNotifications(ctx, tasks[0].SessionID, 10); err != nil || len(child) != 0 {
+				t.Fatal("terminal Wave restarted Task work", child, err)
+			}
+			all, err := k.Notifications(ctx, "main", 0, 10)
+			if err != nil || len(all) != 2 {
+				t.Fatal(all, err)
+			}
+			for _, n := range all {
+				if n.Kind == "message" {
+					if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: "main", Key: "ordinary", NotificationIDs: []string{n.ID}}); !errors.Is(err, ErrWakeHeld) {
+						t.Fatal("ordinary input bypassed terminal gate", err)
+					}
+				}
+			}
+			request := WakeRequest{SessionID: "main", Key: "terminal", NotificationIDs: []string{pending[0].ID}}
+			wave.Paused = true
+			tx, err = k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = saveWave(ctx, tx, wave); err != nil {
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = k.ReserveWake(ctx, request); !errors.Is(err, ErrWakeHeld) {
+				t.Fatal("terminal observation ignored pause", err)
+			}
+			wave.Paused = false
+			tx, err = k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = saveWave(ctx, tx, wave); err != nil {
+				t.Fatal(err)
+			}
+			if err = tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			w, err := k.ReserveWake(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = k.ReconcileUnstartedWake(ctx, w.Intent.ID); !errors.Is(err, ErrWakeHeld) {
+				t.Fatal("valid terminal observation was retired", err)
+			}
+			b := prepareWakeSession(t, k, "main")
+			if err = k.ReserveSessionRun(ctx, b, w.Snapshot, wakeStartingRun(k, b, w)); err != nil {
+				t.Fatal("parent could not consume terminal snapshot", err)
+			}
+		})
+	}
+}
