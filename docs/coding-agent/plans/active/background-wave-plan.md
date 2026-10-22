@@ -329,13 +329,14 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_6: メインOrchestratorと直接依頼
 
 - status: in_progress
-- split: PR #86でMainResult v1のplan/wait/report契約と、保存済みmain run/snapshot/budgetのscope照合・停止確認後の原子的判断適用を追加する。全Waveの判断を一括で検査し、計画・構造予算・Task/session・通知fanout・入力適用receiptを同じtransactionで確定する。自己申告のWave完了/承認/policy変更は契約に含めない。interrupt後の非終端入力は照合待ちに保持し、cancel/方向修正/旧scopeの出力は採用せず、他Waveの現在通知はpendingへ戻す。続くPRで共通context_readを追加し、元要求・criterion・policy・適用済み方向修正をcurrent target/所有者付きのdigest/sizeとUTF-8範囲で参照できるようにする。未適用の方向修正や任意host pathは渡さない。main入力の再構成、production WorkSource、失敗分類・明示復旧、token観測、thread保守、実driver接続は続くPRで行い、このportをK受入としない。
+- split: PR #86でMainResult v1のplan/wait/report契約と、保存済みmain run/snapshot/budgetのscope照合・停止確認後の原子的判断適用を追加する。全Waveの判断を一括で検査し、計画・構造予算・Task/session・通知fanout・入力適用receiptを同じtransactionで確定する。自己申告のWave完了/承認/policy変更は契約に含めない。interrupt後の非終端入力は照合待ちに保持し、cancel/方向修正/旧scopeの出力は採用せず、他Waveの現在通知はpendingへ戻す。PR #87で共通context_readを追加し、元要求・criterion・policy・適用済み方向修正をcurrent target/所有者付きのdigest/sizeとUTF-8範囲で参照できるようにする。未適用の方向修正や任意host pathは渡さない。続くPRでmain/Task共通のDB入力構成を追加し、64 KiBの封筒とrole別の不変manifest・run snapshot別read grantを原子的に保存する。元要求・現plan/Task・許可成果・結果/残作業・購読・予算を失わず、wakeでは通知/messageと同じtransactionへ含める。manifestは1 Waveあたり32 MiBを上限として過大な構成を明示保留し、モデル入力へ黙って切り詰めない。production WorkSource、失敗分類・明示復旧、token観測、thread保守、実driver接続は続くPRで行い、このportをK受入としない。
 - type: impl
 - owns:
   - internal/contract/orchestrator.go、internal/contract/orchestrator_test.go、internal/contract/cmd/session-schemas/main.go
   - schemas/handoffs/main-result-v1.json
   - internal/contract/context.go、internal/contract/context_test.go、internal/storage/context.go、internal/storage/context_test.go（共通context参照）
   - internal/storage/main_results.go、internal/storage/main_results_test.go（main判断と入力の原子的適用）
+  - internal/storage/session_input.go、internal/storage/session_input_test.go（入力snapshotとmanifestの保存・run別参照）
   - internal/service/orchestrator.go
   - internal/service/orchestrator_test.go
   - internal/service/orchestrator_input.go

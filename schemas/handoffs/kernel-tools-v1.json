@@ -447,7 +447,7 @@
     {
       "type": "function",
       "name": "context_read",
-      "description": "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path.",
+      "description": "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction, manifest. For manifest use the reference_id from this run input; it reads the immutable saved judgment state, including task instructions/results. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -460,6 +460,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "reference_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
           "schema_version": {
             "const": 1,
             "type": "integer"
@@ -469,7 +473,8 @@
               "request",
               "criteria",
               "policy",
-              "direction"
+              "direction",
+              "manifest"
             ],
             "maxLength": 16384,
             "type": "string"
@@ -887,7 +892,7 @@
     {
       "type": "function",
       "name": "context_read",
-      "description": "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path.",
+      "description": "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction, manifest. For manifest use the reference_id from this run input; it reads the immutable saved judgment state, including task instructions/results. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -900,6 +905,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "reference_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
           "schema_version": {
             "const": 1,
             "type": "integer"
@@ -909,7 +918,8 @@
               "request",
               "criteria",
               "policy",
-              "direction"
+              "direction",
+              "manifest"
             ],
             "maxLength": 16384,
             "type": "string"

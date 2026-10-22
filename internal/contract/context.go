@@ -5,7 +5,8 @@ package contract
 type ContextReadRequest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Target        Target `json:"target"`
-	Section       string `json:"section"` // request, criteria, policy, direction
+	Section       string `json:"section"` // request, criteria, policy, direction, manifest
+	ReferenceID   string `json:"reference_id,omitempty"`
 	Offset        int64  `json:"offset"`
 	Limit         int64  `json:"limit"`
 }
@@ -16,7 +17,10 @@ func (r ContextReadRequest) Valid() bool {
 	if r.SchemaVersion != 1 || !r.Target.Valid() || r.Offset < 0 || r.Limit < 1 || r.Limit > MaxContextRead {
 		return false
 	}
-	return r.Section == "request" || r.Section == "criteria" || r.Section == "policy" || r.Section == "direction"
+	if r.Section == "manifest" {
+		return len(r.ReferenceID) > 0 && len(r.ReferenceID) <= 128
+	}
+	return r.ReferenceID == "" && (r.Section == "request" || r.Section == "criteria" || r.Section == "policy" || r.Section == "direction")
 }
 
 type ContextSlice struct {

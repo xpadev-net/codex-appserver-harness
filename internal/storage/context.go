@@ -46,6 +46,9 @@ func (k *KernelStore) contextSliceTx(ctx context.Context, tx *sql.Tx, b contract
 	var data []byte
 	media := "text/plain; charset=utf-8"
 	switch r.Section {
+	case "manifest":
+		data, err = k.inputManifestTx(ctx, tx, b, r)
+		media = "application/json"
 	case "request":
 		data = []byte(wave.OriginalRequest)
 	case "criteria":

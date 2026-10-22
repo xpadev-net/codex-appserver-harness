@@ -413,9 +413,10 @@ func KernelTools(kind string) []ToolDefinition {
 		}
 		description := "Version 1 controller operation: " + name + ". Accepted work is not completed work; wait on the returned subscription."
 		if name == "context_read" {
-			description = "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path."
+			description = "Read a bounded UTF-8 slice of this Wave's immutable original request, current criteria/policy, or applied direction. Sections: request, criteria, policy, direction, manifest. For manifest use the reference_id from this run input; it reads the immutable saved judgment state, including task instructions/results. Start offset 0; limit 1..2048 bytes. Continue with returned next_offset and compare digest/bytes. This exposes no arbitrary host path."
 			properties := inputSchema["properties"].(map[string]any)
-			properties["section"].(map[string]any)["enum"] = []string{"request", "criteria", "policy", "direction"}
+			properties["section"].(map[string]any)["enum"] = []string{"request", "criteria", "policy", "direction", "manifest"}
+			properties["reference_id"].(map[string]any)["maxLength"] = 128
 			properties["offset"].(map[string]any)["minimum"] = 0
 			properties["limit"].(map[string]any)["minimum"], properties["limit"].(map[string]any)["maximum"] = 1, MaxContextRead
 		}
