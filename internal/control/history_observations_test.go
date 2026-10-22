@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"reflect"
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -69,6 +71,63 @@ func TestCanceledReadPersistsObservationWithDetachedBoundedContext(t *testing.T)
 	var observed storage.HistoryObservation
 	if err = json.Unmarshal(encoded, &observed); err != nil || observed.Status != "read_error" || observed.ErrorDigest == "" || observed.ResponseDigest != "" {
 		t.Fatal(observed, err)
+	}
+	assertCapacity(t, k, 0)
+}
+
+func TestExplicitObservedAssociationStillRequiresReadOnlyOutcomeReconciliation(t *testing.T) {
+	ctx := context.Background()
+	k, b := taskFixture(t)
+	initial := fake(b)
+	initial.turnFail = true
+	unknown, err := (Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return initial, nil })}).Execute(ctx, request(b))
+	if err == nil || !unknown.Stopped {
+		t.Fatal(unknown, err)
+	}
+	before, err := k.Task(ctx, b.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := json.RawMessage(fmt.Sprintf(`{"thread":{"id":"thread","cwd":%q,"turns":[{"id":"one","status":"completed","itemsView":"full","items":[{"type":"agentMessage","text":"{\"ok\":true}"}]},{"id":"two","status":"completed","itemsView":"full","items":[]}]}}`, b.CWD))
+	recovery := fake(b)
+	recovery.threadReadReply = raw
+	held, err := (Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return recovery, nil })}).Reconcile(ctx, b.ID, unknown.Run, request(b).Validate)
+	if err == nil || !held.Stopped || held.Run.State != "unknown" {
+		t.Fatal(held, err)
+	}
+	var encoded []byte
+	if err = k.DB.QueryRowContext(ctx, "SELECT payload FROM records WHERE kind='session_history_observation' AND work_item_id=?", b.ID).Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	var observation storage.HistoryObservation
+	if err = json.Unmarshal(encoded, &observation); err != nil || observation.Status != "ambiguous_turn" {
+		t.Fatal(observation, err)
+	}
+	current, err := k.SessionBinding(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.AssociateObservedTurn(ctx, storage.TurnAssociationRequest{Key: "choose", Expected: current, RunID: unknown.Run.ID, ObservationID: observation.ID, TurnID: "one", Reason: "operator identified the existing turn"}); err != nil {
+		t.Fatal(err)
+	}
+	var associated contract.SessionRun
+	if err = k.Record(ctx, "agent_run", unknown.Run.ID, &associated); err != nil || associated.State != "unknown" {
+		t.Fatal(associated, err)
+	}
+	finalReader := fake(b)
+	finalReader.threadReadReply = raw
+	out, err := (Runtime{Store: k, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { return finalReader, nil })}).Reconcile(ctx, b.ID, associated, request(b).Validate)
+	if err != nil || !out.Stopped || out.Run.State != "completed" || out.Run.ID != unknown.Run.ID || out.Run.TurnID != "one" {
+		t.Fatal(out, err)
+	}
+	for _, p := range []*fakeProcess{recovery, finalReader} {
+		if !reflect.DeepEqual(p.methods, []string{"initialize", "initialized", "thread/read"}) {
+			t.Fatal(p.methods)
+		}
+	}
+	after, err := k.Task(ctx, b.TaskID)
+	if err != nil || after.Attempts != before.Attempts {
+		t.Fatal(before, after, err)
 	}
 	assertCapacity(t, k, 0)
 }
