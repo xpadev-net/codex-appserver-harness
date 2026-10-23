@@ -72,6 +72,10 @@ func (f *fakeAPI) Publish(ctx context.Context, base, branch, work, title, body s
 	return pr, nil
 }
 func publicationFixture(t *testing.T) (Publisher, *fakeAPI, storage.ProductTargetSnapshot, string) {
+	return publicationFixtureLimits(t, nil)
+}
+
+func publicationFixtureLimits(t *testing.T, limits *domain.ExecutionLimits) (Publisher, *fakeAPI, storage.ProductTargetSnapshot, string) {
 	t.Helper()
 	ctx := context.Background()
 	k, err := storage.OpenKernel(filepath.Join(t.TempDir(), "private", "state.db"))
@@ -79,6 +83,11 @@ func publicationFixture(t *testing.T) (Publisher, *fakeAPI, storage.ProductTarge
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k.Close() })
+	if limits != nil {
+		if err := k.ConfigureExecutionLimits(ctx, *limits); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err = k.CreateOrchestrator(ctx, "main", "unavailable-model", t.TempDir(), "read-only"); err != nil {
 		t.Fatal(err)
 	}
