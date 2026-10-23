@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -29,8 +30,10 @@ func TestKernelSourceDispatchesOnlyExactAuthorizedTaskRetryAfterRestart(t *testi
 	k, b := taskFixture(t)
 	source := NewKernelSource(k)
 	first := sourceTaskWork(t, source, b.ID)
+	processes := map[string]*fakeProcess{}
 	factory := factoryFunc(func(_ context.Context, l Launch) (Process, error) {
 		p := fake(l.Binding)
+		processes[l.Process.Request.RunID] = p
 		p.threadID = l.Binding.ThreadID
 		if p.threadID == "" {
 			p.threadID = "retry-thread"
@@ -70,6 +73,10 @@ func TestKernelSourceDispatchesOnlyExactAuthorizedTaskRetryAfterRestart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = k.AuthorizeTaskRecovery(ctx, task, "obsolete-selected-retry", snapshot, "first classified recovery"); err != nil {
+		t.Fatal(err)
+	}
+	obsolete := sourceTaskWork(t, source, b.ID)
 	if err = k.AuthorizeTaskRecovery(ctx, task, "authorized-retry", snapshot, "operator resolved transient input"); err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +103,27 @@ func TestKernelSourceDispatchesOnlyExactAuthorizedTaskRetryAfterRestart(t *testi
 	if err != nil || unchanged.Attempts != 1 {
 		t.Fatal("selection spent Attempt", unchanged, err)
 	}
+	// A was selected before B replaced it. Its preparation may initialize, but
+	// the transactional run reservation must reject it before sending a model turn.
+	obsoleteOut, obsoleteErr := runtime.Execute(ctx, *obsolete.Execute)
+	if !errors.Is(obsoleteErr, storage.ErrTaskRecoveryRequired) {
+		t.Fatal("superseded selection reserved a turn", obsoleteErr)
+	}
+	oldProcess := processes[obsolete.Execute.RunID]
+	if oldProcess == nil {
+		t.Fatal("fixture did not reach obsolete preparation")
+	}
+	oldProcess.mu.Lock()
+	for _, method := range oldProcess.methods {
+		if method == "turn/start" {
+			oldProcess.mu.Unlock()
+			t.Fatal("obsolete retry sent model turn")
+		}
+	}
+	oldProcess.mu.Unlock()
+	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: obsolete.Execute.RunID, Outcome: obsoleteOut, Err: obsoleteErr}); err != nil {
+		t.Fatal(err)
+	}
 	work := sourceTaskWork(t, source, b.ID)
 	out, err = runtime.Execute(ctx, *work.Execute)
 	if err != nil {
@@ -111,6 +139,10 @@ func TestKernelSourceDispatchesOnlyExactAuthorizedTaskRetryAfterRestart(t *testi
 	finalBinding, err := k.SessionBinding(ctx, b.ID)
 	if err != nil || finalBinding.ThreadID != bound.ThreadID {
 		t.Fatal("retry replaced Task thread", finalBinding, err)
+	}
+	inspection, inspectErr := k.InspectSessionRecovery(ctx, b.ID, "", 1)
+	if inspectErr != nil || inspection.Session.DispatchHold != nil {
+		t.Fatal("obsolete hold shown after successful replacement", inspection, inspectErr)
 	}
 	if pending, err := k.PendingTaskRecovery(ctx, task.ID); err != nil || pending != nil {
 		t.Fatal("consumed permit remained pending", pending, err)
@@ -160,6 +192,11 @@ func TestKernelSourceHoldsUnstartedRetryUntilDistinctOperatorDecision(t *testing
 	out, err = (Runtime{Store: k, Factory: notStarted}).Execute(ctx, *work.Execute)
 	if err == nil {
 		t.Fatal("fixture unexpectedly launched")
+	}
+	// Simulate loss of the completion callback after the preparation stops.
+	source = NewKernelSource(k)
+	if work := taskWorkIfPresent(t, source, b.ID); work != nil {
+		t.Fatal("restart repeated previously claimed retry", work)
 	}
 	if err = source.Complete(ctx, Completion{SessionID: b.ID, RunID: work.Execute.RunID, Outcome: out, Err: err}); err != nil {
 		t.Fatal(err)

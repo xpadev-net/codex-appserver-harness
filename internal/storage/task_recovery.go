@@ -108,6 +108,13 @@ func consumeTaskRecoveryTx(ctx context.Context, tx *sql.Tx, task domain.Task, sn
 	if permit.Consumed || permit.SessionID != task.SessionID || permit.TaskDigest != digest || permit.RunID != run.ID || permit.SnapshotID != snapshot.ID || permit.SnapshotDigest != snapshot.Digest {
 		return ErrTaskRecoveryRequired
 	}
+	latest, err := latestTaskRecoveryTx(ctx, tx, task)
+	if err != nil {
+		return err
+	}
+	if latest == nil || latest.RunID != run.ID {
+		return ErrTaskRecoveryRequired
+	}
 	permit.Consumed = true
 	return kernelRecordTx(ctx, tx, "task_recovery_permit", run.ID, task.ID, permit)
 }
@@ -132,6 +139,13 @@ func (k *KernelStore) PendingTaskRecovery(ctx context.Context, taskID string) (*
 	if err != nil {
 		return nil, err
 	}
+	permit, err := latestTaskRecoveryTx(ctx, tx, task)
+	if err != nil || permit == nil {
+		return nil, err
+	}
+	return &TaskRecoverySelection{permit.RunID, permit.SnapshotID, permit.SnapshotDigest, permit.Reason}, nil
+}
+func latestTaskRecoveryTx(ctx context.Context, tx *sql.Tx, task domain.Task) (*taskRecoveryPermit, error) {
 	if task.State != contract.TaskBlocked {
 		return nil, nil
 	}
@@ -157,5 +171,5 @@ func (k *KernelStore) PendingTaskRecovery(ctx context.Context, taskID string) (*
 	if permit.RunID != id || permit.SessionID != task.SessionID || permit.TaskDigest != digest || permit.Consumed {
 		return nil, errors.New("Task recovery permit identity conflict")
 	}
-	return &TaskRecoverySelection{permit.RunID, permit.SnapshotID, permit.SnapshotDigest, permit.Reason}, nil
+	return &permit, nil
 }

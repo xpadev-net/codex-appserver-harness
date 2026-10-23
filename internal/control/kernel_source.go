@@ -214,6 +214,19 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 		return nil, false, err
 	}
 	if recovery != nil {
+		var claim string
+		claimErr := s.Store.Record(ctx, "managed_run_claim", recovery.RunID, &claim)
+		if claimErr == nil {
+			if claim == "" {
+				return nil, false, errors.New("empty managed run claim")
+			}
+			// Survives a crash after physical stop but before Complete. This run ID
+			// already owned a preparation and cannot be automatically prepared again.
+			return nil, false, s.hold(ctx, state, recovery.RunID, "authorized retry preparation ended before run reservation; distinct operator retry required")
+		}
+		if !errors.Is(claimErr, sql.ErrNoRows) {
+			return nil, false, claimErr
+		}
 		if state.Wake != nil {
 			return nil, false, storage.ErrTaskRecoveryRequired
 		}

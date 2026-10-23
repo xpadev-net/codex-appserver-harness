@@ -139,7 +139,11 @@ func inspectSessionTx(ctx context.Context, tx *sql.Tx, id string) (SessionInspec
 		if hold.SessionID != id {
 			return view, errors.New("dispatch hold owner mismatch")
 		}
-		view.DispatchHold = &hold
+		// Historical holds remain audit evidence. A replacement preparation/run
+		// no longer belongs to that hold and must not be displayed as currently held.
+		if hold.PreparationID == b.PreparationID && (view.ActiveRunID == "" || view.ActiveRunID == hold.RunID) {
+			view.DispatchHold = &hold
+		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return view, err
 	}
