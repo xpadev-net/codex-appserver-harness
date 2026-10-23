@@ -278,3 +278,38 @@ func TestWorkspacePreparationPathResolutionRejectsSymlinkCyclesAndNonDirectories
 		t.Fatal("non-directory traversal accepted")
 	}
 }
+
+func TestWorkspacePreparationReplayCannotRetargetItsSavedDestination(t *testing.T) {
+	ctx := context.Background()
+	k, w, _ := operationFixture(t)
+	root := t.TempDir()
+	firstTarget, secondTarget, alias := filepath.Join(root, "first"), filepath.Join(root, "second"), filepath.Join(root, "alias")
+	if err := os.Symlink(firstTarget, alias); err != nil {
+		t.Fatal(err)
+	}
+	request := OperationCapacityRequest{ID: "pinned-alias-owner", Kind: "git", SessionID: "main", Target: w.Target(), Repository: operationRepo(t), Worktree: alias}
+	first, err := k.ReserveOperationCapacity(ctx, request)
+	if err != nil || first.Request.Worktree != firstTarget {
+		t.Fatal("saved request retained mutable alias", first, err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secondTarget, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReserveOperationCapacity(ctx, request); err == nil {
+		t.Fatal("same operation ID acquired a different destination")
+	}
+	replay, err := k.ReserveOperationCapacity(ctx, first.Request)
+	if err != nil || !reflect.DeepEqual(first, replay) {
+		t.Fatal("saved canonical request no longer retries", replay, err)
+	}
+	changed := request
+	changed.ID = "different-target-owner"
+	changed.Repository = operationRepo(t)
+	second, err := k.ReserveOperationCapacity(ctx, changed)
+	if err != nil || second.Request.Worktree != secondTarget {
+		t.Fatal("independent retargeted destination was serialized", second, err)
+	}
+}

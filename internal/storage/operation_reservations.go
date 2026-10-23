@@ -255,6 +255,16 @@ func (k *KernelStore) ReserveOperationCapacity(ctx context.Context, request Oper
 	return r, tx.Commit()
 }
 func (k *KernelStore) reserveOperationCapacityTx(ctx context.Context, tx *sql.Tx, request OperationCapacityRequest) (OperationReservation, error) {
+	// Persist the destination that the lease actually protects. Replaying an
+	// alias after it is retargeted must conflict, and the process owner must use
+	// this saved canonical destination rather than resolving the alias again.
+	if request.Kind == "git" && request.Worktree != "" {
+		canonical, err := resourcePath(request.Worktree)
+		if err != nil {
+			return OperationReservation{}, err
+		}
+		request.Worktree = canonical
+	}
 	r, err := loadOperationReservationTx(ctx, tx, request.ID)
 	if err == nil {
 		if !reflect.DeepEqual(r.Request, request) {
