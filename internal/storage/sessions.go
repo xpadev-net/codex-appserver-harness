@@ -680,9 +680,19 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 		return err
 	}
 	defer tx.Rollback()
+	if err = k.retireUnboundTaskSessionTx(ctx, tx, sessionID, nil, reason); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (k *KernelStore) retireUnboundTaskSessionTx(ctx context.Context, tx *sql.Tx, sessionID string, expected *contract.SessionBinding, reason string) error {
 	b, err := sessionBindingTx(ctx, tx, sessionID)
 	if err != nil {
 		return err
+	}
+	if expected != nil && !reflect.DeepEqual(b, *expected) {
+		return errors.New("Task thread retirement binding conflict")
 	}
 	if b.Kind != "task" || b.ThreadID != "" || b.Closed && b.TaskState != contract.TaskCanceled {
 		return errors.New("only an unfinished or canceled unbound Task may be retired")
@@ -723,24 +733,31 @@ func (k *KernelStore) RetireUnboundTaskSession(ctx context.Context, sessionID, r
 	if err = k.waveEventTx(ctx, tx, wave, kind, task.ID, task.ID+":thread_lost", map[string]string{"reason": reason}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // RecoverUnboundMainThread audits a lost initial main thread/start after stopping
 // proof. There can be no sent turn without a bound thread. Preserve its unknown
 // creation intent and recovery snapshot before permitting a fresh generation.
 func (k *KernelStore) RecoverUnboundMainThread(ctx context.Context, expected contract.SessionBinding, snapshot contract.InputSnapshot, reason string) error {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = k.recoverUnboundMainThreadTx(ctx, tx, expected, snapshot, reason); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (k *KernelStore) recoverUnboundMainThreadTx(ctx context.Context, tx *sql.Tx, expected contract.SessionBinding, snapshot contract.InputSnapshot, reason string) error {
 	if strings.TrimSpace(reason) == "" || len(reason) > contract.MaxInline || !utf8.ValidString(reason) || expected.Generation == math.MaxInt || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) {
 		return errors.New("audited recovery snapshot required")
 	}
 	if err := contract.ValidateSessionInput(snapshot.Input); err != nil {
 		return err
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	b, err := sessionBindingTx(ctx, tx, expected.ID)
 	if err != nil {
 		return err
@@ -828,5 +845,5 @@ func (k *KernelStore) RecoverUnboundMainThread(ctx context.Context, expected con
 	if _, err = tx.ExecContext(ctx, "UPDATE kernel_sessions SET creating=0,payload=? WHERE id=?", raw, b.ID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }

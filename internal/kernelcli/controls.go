@@ -47,6 +47,30 @@ func applyControlFile(ctx context.Context, k *storage.KernelStore, command, file
 			result, err = k.RequestWaveDirection(ctx, request)
 			return err
 		}
+	case "recover-thread", "retire-thread":
+		var request storage.ThreadCreationResolutionRequest
+		if err = contract.DecodeStrict(raw, &request); err != nil {
+			return nil, err
+		}
+		action := "recover_main"
+		if command == "retire-thread" {
+			action = "retire_task"
+		}
+		if request.Action != action {
+			return nil, errors.New("thread disposition action must match command")
+		}
+		if request.Snapshot != nil {
+			snapshot, loadErr := k.SavedInputSnapshot(ctx, request.Snapshot.ID, request.Snapshot.Digest)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			request.Snapshot = &snapshot
+		}
+		apply = func(ctx context.Context) error {
+			var err error
+			result, err = k.ResolveThreadCreation(ctx, request)
+			return err
+		}
 	case "retry-task":
 		var request struct {
 			Expected domain.Task            `json:"expected"`
