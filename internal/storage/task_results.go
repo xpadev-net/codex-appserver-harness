@@ -227,6 +227,9 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 			return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 		}
 	}
+	if err = k.replacePRWaitsTx(ctx, tx, b.ID, task.Target()); err != nil {
+		return receipt, err
+	}
 	if result.Outcome == "waiting" {
 		for _, id := range result.SubscriptionIDs {
 			var owner, waveID string

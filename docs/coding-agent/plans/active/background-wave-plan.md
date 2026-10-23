@@ -403,7 +403,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 - status: in_progress
 - split: 共通gatewayへ明示opt-inのpr_publish/pr_review_request契約を追加し、trusted P WorkItem/candidate projectionのCAS・Wave所属と、operation/自動resource購読intent/応答receiptを同一transactionで保存する。Kの公開toolとruntime dispatchは変更しない。storage上の直前projection照合、PR/Cloud枠と書き込みleaseの原子的claim、prepared→unknownの一度消費、未送信取消を追加する。正のPR応答/照合から一意な資源binding、購読の実PR確定、元候補の結果と完了outbox、lease/terminal枠解放を原子的に保存する。現在の候補/flagを戻さない。完了outboxの有界走査と永続通知、session_wait/main・Task結果の明示waitによる再開入力、通常完了/閲覧のmain抑止、旧版/cancelのarchivalを接続する。controller側Publisher/gh adapterに、API default branch/remote SHA/直前canonical gateとclaimの再照合、保存packet/操作marker、応答欠落の読取専用回収を追加する。canonical gateの既存PR工程への接続・review送信・継続更新回収・P runtime配置は後続slice。[P受付の契約](../../../product-operations.md)を参照。
- Review依頼もcontroller専用gate/不変packet/送信直前unknownとgh comment transportを接続し、正の依頼受付を自動購読・完了outboxへ原子的に関連付ける。依頼受付ではCloud枠を保持し、正式承認やreview終了を生成しない。継続資源更新とnative P公開は未完了。 継続PR資源は8種別の完全取得/取得不能を明示したsnapshot・CAS・正規化差分・不変履歴・一意scan receiptとpending outboxを原子的に保存する。取得不能を削除にせず、外部APPROVED等を品質gateにしない。API収集/raw delivery/差分通知は後続。
+ Review依頼もcontroller専用gate/不変packet/送信直前unknownとgh comment transportを接続し、正の依頼受付を自動購読・完了outboxへ原子的に関連付ける。依頼受付ではCloud枠を保持し、正式承認やreview終了を生成しない。継続資源更新とnative P公開は未完了。 継続PR資源は8種別の完全取得/取得不能を明示したsnapshot・CAS・正規化差分・不変履歴・一意scan receiptとpending outboxを原子的に保存する。取得不能を削除にせず、外部APPROVED等を品質gateにしない。API収集/raw delivery/差分通知は後続。 資源差分outboxをproduction KernelSourceから有界に回収し、binding済み購読へ本文を指示化しない集約通知を原子的に保存する。明示waitの置換・旧scope/cancel archive・ACK非消費・再配送・bad row公平性を共通runtimeへ接続した。API/raw回収と関連Task購読展開は後続。
 - type: impl
 - owns:
   - internal/service/tools.go
