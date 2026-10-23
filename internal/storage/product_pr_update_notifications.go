@@ -131,12 +131,8 @@ func (k *KernelStore) fanoutPRResourceUpdateTx(ctx context.Context, tx *sql.Tx, 
 		if watch.ID != id || watch.ResourceKey != receipt.ResourceKey || watch.Target.WaveID != event.Target.WaveID || watch.State != "bound" {
 			return errors.New("PR resource subscriber binding conflict")
 		}
-		intent, _, err := prIntentTx(ctx, tx, watch.OperationID)
-		if err != nil {
+		if _, err = prWatchResourceTx(ctx, tx, watch); err != nil {
 			return err
-		}
-		if intent.Source.SessionID != watch.SessionID || intent.Source.Target != watch.Target || intent.SubscriptionID != id {
-			return errors.New("PR resource subscriber origin conflict")
 		}
 		b, err := sessionBindingTx(ctx, tx, watch.SessionID)
 		if err != nil {
@@ -147,7 +143,7 @@ func (k *KernelStore) fanoutPRResourceUpdateTx(ctx context.Context, tx *sql.Tx, 
 			state = "archived"
 		} else {
 			var awaited prOperationAwait
-			err = completionRecord(ctx, tx, "product_pr_await", watch.OperationID, &awaited)
+			err = completionRecord(ctx, tx, "product_pr_await", prAwaitKey(watch), &awaited)
 			if err == nil {
 				if awaited.SessionID != watch.SessionID || awaited.SubscriptionID != id || awaited.Target != watch.Target {
 					return errors.New("PR resource wait identity conflict")

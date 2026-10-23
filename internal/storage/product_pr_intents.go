@@ -151,10 +151,15 @@ func (k *KernelStore) SetProductTarget(ctx context.Context, expected string, p P
 	if err = kernelRecordTx(ctx, tx, "wave_work_item", p.WorkItem.ID, p.Target.WaveID, membership); err != nil {
 		return saved, err
 	}
+	if err = k.refreshAssignedPRSubscriptionsTx(ctx, tx, w); err != nil {
+		return saved, err
+	}
 	return saved, tx.Commit()
 }
 
 type PRSubscriptionIntent struct {
+	SourceKind   string          `json:"source_kind,omitempty"`
+	WorkItemID   string          `json:"work_item_id,omitempty"`
 	ResourceKey  string          `json:"resource_key,omitempty"`
 	ID           string          `json:"id"`
 	OperationID  string          `json:"operation_id"`
@@ -209,7 +214,7 @@ func (k *KernelStore) acceptPRIntentTx(ctx context.Context, tx *sql.Tx, op kerne
 	if err != nil {
 		return reply, err
 	}
-	watch := PRSubscriptionIntent{ID: sub.ID, OperationID: op.ID, SessionID: b.ID, TaskID: b.TaskID, Target: op.Target, RepositoryID: p.WorkItem.RepositoryID, PRNumber: p.PRNumber, State: "pending", CreatedAt: k.clock()}
+	watch := PRSubscriptionIntent{SourceKind: "operation", WorkItemID: candidate.WorkItemID, ID: sub.ID, OperationID: op.ID, SessionID: b.ID, TaskID: b.TaskID, Target: op.Target, RepositoryID: p.WorkItem.RepositoryID, PRNumber: p.PRNumber, State: "pending", CreatedAt: k.clock()}
 	intent := PROperationIntent{Source: op, TaskID: b.TaskID, Candidate: candidate, ProductDigest: saved.Digest, SubscriptionID: sub.ID, MarkerWorkItemID: candidate.WorkItemID, State: "accepted"}
 	if err = kernelRecordTx(ctx, tx, "product_pr_intent", op.ID, b.ID, intent); err != nil {
 		return reply, err

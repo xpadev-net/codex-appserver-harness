@@ -43,8 +43,11 @@ func (k *KernelStore) awaitPRSubscriptionsTx(ctx context.Context, tx *sql.Tx, se
 		if watch.ID != id || watch.SessionID != session || watch.Target != target {
 			return errors.New("PR wait is outside current session/target")
 		}
+		if _, err = prWatchWorkItemTx(ctx, tx, watch); err != nil {
+			return err
+		}
 		await := prOperationAwait{SessionID: session, RunID: run, Target: target, SubscriptionID: id}
-		if err = kernelRecordTx(ctx, tx, "product_pr_await", watch.OperationID, session, await); err != nil {
+		if err = kernelRecordTx(ctx, tx, "product_pr_await", prAwaitKey(watch), session, await); err != nil {
 			return err
 		}
 		// Viewing/ACK does not consume judgment input. The payload is updated with
