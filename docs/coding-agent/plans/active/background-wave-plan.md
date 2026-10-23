@@ -502,7 +502,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_11: PRパイプラインとWaveの統合（P）
 
-- split: 候補作成前のtrusted WorkItem所属・criterion割当・scope/policy CASと履歴を保存し、親/割当Taskの入力へsource digestを結び付けた。初回Wave・全所属・通知・receiptを原子的に保存する共通source portと、private operator入力による`wave create-product`を接続した。`wave import-issue`ではrepository ID/ready/hold/依存と取得前後のIssueを照合し、同じ受付portへ初回full scopeを渡す。Kの`wave create`と上限/権限を分離し、Issue pool取得・worktree・製品結果/候補・readinessとdaemon書込の接続は継続する。P全体の受入は未完了。
+- split: 候補作成前のtrusted WorkItem所属・criterion割当・scope/policy CASと履歴を保存し、親/割当Taskの入力へsource digestを結び付けた。初回Wave・全所属・通知・receiptを原子的に保存する共通source portと、private operator入力による`wave create-product`を接続した。`wave import-issue`ではrepository ID/ready/hold/依存と取得前後のIssueを照合し、同じ受付portへ初回full scopeを渡す。`wave run --issue-pool`のprivate opt-inから有界な初回受付workerを配置し、priority/永続cursor/再起動・保留後の進行とshutdown joinを検証する。Kの`wave create`と上限/権限を分離し、既存Issueのhold/close/編集同期・scope系譜・worktree・製品結果/候補・readinessとdaemon書込の接続は継続する。P全体の受入は未完了。
 - type: impl
 - owns:
   - internal/service/cli.go

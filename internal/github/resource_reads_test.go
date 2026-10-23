@@ -76,3 +76,23 @@ func TestFailedResourcePageDecodingConsumesSharedWireBudgetBeforeNextCommand(t *
 		t.Fatal("failed reads bypassed shared budget", string(wire), err)
 	}
 }
+
+func TestNestedResourceBudgetsChargeFailedChildAndBlockSiblings(t *testing.T) {
+	parent := WithResourceReadBudget(context.Background(), 10)
+	first := WithResourceReadBudget(parent, 2)
+	budget := first.Value(resourceBudgetKey{}).(*resourceReadBudget)
+	if err := budget.charge(6); err == nil {
+		t.Fatal("child limit was ignored")
+	}
+	sibling := WithResourceReadBudget(parent, 100)
+	shared := sibling.Value(resourceBudgetKey{}).(*resourceReadBudget)
+	if !shared.available() {
+		t.Fatal("failed child charged bytes it did not consume")
+	}
+	if err := shared.charge(4); err != nil {
+		t.Fatal(err)
+	}
+	if shared.available() || WithResourceReadBudget(parent, 100).Value(resourceBudgetKey{}).(*resourceReadBudget).available() {
+		t.Fatal("new child reset exhausted parent")
+	}
+}

@@ -248,4 +248,14 @@ GET専用ResourceAPIでrepositoryの数値ID/full_nameとIssueの番号/open/rea
 
 初回のfull scope revision 1だけを扱い、部分/既merge/改訂済みのscopeは明示lineage importへ保留する。Issue source/WorkItem IDを数値repository IDとIssue番号から固定し、scopeの変化を単なる再送として上書きしない。Issueの選択条件は正式承認ではなく、外部書込・candidate・実行許可を作らない。保存前後のHTTP読取は外部サービスとのatomic snapshotではなく、公開gateでのfresh source再確認が後続に残る。
 
-検証: `go test ./internal/product ./internal/kernelcli -run 'TestIssueAdmission|TestIssueImportCLI' -count=1`。共通受付/再送、repository/Issueの変化、hold/取得不能、依存・scope履歴の保留、キャンセル、認証済みghと同じargvのGET専用transport fixtureを確認する。実GitHub接続、poolの自動走査、初回以降のscope同期と製品runtime全体は未受入である。
+検証: `go test ./internal/product ./internal/kernelcli -run 'TestIssueAdmission|TestIssueImportCLI' -count=1`。共通受付/再送、repository/Issueの変化、hold/取得不能、依存・scope履歴の保留、キャンセル、認証済みghと同じargvのGET専用transport fixtureを確認する。初回pool workerの配置は次節を参照。実GitHub接続、初回以降のscope同期と製品runtime全体は未受入である。
+
+## 初回Issue poolのbackground worker
+
+`product.IssuePool`はready走査の外で完全なIssue collectionを有界に読み、open/ready/hold/PRの除外とpriority/番号順を適用する。1走査1〜32試行、collection 2048件、API data 16 MiB/128読取呼出し/45秒を上限とし、個々のfresh取得と依存は`IssueAdmitter`を通す。ghの各応答は4 MiBの上限である。走査全体のtransport budgetを各Issue取得の親として共有し、応答上限/JSON decodeの失敗で呼出し側へbytesが返らなくても消費分を計上する。親の予算が尽きた後は新しいghを起動しない。取得不能・重複/不正ID・過大なcollectionを空集合の成功にせず、途中の候補が保留でも他の候補へ進む。
+
+source policy/priority digest付きcursorをrepository単位で保存し、次回/再起動は最後の処理の続きからsorted orderを循環する。走査全体のbyte/call予算が尽きたら停止し、まだIssueを取得していない候補をholdと判断してcursorを進めない。部分結果と予算切れの診断を返し、次回は未取得候補から再開する。走査自身のdeadlineが取得中に切れた場合は、読取終了後、元のdaemon contextに従う1秒の保存用contextで取得開始済み候補のcursorを保存する。daemon自身のcancel/deadlineを迂回した保存は行わない。既存source Waveは初回受付から除外し、新規受付のcommit後にだけhintを送る。cursorの失敗や重複scanで初回eventを再発行せず、holdをcandidateやmodel runに変換しない。既存Issueの方向修正・hold/close同期はこのworkerで行わない。
+
+`wave run --issue-pool private.json`はschema1・private same-userの設定をruntime構築前に検査し、同じmain/上限/Storeを持つworkerをcontroller-owned lifecycleへ配置する。IPC/dispatchやPR observer/WebhookのloopでHTTPを待たず、shutdownはworkerの読取終了までjoinする。
+
+検証: `go test ./internal/product ./internal/kernelcli -run '^TestIssuePool' -count=1`。priority/件数上限、同じpoolの再走査/再openと初回event非重複、hold後のcursor進行、collection失敗/破損/他repo/cancel join、private opt-in設定/誤用拒否、実ghと同じGET argvのconfigured-worker fixtureでcommit-before-hintを確認する。既存daemon worker lifecycleの回帰も実行する。32候補の過大応答fixtureでtransport読取が4件で止まること、予算切れ後の正常な5件目が再open後に受付されること、repository確認中のcall上限でも未取得Issueのcursorを維持すること、走査timeout後の再openで正常な次候補へ進みdaemon cancelは保存をdetachしないこと、子の小さい予算に失敗した分も親へ計上し、兄弟の取得でresetできないことを追加確認する。実GitHub/実modelを含むP全体の受入ではない。
