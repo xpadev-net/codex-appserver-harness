@@ -166,7 +166,7 @@ chmod 600 product-request.json
 
 Pのstage/product flagと初期policy版はコマンドが指定し、実行上限・main sessionは保存した`kernel.json`から決めます。入力からpolicy、session、candidateを設定できません。JSONは12 MiB、元要求は8 MiB、request IDは4096 bytes、WorkItemは1〜128件/各定義64 KiBまでです。コマンド自体はmodelやGitHubを呼び出さず、commit後にdaemonへbest-effort hintを送ります。
 
-これはPのsource受付です。Issue poolのkernel入口、製品worktree/readiness・停止後候補・daemonの書込worker配置は接続途中であり、製品Taskは`product_readiness_unavailable`で保留されます。公開gateや正式なCloud承認、P Waveの完了を省略しません。[保存契約](docs/product-operations.md)を参照してください。
+これはPのsource受付です。既存Issueのhold/close/編集同期、製品worktree/readiness・停止後候補・daemonの書込worker配置は接続途中であり、製品Taskは`product_readiness_unavailable`で保留されます。公開gateや正式なCloud承認、P Waveの完了を省略しません。[保存契約](docs/product-operations.md)を参照してください。
 
 ### GitHub Issueの明示的な受付
 
@@ -185,7 +185,26 @@ privateなoperator fileでrepository名・数値IDと選択labelを指定しま�
 
 初回scopeはrevision 1・全criterionをincludedとするものに限定します。改訂済み・部分/既mergeのscopeは履歴を取り込む後続工程まで保留します。`harness-depends-on: 41,40`は32件までで、依存はclosed、対応するWorkItemを管理するkernel Waveがある場合は、direct/GitHubの入口にかかわらず製品Waveの完了も要求します。読取は最大30秒（CLI全体のretry枠は10秒）、各gh応答4 MiB/合計16 MiBの上限で、不明を成功にしません。HTTP取得とDB保存を跨ぐ外部の原子性はなく、公開前の再確認は引き続き必要です。
 
-このコマンドは一件の明示受付です。kernelのIssue pool自動走査、初回以降のscope同期、製品Task/候補/正式承認/mergeの統合は継続中です。実GitHub接続やP全体の受入証拠は別途必要です。
+このコマンドは一件の明示受付です。初回以降のscope同期、製品Task/候補/正式承認/mergeの統合は継続中です。実GitHub接続やP全体の受入証拠は別途必要です。
+
+### kernel daemonのIssue pool入口
+
+一つのrepositoryの初回Issue受付を、ready走査と独立した読取workerで継続できます。privateな`issue-pool.json`を用意します。
+
+```json
+{"schema_version":1,"source_policy":{"repository":"OWNER/REPOSITORY","repository_id":12345,"ready_label":"harness:ready","hold_label":"harness:hold"},"priority_labels":["priority:high","priority:normal"],"attempts":8,"every_seconds":60}
+```
+
+```sh
+chmod 600 issue-pool.json
+./harness wave run --root /absolute/private/kernel --runtime runtime.json --issue-pool issue-pool.json
+```
+
+`attempts`は1走査1〜32件、間隔は1〜3600秒です。初回はpriority label順・Issue番号順で選び、以後は永続cursorの続きから同じ順序を循環します。保留された先頭Issueが独立した後続を塞ぎ続けず、再起動でも進行を保持します。各候補は`import-issue`と同じfresh read/依存/原子的な受付を通り、controller全体のWave上限も維持します。
+
+1走査は最大2048 entities・API data 16 MiB・128読取呼出し・45秒で、各gh応答は4 MiBまでです。取得不能や過大なcollectionを完全な空集合にせず、保留/障害をdaemon診断へ出します。初回通知をcommitしてからwake hintを送ります。`IssuePool`は受付とhintを行い、model起動は共通scheduler/runtimeが担当します。daemonはcancel時に読取workerもjoinするまでcontroller lock/storeを保持します。
+
+これは初回受付のworkerです。既存Waveを再取得/再openせず、既存Issueのhold/close/編集をWaveへ同期する処理は後続です。製品Taskのreadiness保留・正式承認・公開gateは維持します。PR observer/Webhookとは別workerで、必要なら同時にopt-inできます。
 
 ## 設定と起動
 

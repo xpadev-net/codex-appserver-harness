@@ -248,4 +248,14 @@ GET専用ResourceAPIでrepositoryの数値ID/full_nameとIssueの番号/open/rea
 
 初回のfull scope revision 1だけを扱い、部分/既merge/改訂済みのscopeは明示lineage importへ保留する。Issue source/WorkItem IDを数値repository IDとIssue番号から固定し、scopeの変化を単なる再送として上書きしない。Issueの選択条件は正式承認ではなく、外部書込・candidate・実行許可を作らない。保存前後のHTTP読取は外部サービスとのatomic snapshotではなく、公開gateでのfresh source再確認が後続に残る。
 
-検証: `go test ./internal/product ./internal/kernelcli -run 'TestIssueAdmission|TestIssueImportCLI' -count=1`。共通受付/再送、repository/Issueの変化、hold/取得不能、依存・scope履歴の保留、キャンセル、認証済みghと同じargvのGET専用transport fixtureを確認する。実GitHub接続、poolの自動走査、初回以降のscope同期と製品runtime全体は未受入である。
+検証: `go test ./internal/product ./internal/kernelcli -run 'TestIssueAdmission|TestIssueImportCLI' -count=1`。共通受付/再送、repository/Issueの変化、hold/取得不能、依存・scope履歴の保留、キャンセル、認証済みghと同じargvのGET専用transport fixtureを確認する。初回pool workerの配置は次節を参照。実GitHub接続、初回以降のscope同期と製品runtime全体は未受入である。
+
+## 初回Issue poolのbackground worker
+
+`product.IssuePool`はready走査の外で完全なIssue collectionを有界に読み、open/ready/hold/PRの除外とpriority/番号順を適用する。1走査1〜32試行、collection 2048件、API data 16 MiB/128読取呼出し/45秒を上限とし、個々のfresh取得と依存は`IssueAdmitter`を通す。ghの各応答は4 MiBの上限である。取得不能・重複/不正ID・過大なcollectionを空集合の成功にせず、途中の候補が保留でも他の候補へ進む。
+
+source policy/priority digest付きcursorをrepository単位で保存し、次回/再起動は最後の試行の続きからsorted orderを循環する。既存source Waveは初回受付から除外し、新規受付のcommit後にだけhintを送る。cursorの失敗や重複scanで初回eventを再発行せず、holdをcandidateやmodel runに変換しない。既存Issueの方向修正・hold/close同期はこのworkerで行わない。
+
+`wave run --issue-pool private.json`はschema1・private same-userの設定をruntime構築前に検査し、同じmain/上限/Storeを持つworkerをcontroller-owned lifecycleへ配置する。IPC/dispatchやPR observer/WebhookのloopでHTTPを待たず、shutdownはworkerの読取終了までjoinする。
+
+検証: `go test ./internal/product ./internal/kernelcli -run '^TestIssuePool' -count=1`。priority/件数上限、同じpoolの再走査/再openと初回event非重複、hold後のcursor進行、collection失敗/破損/他repo/cancel join、private opt-in設定/誤用拒否、実ghと同じGET argvのconfigured-worker fixtureでcommit-before-hintを確認する。既存daemon worker lifecycleの回帰も実行する。実GitHub/実modelを含むP全体の受入ではない。
