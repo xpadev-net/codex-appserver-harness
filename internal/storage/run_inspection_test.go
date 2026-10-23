@@ -104,3 +104,39 @@ func TestRunInspectionLinksAppliedTaskResultDisposition(t *testing.T) {
 		t.Fatal(entry, err)
 	}
 }
+
+func TestRunInspectionMarksArchivedTaskFailuresWithoutChangingPhysicalState(t *testing.T) {
+	for _, state := range []string{"failed", "interrupted", "blocked"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			k, b := boundTaskFixture(t)
+			run := contract.SessionRun{ID: "archived-failure", ThreadID: b.ThreadID, State: "starting", Started: k.clock(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+			if err := k.ReserveSessionRun(ctx, b, sessionSnapshot(), run); err != nil {
+				t.Fatal(err)
+			}
+			run.State = state
+			if err := k.Put(ctx, "agent_run", run.ID, b.ID, run); err != nil {
+				t.Fatal(err)
+			}
+			if err := k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := k.ArchiveSessionRun(ctx, b.ID, run.ID, "known stopped failure requires explicit recovery"); err != nil {
+				t.Fatal(err)
+			}
+			page, err := k.InspectRuns(ctx, b.ID, 0, 1)
+			if err != nil || len(page.Entries) != 1 {
+				t.Fatal(page, err)
+			}
+			output, _, err := k.InspectRunOutput(ctx, run.ID, 0, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range []RunHistoryEntry{page.Entries[0], output} {
+				if entry.Run.State != state || !entry.Disposed || entry.Active || !entry.ProcessStopped || entry.Disposition == nil || entry.Disposition.Kind != "session_run_disposition" || !entry.Disposition.Archived || entry.Disposition.State != "archived" {
+					t.Fatal("incorrect archival observation", entry)
+				}
+			}
+		})
+	}
+}
