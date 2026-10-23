@@ -41,6 +41,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	model := fs.String("model", "", "configured model (init)")
 	runtimeFile := fs.String("runtime", "", "private runtime launch-policy JSON (run)")
 	observerFile := fs.String("pr-observer", "", "optional private PR read-observer JSON (run)")
+	webhookFile := fs.String("pr-webhook", "", "optional private PR webhook ingress JSON (run)")
 	file := fs.String("file", "", "direct request or versioned operator JSON")
 	id := fs.String("id", "", "stored Wave, Artifact, message, observation, or run ID")
 	after := fs.String("after", "", "last Wave/Task ID from a previous page")
@@ -93,6 +94,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	case "run":
 		allowed["runtime"] = true
 		allowed["pr-observer"] = true
+		allowed["pr-webhook"] = true
 	case "watch":
 		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
@@ -201,6 +203,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		webhook, err := loadPRWebhook(*webhookFile)
+		if err != nil {
+			return err
+		}
 		config, err := loadRuntime(*runtimeFile, *root, c.Model)
 		if err != nil {
 			return err
@@ -209,10 +215,14 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		var background []daemonWorker
 		if observer != nil {
-			return runDaemon(ctx, k, runtime, errOut, observer)
+			background = append(background, observer)
 		}
-		return runDaemon(ctx, k, runtime, errOut)
+		if webhook != nil {
+			background = append(background, webhook)
+		}
+		return runDaemon(ctx, k, runtime, errOut, background...)
 	case "watch":
 		return watchEvents(ctx, k, *root, *cursor, *limit, *once, out)
 	case "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":

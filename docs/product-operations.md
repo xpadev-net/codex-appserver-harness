@@ -163,3 +163,19 @@ harness wave run --root /absolute/private/root --runtime /absolute/private/runti
 daemon は IPC、model dispatch、観測を別 goroutine で動かし、いずれかが異常終了したら共通 cancel で停止する。観測の失敗は個別資源の Report と次回 poll へ進む。daemon 終了時は全 worker の終了まで controller lock / store を保持する。Webhook HTTP 配置と外部書込 dispatch はこの設定に含まれず後続である。
 
 検証: daemon worker 待機中の IPC 応答、cancel 中の lock 保持と join 後の解放、異常終了と予期しない正常 return の伝播、private/schema/上限の拒否、実 CLI の opt-in constructor 起動・停止を `go test ./internal/kernelcli -run 'TestPRObserver|TestKernelDaemon|TestKernelCLIRun' -count=3` で確認する。実 GitHub/model 接続はこの fixture の合格に含めない。
+
+### daemon の Webhook HTTP 入口
+
+`wave run` の任意 `--pr-webhook /absolute/private/pr-webhook.json` は、repository を固定した署名検証入口を起動する。観測の `--pr-observer` と同時に使える。Webhook が使えない構成では observer の定期照合だけを使える。
+
+```json
+{"schema_version":1,"repository_id":17,"listen":"127.0.0.1:8080","secret_file":"/absolute/private/webhook-secret"}
+```
+
+JSON と secret file は同一ユーザー所有・0600 の通常ファイルにする。secret は 1..4096 bytes の正確な内容を使い、末尾改行も除去しない。schema / repository ID と numeric loopback address:port を明示する。`localhost`、外向き address、port 0 を拒否する。reverse proxy を使う場合は `/github` を転送し、GitHub 側に同じ secret を設定する。secret を model/tool 入力へ渡さない。
+
+`POST /github` は既存 HMAC handler で 1 MiB の上限と署名を検査し、configured repository の raw delivery を commit してから非blockingな wake hint を送る。同じ delivery の再送は既存 record を維持し、内容違い・別repository・保存失敗には 503、署名違いには 401 を返す。入口は内容から operation / approval / policy を生成しない。資源への通知回収は既存の kernel source が行う。
+
+HTTP は header/body/idle timeout と同時 handler 上限32を持ち、過負荷時は503を返す。daemon cancel は request context に伝わり、5秒の graceful shutdown 後は接続を閉じる。controller は開始済み handler が戻るまで DB / lock を保持する。bind failure も全 daemon loop の停止へ伝播する。host のポート公開や実 GitHub 配送確認はこの fixture 検証とは別である。
+
+検証: `go test ./internal/kernelcli -run 'TestPRWebhook|TestPRObserver|TestKernelDaemon|TestKernelCLIRun' -count=3`。実 loopback HTTP で正確な payload 保存後の hint、誤署名/foreign/conflicting replay 拒否、再送の非重複、handler cancel/join、終了後の listener close、bind failure、private secret と設定境界を確認する。書込 dispatch/canonical 工程の接続は後続である。
