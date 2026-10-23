@@ -39,8 +39,13 @@ type PreparedSession struct {
 	UsageBaseline   *int64
 }
 type SessionDriver struct {
-	RPC   RPC
-	Store SessionPersistence
+	RPC          RPC
+	Store        SessionPersistence
+	ProductTools bool // explicit trusted host opt-in, never model input
+}
+
+type sessionToolProfiles interface {
+	PinSessionTools(context.Context, SessionBinding, string) error
 }
 type OutputValidator func([]byte, SessionBinding) error
 
@@ -78,6 +83,17 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 	if err = validSession(b); err != nil {
 		return PreparedSession{}, err
 	}
+	profile := "kernel_v1"
+	if d.ProductTools {
+		profile = "product_v1"
+	}
+	if profiles, ok := d.Store.(sessionToolProfiles); ok {
+		if err = profiles.PinSessionTools(ctx, b, profile); err != nil {
+			return PreparedSession{}, err
+		}
+	} else if d.ProductTools {
+		return PreparedSession{}, errors.New("persistent session tool profile required for product tools")
+	}
 	method := "thread/start"
 	params := map[string]any{"cwd": b.CWD, "model": b.Model, "approvalPolicy": "never", "sandbox": b.Sandbox}
 	// Reserve preparation before either start or resume. A prepared app-server
@@ -100,6 +116,9 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 		params["threadId"] = b.ThreadID
 	} else {
 		params["dynamicTools"] = contract.KernelTools(b.Kind)
+		if d.ProductTools {
+			params["dynamicTools"] = contract.ProductTools(b.Kind)
+		}
 		// A lost thread/start response must hold the creation intent rather
 		// than silently allocate a second thread to this Task on retry.
 	}

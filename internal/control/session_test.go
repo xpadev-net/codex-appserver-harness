@@ -77,6 +77,7 @@ type fakeProcess struct {
 	mu                                        sync.Mutex
 	queue                                     chan codex.Message
 	methods                                   []string
+	dynamicTools                              []contract.ToolDefinition
 	binding                                   contract.SessionBinding
 	threadID                                  string
 	turnID                                    string
@@ -130,6 +131,15 @@ func (p *fakeProcess) Send(value any) error {
 		}
 		result = map[string]any{}
 	case "thread/start", "thread/resume":
+		var params struct {
+			Tools []contract.ToolDefinition `json:"dynamicTools"`
+		}
+		if err := json.Unmarshal(m.Params, &params); err != nil {
+			return err
+		}
+		if len(params.Tools) > 0 {
+			p.dynamicTools = params.Tools
+		}
 		result = map[string]any{"thread": map[string]any{"id": p.threadID, "cwd": p.binding.CWD, "turns": []any{}}, "model": p.binding.Model}
 	case "turn/start":
 		if p.turnFail {
