@@ -64,6 +64,7 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductVerificationPolicy   *ProductVerificationPolicyInput            `json:"product_verification_policy,omitempty"`
 	ProductSubject              *ProductCandidateSubjectSnapshot           `json:"product_subject,omitempty"`
 	ProductSubjects             map[string]ProductCandidateSubjectSnapshot `json:"product_subjects,omitempty"`
 	ProductWorkspace            *ProductWorkspaceInput                     `json:"product_workspace,omitempty"`
@@ -221,6 +222,9 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 				state.Instructions += " For this product review use TaskResult schema_version=1 and set review.target_digest to product_subject.value.candidate_digest. Report clean/findings/inconclusive only about that fixed subject; the report is not formal approval."
 			}
 		}
+		if manifest.ProductVerificationPolicy != nil {
+			state.Instructions += " product_verification_policy fixes trusted test-write paths and registered/required profile IDs. A verification.Plan must refer to the known input Candidate and original assigned criteria; it cannot remove required profiles or supply runner success. Full trusted execution argv stays outside this manifest."
+		}
 		raw, err := encodeWakeJSON(manifest)
 		if err != nil {
 			return state, refs, err
@@ -374,6 +378,13 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			continue
 		}
 		m.Tasks = append(m.Tasks, task)
+		if b.Kind == "task" && b.TaskID == task.ID {
+			verificationPolicy, err := k.productVerificationPolicyInputTx(ctx, tx, w, task)
+			if err != nil {
+				return m, err
+			}
+			m.ProductVerificationPolicy = verificationPolicy
+		}
 		productSubject, subjectErr := k.fixedProductSubjectInputTx(ctx, tx, w, task.Spec)
 		if subjectErr != nil {
 			if b.Kind != "orchestrator" || !readinessHoldError(subjectErr) {
