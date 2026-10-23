@@ -10,7 +10,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-func verificationWorkspaceFixture(t *testing.T) (*KernelStore, domain.Wave, domain.Task, ProductWorkspaceRequest, ProductCandidateSubjectSnapshot, ProductVerificationPolicySnapshot) {
+func verificationWorkspaceFixture(t *testing.T, configure ...func(*ProductVerificationPolicy)) (*KernelStore, domain.Wave, domain.Task, ProductWorkspaceRequest, ProductCandidateSubjectSnapshot, ProductVerificationPolicySnapshot) {
 	t.Helper()
 	ctx := context.Background()
 	k, w, task, source := productSubjectFixture(t, "verification")
@@ -24,7 +24,11 @@ func verificationWorkspaceFixture(t *testing.T) (*KernelStore, domain.Wave, doma
 	}
 	request := producer.Value.Workspace.Value.Request
 	request.TaskID, request.BaseSHA = task.ID, source.Value.Candidate.SHA
-	p, err := k.RegisterProductVerificationPolicy(ctx, w.Target(), verificationPolicyFixture(w.ID, request.Repository, w.Policy.Revision))
+	value := verificationPolicyFixture(w.ID, request.Repository, w.Policy.Revision)
+	for _, apply := range configure {
+		apply(&value)
+	}
+	p, err := k.RegisterProductVerificationPolicy(ctx, w.Target(), value)
 	if err != nil {
 		t.Fatal(err)
 	}

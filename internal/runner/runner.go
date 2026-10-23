@@ -120,6 +120,7 @@ func LoadResult(root, id string) (Result, error) {
 // Execute claims a job directory exclusively. An existing directory without result is
 // unknown, never evidence the old job stopped and never grounds for an automatic rerun.
 func Execute(ctx context.Context, s Spec) (r Result, err error) {
+	ctx = workspace.WithStoppedCommands(ctx)
 	if err = s.Validate(); err != nil {
 		return r, err
 	}
@@ -165,6 +166,10 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 	var profile process.Identity
 	r = Result{JobID: s.JobID, Candidate: s.Candidate, ProfileID: s.ProfileID, ProfileRevision: s.Profile.Revision, Status: "infrastructure_failure", Started: time.Now().UTC(), Environment: runtime.GOOS + "/" + runtime.GOARCH, LogPath: filepath.Join(dir, "output.log")}
 	defer func() {
+		if errors.Is(err, workspace.ErrGitStopUnconfirmed) {
+			r.Status, r.Finished = "unknown", time.Now().UTC()
+			return // An unconfirmed Git owner cannot publish terminal evidence.
+		}
 		if profile.PID > 0 {
 			stopping, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			stopErr := process.WaitStopped(stopping, profile)
@@ -191,10 +196,10 @@ func Execute(ctx context.Context, s Spec) (r Result, err error) {
 		return r, err
 	}
 	checkout := filepath.Join(dir, "checkout")
-	if _, err = workspace.Git(ctx, s.Repository, "clone", "--no-local", "--no-checkout", "--", s.Repository, checkout); err != nil {
+	if _, err = workspace.Git(ctx, s.Repository, "--no-replace-objects", "clone", "--no-local", "--no-checkout", "--", s.Repository, checkout); err != nil {
 		return r, err
 	}
-	if _, err = workspace.Git(ctx, checkout, "-c", "core.hooksPath=/dev/null", "checkout", "--detach", s.Candidate.SHA); err != nil {
+	if _, err = workspace.Git(ctx, checkout, "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "checkout", "--detach", s.Candidate.SHA); err != nil {
 		return r, err
 	}
 	r.TestedSHA, err = workspace.Resolve(ctx, checkout, "HEAD")
