@@ -3,11 +3,15 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 // Execute the actual detached wrapper contract without building another binary.
@@ -27,6 +31,34 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func TestUnconfirmedGitStopDuringCancelNeverPublishesTerminalResult(t *testing.T) {
+	for _, stage := range []string{"clone", "checkout", "rev-parse", "status"} {
+		t.Run(stage, func(t *testing.T) {
+			s := spec(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result, err := executePrepared(ctx, s, func(ctx context.Context, s Spec, path string) (string, error) {
+				return prepareCheckout(ctx, s, path, func(_ context.Context, _ string, args ...string) (string, error) {
+					if slices.Contains(args, stage) {
+						cancel()
+						return "", errors.Join(context.Canceled, workspace.ErrGitStopUnconfirmed)
+					}
+					if slices.Contains(args, "rev-parse") {
+						return s.Candidate.SHA + "\n", nil
+					}
+					return "", nil
+				})
+			})
+			if !errors.Is(err, workspace.ErrGitStopUnconfirmed) || !errors.Is(err, context.Canceled) || result.Status != "unknown" {
+				t.Fatal("lost unconfirmed Git stopping fact", result, err)
+			}
+			if _, err := LoadResult(s.Root, s.JobID); !os.IsNotExist(err) {
+				t.Fatal("unconfirmed stopping published terminal evidence", err)
+			}
+		})
+	}
 }
 
 func stoppedCompletionFixture(t *testing.T, script string, timeout int, configure ...func(*Spec)) (Spec, Completion) {
