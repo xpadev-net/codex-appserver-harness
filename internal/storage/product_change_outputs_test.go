@@ -146,3 +146,20 @@ func TestProductChangeSchemaCannotReclassifyGenericKRun(t *testing.T) {
 		t.Fatal("generic run self-classified as a product output", result, err)
 	}
 }
+
+func TestProductVerificationSchemaCannotReclassifyGenericKRun(t *testing.T) {
+	ctx := context.Background()
+	k, b, run, _ := recordedTaskResultFixture(t, func(result *contract.TaskResult) {
+		result.SchemaVersion = 3
+		result.WorkItemRefs = []contract.CandidateReference{}
+		result.ProductChanges = []contract.ProductChangeReference{{WorkItemID: "foreign", WorkspaceID: "unowned", WorkspaceDigest: strings.Repeat("a", 64)}}
+		result.ProductVerification = &contract.ProductVerificationReference{SubjectID: "spoofed", SubjectDigest: strings.Repeat("b", 64), PlanArtifactID: result.Artifacts[0]}
+	})
+	if err := k.MarkSessionStopped(ctx, b.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := k.ApplyTaskResult(ctx, b.ID, run.ID)
+	if err != nil || receipt.State != contract.TaskFailed || !strings.Contains(receipt.Reason, "trusted P verification") {
+		t.Fatal("generic run self-classified verification", receipt, err)
+	}
+}

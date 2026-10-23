@@ -285,6 +285,9 @@ func ValidateTaskOutput(data []byte, b SessionBinding) error {
 func ValidateProductTaskOutput(data []byte, b SessionBinding) error {
 	return validateTaskOutputVersion(data, b, 2)
 }
+func ValidateProductVerificationTaskOutput(data []byte, b SessionBinding) error {
+	return validateTaskOutputVersion(data, b, 3)
+}
 func validateTaskOutputVersion(data []byte, b SessionBinding, version int) error {
 	if b.Kind != "task" {
 		return errors.New("Task output requires a Task binding")

@@ -23,6 +23,12 @@ type ProductWorkspaceInput struct {
 func UsesProductChangeOutput(w domain.Wave, t domain.Task) bool {
 	return w.Policy.Stage == "P" && w.Policy.Product && (t.Spec.Kind == "work" || t.Spec.Kind == "fix") && len(t.Spec.WorkItemIDs) == 1
 }
+
+// UsesProductVerificationOutput selects an output shape, never execution/write
+// permission or a verification verdict.
+func UsesProductVerificationOutput(w domain.Wave, t domain.Task) bool {
+	return w.Policy.Stage == "P" && w.Policy.Product && t.Spec.Kind == "verification" && len(t.Spec.WorkItemIDs) == 1
+}
 func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (*ProductWorkspaceInput, error) {
 	if b.Kind != "task" {
 		return nil, nil

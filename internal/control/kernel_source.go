@@ -87,6 +87,9 @@ func (s *KernelSource) bindingContract(ctx context.Context, b contract.SessionBi
 		if storage.UsesProductChangeOutput(wave, task) {
 			return contract.StrictOutputSchema(contract.ProductTaskResultSchema()), worker.ValidateProductTaskOutput, nil
 		}
+		if storage.UsesProductVerificationOutput(wave, task) {
+			return contract.StrictOutputSchema(contract.ProductVerificationTaskResultSchema()), worker.ValidateProductVerificationTaskOutput, nil
+		}
 	}
 	return sourceContract(b.Kind)
 }

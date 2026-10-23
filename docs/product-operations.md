@@ -396,3 +396,13 @@ review用workspaceの値にはoptional subject ID/digestを固定し、一度だ
 検証: `go test ./internal/storage ./internal/product -run 'TestProductReview|TestProductWorkspace|TestFixedProductInput' -count=1`。subject参照/read-only/入力digest、SHA/repository/未固定role拒否、準備中のCandidate変更、証拠欠落、実temp Gitで実装担当とは異なるCWD/git-dirに固定commitと製品codeがあること、再送とproducer状態維持を確認する。model factsはfixtureであり、read-only sandbox下の実model reviewやP受入には数えない。
 
 verificationのテスト追加は別の書込範囲/出力契約を必要とするため、このreview用checkoutへ自己分類しない。製品readiness、review成果の品質gate、verification/runnerへの接続は引き続き後続である。
+
+## 独立検証の変更申告schema v3
+
+Pの単一WorkItem verification Taskは専用`product-verification-task-result-v3.json`を選ぶ。K/汎用Taskとreviewはv1、製品work/fixはv2を維持し、modelがschema番号でroleを取得することはできない。元のv1/v2 JSON/schemaは変更しない。
+
+outcome=resultは、Task固有のworkspace変更参照一件と`product_verification`（固定subject ID/digest、今回の成果に宣言した計画Artifact ID）を要求する。計画は既存`verification.Plan`として既知の入力Candidateに対して作成し、元要求・契約・criterionと期待値の根拠を記録する。新しいcommit SHA/Candidateやrunner成功、独立review/正式承認を自己申告しない。既存のreview/verification成功referenceはnull、WorkItemRefsは空とする。waiting/blockedでは変更参照を空にし、product_verificationをnullにする。
+
+共通driverはv3を独立して検証し、raw finalの計画参照を保持する。controllerは固定Task/subject/workspaceとtrusted P verification roleを再照合し、他Taskの参照を拒否する。テスト書込範囲、正常終了・停止後のsealing、計画Artifactの内容/許可と最終Candidateへのrebindは後続の接続であり、この契約だけでは成果を適用しない。元の計画Artifact/raw finalを書き換えず、hostが既存の計画検証・rebindを使って正規化した証拠を別保存する。
+
+検証: contract/worker/control/storageのv1/v2/v3境界、既存schema一致、subject/plan必須、SHA/自己review/runner evidence拒否、共通driverのraw final保持、trusted role選択、Kの自己分類拒否を確認する。verificationの実行・書込・sealing/plan採用が未接続の間は成果を保留し、製品readinessを外さない。

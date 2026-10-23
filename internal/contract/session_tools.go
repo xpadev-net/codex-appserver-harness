@@ -219,37 +219,64 @@ type ProductChangeReference struct {
 	WorkspaceDigest string `json:"workspace_digest"`
 }
 
+type ProductVerificationReference struct {
+	SubjectID      string `json:"subject_id"`
+	SubjectDigest  string `json:"subject_digest"`
+	PlanArtifactID string `json:"plan_artifact_id"`
+}
+
 type TaskResult struct {
-	SchemaVersion    int                      `json:"schema_version"`
-	Target           Target                   `json:"target"`
-	PhaseID          string                   `json:"phase_id"`
-	TaskID           string                   `json:"task_id"`
-	Outcome          string                   `json:"outcome"`
-	Artifacts        []string                 `json:"artifacts"`
-	CriterionResults []CriterionResult        `json:"criterion_results"`
-	WorkItemRefs     []CandidateReference     `json:"work_item_refs"`
-	ProductChanges   []ProductChangeReference `json:"product_changes,omitempty"`
-	Remaining        []string                 `json:"remaining"`
-	Blockers         []string                 `json:"blockers"`
-	SubscriptionIDs  []string                 `json:"subscription_ids"`
-	Review           *ReviewResult            `json:"review"`
-	Verification     *VerificationReference   `json:"verification"`
+	ProductVerification *ProductVerificationReference `json:"product_verification,omitempty"`
+	SchemaVersion       int                           `json:"schema_version"`
+	Target              Target                        `json:"target"`
+	PhaseID             string                        `json:"phase_id"`
+	TaskID              string                        `json:"task_id"`
+	Outcome             string                        `json:"outcome"`
+	Artifacts           []string                      `json:"artifacts"`
+	CriterionResults    []CriterionResult             `json:"criterion_results"`
+	WorkItemRefs        []CandidateReference          `json:"work_item_refs"`
+	ProductChanges      []ProductChangeReference      `json:"product_changes,omitempty"`
+	Remaining           []string                      `json:"remaining"`
+	Blockers            []string                      `json:"blockers"`
+	SubscriptionIDs     []string                      `json:"subscription_ids"`
+	Review              *ReviewResult                 `json:"review"`
+	Verification        *VerificationReference        `json:"verification"`
 }
 
 func (r TaskResult) Validate() error {
-	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
+	if (r.SchemaVersion != 1 && r.SchemaVersion != 2 && r.SchemaVersion != 3) || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
 		return errors.New("result identity missing")
 	}
 	if r.SchemaVersion == 1 && r.ProductChanges != nil {
 		return errors.New("product change references require TaskResult schema 2")
 	}
-	if r.SchemaVersion == 2 {
+	if r.SchemaVersion != 3 && r.ProductVerification != nil {
+		return errors.New("product verification reference requires TaskResult schema 3")
+	}
+	if r.SchemaVersion == 2 || r.SchemaVersion == 3 {
 		if len(r.WorkItemRefs) != 0 || r.Review != nil || r.Verification != nil || len(r.ProductChanges) > 1 || (r.Outcome == "result" && len(r.ProductChanges) != 1) || (r.Outcome != "result" && len(r.ProductChanges) != 0) {
 			return errors.New("product work output requires its workspace change reference, with controller-owned candidate/quality facts")
 		}
 		for _, change := range r.ProductChanges {
 			if !inline(change.WorkItemID) || !inline(change.WorkspaceID) || strings.ContainsAny(change.WorkItemID+change.WorkspaceID, "\x00\r\n") || len(change.WorkspaceDigest) != 64 || strings.Trim(change.WorkspaceDigest, "0123456789abcdef") != "" {
 				return errors.New("invalid product workspace change reference")
+			}
+		}
+	}
+	if r.SchemaVersion == 3 {
+		if (r.Outcome == "result") != (r.ProductVerification != nil) {
+			return errors.New("verification changes require their fixed subject and plan artifact")
+		}
+		if ref := r.ProductVerification; ref != nil {
+			if !inline(ref.SubjectID) || !inline(ref.PlanArtifactID) || strings.ContainsAny(ref.SubjectID+ref.PlanArtifactID, "\x00\r\n") || len(ref.SubjectDigest) != 64 || strings.Trim(ref.SubjectDigest, "0123456789abcdef") != "" {
+				return errors.New("invalid verification subject/plan reference")
+			}
+			found := false
+			for _, id := range r.Artifacts {
+				found = found || id == ref.PlanArtifactID
+			}
+			if !found {
+				return errors.New("verification plan must be a declared result artifact")
 			}
 		}
 	}
@@ -475,6 +502,7 @@ func TaskResultSchema() map[string]any {
 	s := Schema(TaskResult{})
 	properties := s["properties"].(map[string]any)
 	delete(properties, "product_changes") // Keep the versioned K/review schema byte-for-byte unchanged.
+	delete(properties, "product_verification")
 	properties["outcome"].(map[string]any)["enum"] = []string{"result", "waiting", "blocked"}
 	properties["criterion_results"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)["enum"] = []string{"claimed", "unverified"}
 	properties["review"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["verdict"].(map[string]any)["enum"] = []string{"clean", "findings", "inconclusive"}
@@ -494,6 +522,20 @@ func ProductTaskResultSchema() map[string]any {
 	s["required"] = append(s["required"].([]string), "product_changes")
 	properties["work_item_refs"].(map[string]any)["maxItems"] = 0
 	properties["review"], properties["verification"] = map[string]any{"type": "null"}, map[string]any{"type": "null"}
+	return s
+}
+
+// ProductVerificationTaskResultSchema identifies test changes and an original
+// plan artifact. Candidate sealing, plan rebind and runner evidence are host work.
+func ProductVerificationTaskResultSchema() map[string]any {
+	s := ProductTaskResultSchema()
+	properties := s["properties"].(map[string]any)
+	properties["schema_version"].(map[string]any)["const"] = 3
+	ref := Schema(ProductVerificationReference{})
+	digest := ref["properties"].(map[string]any)["subject_digest"].(map[string]any)
+	digest["minLength"], digest["maxLength"], digest["pattern"] = 64, 64, "^[0-9a-f]{64}$"
+	properties["product_verification"] = map[string]any{"anyOf": []any{ref, map[string]any{"type": "null"}}}
+	s["required"] = append(s["required"].([]string), "product_verification")
 	return s
 }
 
