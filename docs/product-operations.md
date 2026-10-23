@@ -347,3 +347,17 @@ outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする
 すべてのdirectoryが保存時のcanonical pathであること、元repositoryとcheckoutのcommon-dir、正確なgit-dir、branch、HEADが固定baseの子孫であることを、staging前に検査する。common-dirとbranchだけを模倣した`.git`の差し替えは拒否する。strict stopped-command profileで変更をstage/commitし、host指定identityと署名無効化、既存のhook/filter等の無効化を適用する。replace refを無効化し、legacy graftsは拒否して、実commitの親子関係を検査する。commit後も同じ所属・base ancestry・clean状態を再確認する。停止不明・取消・検査失敗には成功receiptを返さず、callerがintent/予約を保持して照合する。
 
 検証: `go test ./internal/workspace -run 'TestFreezePinned|TestStoppedGit' -count=1`。実temp Gitの不変commitとclean再送、hook/filter/signing非実行、common-dir/branchを模倣した別git-dir、branch/path差し替え、無関係なbase、取消時のstage/commit非実行を確認する。製品Taskの停止済みrunとのDB照合、sealing intent/履歴、Candidate projectionは後続であり、この関数の成功をP全体の受入には数えない。
+
+## 停止済みTaskからのlocal Candidate sealing
+
+`product.CandidateSealer.Seal(ctx, taskID, runID)` は、trusted hostが停止済みrunの変更を固定する同期ownerである。現在Pの単一WorkItem work/fix、同じTask/session/target、正常終了した非baseline turn、runとsession双方の停止、未適用のactive runを要求する。pause/hold/取消/期限切れ/interruptionは開始を許可しない。
+
+raw finalのschema v2とTask固有workspace参照、保存済みsnapshotの実bytes、run budget binding、snapshot内manifest参照とread grant、manifestのchecksum・Task入力・workspaceを照合する。現在の固定入力に加え、準備開始前の元入力も比較し、別Candidateに追い越されたcheckoutを新しい成果として確定しない。source/Artifact/依存成果の証拠検査を維持する。model finalをcommit SHAへ書き換えない。
+
+`ReserveProductSeal` はこの不変入力とGit/作成先資源の予約を原子的に保存する。`ClaimProductSeal` は再照合した後、commit成功時だけ一度の開始を返す。launchingの再送/再openは開始を返さず、停止不明も予約を保持する。ownerはprivate directoryと保存済みGit証拠から`FreezePinned`を呼び、有界3秒の停止証拠保存をjoinする。callerはその終了前にStoreを閉じない。
+
+`FinishProductSeal` は保存済みcheckoutと一致する停止証拠から、固定Candidate・receipt・不変history・予約解放を一transactionで保存する。途中で入力/出所が変わればstaleの歴史的commitとして保持する。失敗/not_startedはCandidateを作らず、使用済みintentから自動再試行しない。SQL/運用エラーはstale成功に変換せずrollbackし、commit済みでもreceipt保存に失敗した場合はlaunching/予約を残して明示照合を要求する。元receiptの再送はread-onlyで、失われたheadをhistoryから新規操作として再生成しない。
+
+検証: `go test ./internal/storage ./internal/product -run 'TestProductSeal|TestCandidateSealer' -count=1`。正常/非baseline/物理停止/snapshot・manifest・元入力の境界、並行claim、再open、未開始/失敗、SQL rollback、stale history、実Git commit・raw final保持と保存失敗後の二重実行拒否を確認する。SQLite fixtureのmodel停止factsを使用しており、実model dispatchの受入には数えない。
+
+このportはlocal commitの確定までで、active ProductTargetへの採用、Task成果適用、製品readiness、runner/独立review/正式承認への配置は引き続き後続である。`sealed`の歴史的receiptを、現在の実行・品質・公開の許可として使わない。
