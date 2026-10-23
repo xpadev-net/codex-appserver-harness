@@ -26,11 +26,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task")
+		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task":
+	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -61,7 +61,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	switch command {
 	case "init":
 		allowed["session"], allowed["model"] = true, true
-	case "create", "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task":
+	case "create", "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":
 		allowed["file"] = true
 	case "recovery-input":
 		allowed["session"], allowed["file"] = true, true
@@ -146,7 +146,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return runDaemon(ctx, k, runtime, errOut)
 	case "watch":
 		return watchEvents(ctx, k, *root, *cursor, *limit, *once, out)
-	case "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task":
+	case "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":
 		result, err := applyControlFile(ctx, k, command, *file)
 		if err != nil {
 			return err

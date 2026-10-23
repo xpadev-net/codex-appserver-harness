@@ -35,7 +35,7 @@ JSON
 
 これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
-request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。mainの監査付き復旧は下記コマンドで操作できます。未確定thread作成の復旧CLIと実K受入は後続工程です。
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。mainの監査付き復旧は下記コマンドで操作できます。実K受入は後続工程です。
 
 ### Cursor付きwatch
 
@@ -102,13 +102,26 @@ daemonはroot単位で排他し、起動時に保存済み依頼/未適用結果
 
 `recovery-input`は現在のscopeに基づく入力を保存してID/digestを返し、実行を開始しません。棄却はrunの物理的結果・使用量を保持し、理由付きで旧入力を処理して次のmain threadへのrotationを記録します。unknown・未停止・未照合の外部操作がある場合は拒否します。
 
-曖昧なunknown開始について、保存された観測からrunに属するturnをoperatorが特定できた場合は、`wave associate-turn --file association.json`を使います。fileは`{key,expected,run_id,observation_id,turn_id,reason}`です。観測したrecovery ownerも停止済みでなければ拒否します。対応付けは選択したturn IDのみを保存し、unknownを成功へ変換しません。結果はdaemonが通常のread-only照合で確定します。同じkey/内容の再送は元receiptを返し、変更した再送は拒否します。未確定thread作成の復旧CLIは後続工程です。
+曖昧なunknown開始について、保存された観測からrunに属するturnをoperatorが特定できた場合は、`wave associate-turn --file association.json`を使います。fileは`{key,expected,run_id,observation_id,turn_id,reason}`です。観測したrecovery ownerも停止済みでなければ拒否します。対応付けは選択したturn IDのみを保存し、unknownを成功へ変換しません。結果はdaemonが通常のread-only照合で確定します。同じkey/内容の再送は元receiptを返し、変更した再送は拒否します。未確定thread作成は次の監査操作で扱います。
 
 ### blocked Task の明示再試行
 
 `wave retry-task --file retry.json`は`{expected,run_id,snapshot:{id,digest},reason}`を受け取ります。`expected`は直前のinspectの`task`全体、`run_id`は新しい一意IDです。`recovery-input --session TASK_SESSION_ID --file targets.json`で準備した保存入力を指定します。認可時はTask・停止状態・scope・予算を照合し、schedulerが同じrun ID/入力で共通runtimeへ渡します。認可・dispatch選択ではAttemptを消費せず、run予約と同じtransactionで一度だけ許可を消費します。
 
 再試行も元のTask/threadを保持し、pause/cancel/方向修正・期限・Attempt上限を迂回しません。unknownや前run未照合では許可しません。起動準備がrun IDを取得した後でturn予約前に失敗した場合は、自動反復せず、`session.dispatch_hold`に理由を残します。設定を直した後は別のrun IDで新しく明示認可してください。同じID/内容の再送は過去の認可を再適用しません。
+
+### 応答を失った thread 作成の処理
+
+`session`で`creating=true`かつthread IDが未確定の場合、同じthread/startを自動反復しません。元processと同sessionのmanaged ownerがすべて停止済みであることを確認してから、次を使います。
+
+```sh
+./harness wave recover-thread --root /absolute/private/kernel --file recover.json
+./harness wave retire-thread --root /absolute/private/kernel --file retire.json
+```
+
+main用の`recover.json`は`{key,action:"recover_main",expected,snapshot:{id,digest},reason}`です。`expected`は現在の`session.binding`全体、snapshotは`recovery-input --session main`で準備した保存参照です。元の作成intent・予算・Waveを保持し、新しいgenerationを許可する処理をreceiptと同じtransactionで記録します。pause等は解除しません。
+
+Task用の`retire.json`は`{key,action:"retire_task",expected,reason}`です。旧Task/sessionを終端にし、置き換えが必要な場合は新しいTask/session IDを計画します。canceled Taskの作成を処理してもcancel状態は保持します。どちらも未停止・古いbindingやscopeを拒否し、既にthreadがあるunknown runを棄却する操作には使えません。同じkeyの再送は元receiptを返し、後で生じた別の未確定作成を処理しません。
 
 ## 設定と起動
 
