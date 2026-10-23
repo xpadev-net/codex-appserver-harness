@@ -91,6 +91,10 @@ func checkProductRunnerExecution(t *testing.T, k *storage.KernelStore, plan stor
 	if err != nil || p.Value.WorkItem.Phase != domain.Verifying {
 		t.Fatal("runner bypassed quality", p, err)
 	}
+	evidence, err := k.ReadProductVerificationEvidence(ctx, plan.ID)
+	if err != nil || !evidence.Value.Complete || evidence.Value.Passed == cancelJob {
+		t.Fatal("actual execution was not bound to current full profile gate", evidence, err)
+	}
 	root := k.Root
 	k.Close()
 	k, err = storage.OpenExistingKernel(filepath.Join(root, "state.db"))
