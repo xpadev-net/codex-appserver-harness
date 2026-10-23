@@ -214,13 +214,16 @@ func TestTaskPRSubscriptionsRollbackWithPlanAndPublicationBinding(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = k.Put(ctx, "wave_work_item", "work", w.ID, map[string]any{"target": w.Target(), "candidate_id": ""}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = k.DB.Exec(`CREATE TRIGGER reject_assignment BEFORE INSERT ON records WHEN NEW.kind='product_pr_subscription_intent' AND json_extract(NEW.payload,'$.source_kind')='assignment' BEGIN SELECT RAISE(FAIL,'assignment rollback'); END`); err != nil {
 		t.Fatal(err)
 	}
 	plan := storagePlanFixture()
 	plan.Phases[0].Tasks[0].WorkItemIDs = []string{"work"}
-	if _, err = k.AdoptPlan(ctx, w.Target(), "plan", plan); err == nil {
-		t.Fatal("partial plan assignment committed")
+	if _, err = k.AdoptPlan(ctx, w.Target(), "plan", plan); err == nil || !strings.Contains(err.Error(), "assignment rollback") {
+		t.Fatal("plan did not reach injected subscription failure", err)
 	}
 	var count int
 	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_tasks").Scan(&count); err != nil || count != 0 {
