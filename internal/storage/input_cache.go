@@ -65,6 +65,7 @@ func (c *verifiedInputCache) clear() {
 // slice just to check mutable authority. Old rows without the projection use
 // the original full record; input construction backfills it transactionally.
 type waveToolScope struct {
+	SourceHeld            bool             `json:"source_held,omitempty"`
 	ID                    string           `json:"id"`
 	OrchestratorSessionID string           `json:"orchestrator_session_id"`
 	BoundTarget           contract.Target  `json:"target"`
@@ -75,9 +76,11 @@ type waveToolScope struct {
 }
 
 func (s waveToolScope) Target() contract.Target { return s.BoundTarget }
-func (s waveToolScope) DispatchPaused() bool    { return s.Paused || s.PendingDirectionID != "" }
+func (s waveToolScope) DispatchPaused() bool {
+	return s.Paused || s.PendingDirectionID != "" || s.SourceHeld
+}
 func toolScope(w domain.Wave) waveToolScope {
-	return waveToolScope{ID: w.ID, OrchestratorSessionID: w.OrchestratorSessionID, BoundTarget: w.Target(), State: w.State, Paused: w.Paused, PendingDirectionID: w.PendingDirectionID, Deadline: w.Deadline}
+	return waveToolScope{ID: w.ID, OrchestratorSessionID: w.OrchestratorSessionID, BoundTarget: w.Target(), State: w.State, Paused: w.Paused, SourceHeld: w.SourceHold != nil, PendingDirectionID: w.PendingDirectionID, Deadline: w.Deadline}
 }
 func saveWaveToolScopeTx(ctx context.Context, tx *sql.Tx, w domain.Wave) error {
 	return kernelRecordTx(ctx, tx, "wave_tool_scope", w.ID, w.ID, toolScope(w))

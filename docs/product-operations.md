@@ -263,3 +263,15 @@ repositoryごとにsource policy/priority/collection版digest、group、ペー�
 `wave run --issue-pool private.json`はschema1・private same-user設定をruntime構築前に検査し、同じmain/上限/Storeのworkerをcontroller-owned lifecycleへ配置する。既存source Waveの再open・初回event再発行は行わず、commit後のhintだけを送る。shutdownは読取の終了までjoinする。既存Issueの方向修正・hold/close同期と製品Task/候補/公開は別の接続として残る。
 
 検証: `go test ./internal/product ./internal/github ./internal/kernelcli -run 'TestIssuePool|TestIssueMetadata' -count=1`。32件ページとページ内位置の再open、4 MiBを超える旧形式collectionでもmetadataから高priorityの後方Issueを先に受付できること、選択した本文だけのGET、fresh labelのpriority再確認、完全/不完全なページ境界を確認する。既存の容量/rollback、過大応答の累積budget、未取得5件目の再開、deadline/cancel、private設定とdaemon lifecycleの回帰も維持する。fixtureと実GitHub/実modelを含むP全体の受入は区別する。
+
+## Sourceの観測と独立した保留
+
+`KernelStore.ObserveProductSource`はtrusted controller専用の保存portである。canonicalなGitHub source ID、repository数値ID/Issue番号、source policy digest、GETで確認したopen/closed・ready/hold・元要求digest・更新時刻、または理由付き取得不能を受け付ける。current snapshot digestによるCASは外部読取の前に取得する。Sourceのscope/policyは照合し、同じsource内のplan変更は上書きしない。
+
+観測は`ready / unavailable / closed / hold / not_ready / request_changed / scope_unconfirmed`を区別する。未確認・closed/hold・ready条件不成立・要求編集・WorkItem所属の旧版は`Wave.source_hold`として後続dispatchを保留する。`ready`は必要なsource条件を満たしたことだけを表し、検証・正式承認やWaveの成功を意味しない。編集を新scopeへ自動採用せず、版付き同期/後続工程へ残す。
+
+source保留、manual pause、pending directionは独立で、手動resumeはsource保留を解除しない。Sourceがreadyに戻ってもmanual pause/directionを消さない。Waveと小さいtool authority projectionを同じtransactionで保存し、既存のscheduler/共通gateway/PR送信直前guardへ反映する。cancelは終端の親向け観測を阻害しないよう実行用保留を外し、source観測だけで終端Waveを再open/再holdしない。
+
+現在snapshot・不変history・Wave/authority・watch eventを原子的に保存し、完全一致の再送はread-onlyにする。watch eventから通知intentを生成せず、source pollだけで無条件のmain turnを要求しない。破損/missing headの履歴は上書きして再構築せず、active Waveへ`state_invalid`の禁止だけを保存し、元の証拠を残す。SQL/保存失敗はrollbackする。
+
+検証: `go test ./internal/storage -run '^TestProductSourceObservation' -count=1`。CAS/再open/履歴、手動保留との独立、状態別保留、scope/foreign/K拒否、再計画と競合する観測、history/watch失敗rollback、warm saved input/準備済みPRの禁止、通知/run非増加、破損証拠保持と終端観測を確認する。この分割は保存と共通禁止の接続であり、既存Issueをpollしてこのportへ渡すworker配置と版付き要求同期は後続である。

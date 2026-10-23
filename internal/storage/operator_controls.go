@@ -86,6 +86,7 @@ func (k *KernelStore) ApplyOperatorControl(ctx context.Context, r OperatorContro
 			// Cancellation supersedes pause. The parent's terminal observation
 			// must remain deliverable; terminal state still forbids Task dispatch.
 			w.Paused = false
+			w.SourceHold = nil
 			rows, err := tx.QueryContext(ctx, "SELECT id FROM kernel_tasks WHERE wave_id=? ORDER BY id", w.ID)
 			if err != nil {
 				return receipt, err
