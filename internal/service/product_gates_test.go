@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -274,8 +275,8 @@ func TestProductCanonicalReviewGateRejectsChangedPRAndUnsafeReport(t *testing.T)
 					t.Fatal(err)
 				}
 				if err := os.Chown(path, foreign, -1); err != nil {
-					if os.IsPermission(err) {
-						t.Skip("fixture cannot change report ownership")
+					if os.IsPermission(err) || errors.Is(err, syscall.EINVAL) {
+						t.Skip("fixture cannot map or change report ownership")
 					}
 					t.Fatal(err)
 				}
