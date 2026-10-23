@@ -608,6 +608,9 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 		if _, err = k.ensureTaskMailboxesTx(ctx, tx, wave, task); err != nil {
 			return receipt, err
 		}
+		if err = k.ensureTaskPRSubscriptionsTx(ctx, tx, wave, task); err != nil {
+			return receipt, err
+		}
 	}
 	for kind, amount := range map[string]int{"phases": newPhases, "tasks": newTasks, "replan": replans, "fix_round": len(fixPhases)} {
 		if amount == 0 {

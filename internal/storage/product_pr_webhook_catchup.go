@@ -253,19 +253,8 @@ func (k *KernelStore) catchUpPRWebhookWatch(ctx context.Context, id string) (int
 	if current != after {
 		return 0, errors.New("webhook cursor changed; retry")
 	}
-	intent, _, err := prIntentTx(ctx, tx, watch.OperationID)
-	if err != nil {
+	if _, err = prWatchResourceTx(ctx, tx, watch); err != nil {
 		return 0, err
-	}
-	if intent.Source.SessionID != watch.SessionID || intent.Source.Target != watch.Target || intent.SubscriptionID != watch.ID {
-		return 0, errors.New("webhook subscriber source conflict")
-	}
-	var binding PRResourceBinding
-	if err = completionRecord(ctx, tx, "product_pr_resource", watch.ResourceKey, &binding); err != nil {
-		return 0, err
-	}
-	if binding.WaveID != watch.Target.WaveID || binding.Number != watch.PRNumber || binding.RepositoryID != watch.RepositoryID || binding.WorkItemID != intent.Candidate.WorkItemID {
-		return 0, errors.New("webhook resource ownership conflict")
 	}
 	w, err := loadWave(ctx, tx, watch.Target.WaveID)
 	if err != nil {
@@ -329,7 +318,7 @@ func (k *KernelStore) fanoutPRWebhookTx(ctx context.Context, tx *sql.Tx, event n
 		state = "archived"
 	} else {
 		var awaited prOperationAwait
-		err = completionRecord(ctx, tx, "product_pr_await", watch.OperationID, &awaited)
+		err = completionRecord(ctx, tx, "product_pr_await", prAwaitKey(watch), &awaited)
 		if err == nil {
 			if awaited.SessionID != watch.SessionID || awaited.SubscriptionID != watch.ID || awaited.Target != watch.Target {
 				return errors.New("webhook wait identity conflict")

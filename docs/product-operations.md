@@ -125,3 +125,13 @@ raw cursor・元scope付きevent・通知は一transactionで保存する。再�
 保存済み通知のIDだけを名乗る別runや、改ざんされたheader/digestではmessageを確定しない。既存の直属親子・返信・現在session/run/thread/turn/call・snapshot scopeを同じtransactionで検査する。外部本文・source metadataからsender権限、artifact grant、未登録Wave要求、criteria/policy変更や正式承認を生成しない。旧messageはSources省略のまま読み書きできる。
 
 検証: `go test ./internal/storage -run '^TestExternalMessageSource|^TestParentChildMailboxes|^TestMessage|^TestWake' -count=1`。実PR受付/署名履歴/API差分から明示wait・wake/run・共通send_messageへ通し、古いreview SHA、返信、新runで受信messageだけからの再中継、wake入力/再open/再送を確認する。出所/sender引数の偽装、保存不整合、宛先Waveの権限、未登録要求とcriteria緩和も拒否する。関連Task購読展開とP daemon接続は後続である。
+
+## WorkItem割当によるTaskの自動購読
+
+P plan採用時、Taskの検証済みWorkItem割当ごとにread用購読intentと受信購読を同じtransactionで作る。`source_kind=assignment`はtool operationと分離し、存在しないrun/call/operationを生成しない。candidate projectionやPRが未確定ならpendingで保持し、trusted product登録と正のPR bindingで解決する。後から追加されたTaskは既存PRへ関連付ける。登録順序や再実行で重複購読を作らない。
+
+operation由来とassignment由来の購読は、それぞれ元operationまたはTask/session/親/WorkItem割当を再検証する。PR資源とのWorkItem/Wave/repository/番号の所有関係も照合する。同じSourceのraw回収・API差分通知・明示wait処理を再利用し、Taskが別の兄弟の購読を待機することや、未割当WorkItemへのすり替えを拒否する。通常更新はwaitまでdeferred、旧Task/旧scopeはarchivedとし、購読だけで製品Taskの実行・publish・承認を許可しない。
+
+plan、登録、PR bindingの途中で購読保存が失敗すれば全体をrollbackする。元の購読時刻を保持して、binding前に届いた更新も回収する。Taskのwaitのstorage試験は認可済みwaitを模擬したもので、native P実行の合格にはしない。`product_readiness_unavailable`はTask_11のcanonical接続まで維持する。
+
+検証: `go test ./internal/storage -run '^TestTaskPRSubscriptions' -count=1`。planとの原子性、WorkItem所有登録後の遅延candidate projection、call非生成、binding前raw/後続snapshotとwait、再open/再送、binding rollback、兄弟/未割当/偽operation、既存PRと新plan・旧scope履歴を確認する。非同期P daemonと既存PR工程への接続は後続である。

@@ -160,6 +160,13 @@ func (k *KernelStore) BindObservedPRPublication(ctx context.Context, id string, 
 	if err = bindPRReceiveSubscriptionTx(ctx, tx, &watch, binding); err != nil {
 		return receipt, err
 	}
+	wave, err := loadWave(ctx, tx, binding.WaveID)
+	if err != nil {
+		return receipt, err
+	}
+	if err = k.refreshAssignedPRSubscriptionsTx(ctx, tx, wave); err != nil {
+		return receipt, err
+	}
 	if o.State == "closed" && r.State == "held" {
 		disposition := "closed"
 		if o.Merged {
