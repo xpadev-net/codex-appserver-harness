@@ -121,7 +121,7 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 	if validationErr == nil && wave.Policy.Stage == "K" && len(result.WorkItemRefs) > 0 {
 		validationErr = errors.New("K Task cannot claim product Candidate results")
 	}
-	if validationErr == nil && result.SchemaVersion == 2 && !productCodeTask(wave, task) {
+	if validationErr == nil && result.SchemaVersion == 2 && !UsesProductChangeOutput(wave, task) {
 		validationErr = errors.New("TaskResult schema 2 requires a trusted P work/fix assignment")
 	}
 	if validationErr == nil && task.Spec.Kind == "review" && result.Outcome == "result" && result.Review == nil {

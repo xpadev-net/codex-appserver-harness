@@ -48,14 +48,16 @@ func TestKernelSourceSelectsProductOutputVersionFromTrustedTaskRole(t *testing.T
 	if _, err := k.CreateOrchestrator(ctx, "main", "configured", t.TempDir(), "read-only"); err != nil {
 		t.Fatal(err)
 	}
-	w, err := k.CreateProductWave(ctx, storage.ProductWaveRequest{Wave: storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "product-output", OriginalRequest: "implement behavior", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "preserve behavior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: domain.DefaultKernelLimits()}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "work", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
+	w, err := k.CreateProductWave(ctx, storage.ProductWaveRequest{Wave: storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "product-output", OriginalRequest: "implement behavior", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "preserve behavior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: domain.DefaultKernelLimits()}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "work", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}, {ID: "other", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	work := contract.TaskSpec{ID: "implementation", Kind: "work", Instruction: "implement behavior", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{"work"}}
 	review := work
 	review.ID, review.Kind, review.Instruction = "independent-review", "review", "independently review behavior"
-	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "implementation", Tasks: []contract.TaskSpec{work, review}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID, review.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	multi := work
+	multi.ID, multi.WorkItemIDs = "multi-work", []string{"work", "other"}
+	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "implementation", Tasks: []contract.TaskSpec{work, review, multi}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID, review.ID, multi.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
 	receipt, err := k.AdoptPlan(ctx, w.Target(), "product-output-role", plan)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +78,7 @@ func TestKernelSourceSelectsProductOutputVersionFromTrustedTaskRole(t *testing.T
 		}
 		props := schema.(map[string]any)["properties"].(map[string]any)
 		expected := 1
-		if task.Spec.Kind == "work" {
+		if task.Spec.Kind == "work" && len(task.Spec.WorkItemIDs) == 1 {
 			expected = 2
 		}
 		if props["schema_version"].(map[string]any)["const"] != expected {
