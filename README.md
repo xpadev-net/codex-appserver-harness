@@ -138,6 +138,17 @@ private rootを持つoperatorは過去scopeの保存成果も確認できます�
 
 `mailbox`は`cursor`/`more`で続きを辿り、送達状態・ACK状態・返信の有無を表示します。`message`の`request.reply_to`から元の質問を参照できます。sessionを省略すると保存したOrchestrator IDを使い、明示したsession以外の会話は読みません。閲覧はACK・返信送信・wake・model実行を行いません。
 
+### run履歴と保存出力
+
+```sh
+./harness wave runs --root /absolute/private/kernel --session TASK_SESSION_ID --cursor 0 --limit 64
+./harness wave output --root /absolute/private/kernel --id RUN_ID --offset 0 --bytes 16384
+```
+
+`runs`はsessionごとのrunを保存順にページングし、元のthread/turn、snapshot・target・使用量の台帳、active/停止/処理状態を返します。観測のないtoken数を確定使用量へ変換せず、欠けたbindingやbudgetは明示します。Task結果の処理記録には`result_id`があり、Wave inspectの成果参照と照合できます。一覧はモデル出力本文をコピーしません。
+
+`output`は保存済み本文の最大16 KiBのbyte抜粋を返し、artifactと同じ`next_offset`/`done`/`encoding`で続きを読めます。unknownやarchivedを成功に変更しません。`disposed`はrunの処理記録があることを表し、独立reviewやWaveの成果受入を表しません。処理理由は有界previewと元のbyte数・省略の有無を示します。これらの閲覧は保存内容・通知・budget・実行状態を変更しません。
+
 ## 設定と起動
 
 ```sh
