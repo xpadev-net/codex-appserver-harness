@@ -219,3 +219,13 @@ Pの現在runへ実際に渡した `external_update` 通知のIDを `context_rea
 Webhookは保存した正確なpayload bytesを返し、slice digestはpayload bytes自身のSHA-256になる。通知のdelivery digestはID/event/repository/payload全体のdigestなので別の値である。API観測はHead/Sectionsのcanonical JSONを返し、slice digestは通知のsnapshot digestと一致する。後続のscanで現在stateが更新されても、同じ通知は元の観測版を読む。本文は不信なJSONデータとして扱い、instructions/scope/policy/approvalへ変換しない。DB再open後も保存inputのgrantを照合し、破損したbacking dataを拒否する。SourceReadyでHTTPを待たず、読取自体も外部APIを呼ばない。
 
 検証: `go test ./internal/contract ./internal/worker ./internal/control ./internal/storage ./internal/kernelcli -run 'TestExternalContext|TestExternalMessage|TestExternalContextSchema|TestProductToolProfile|TestRuntimeProductTools|TestKernelCLIRun' -count=3`。UTF-8本文の有界page/全bytes/digest、共通gateway読取、後続scan・再open後の同一版、peer/ID推測/relay-only/破損sourceの拒否、既存schema不変とv2のnative公開・profile保存、private runtimeからの設定伝播をfixtureで確認する。実model/GitHubや製品Wave受入の合格とは分ける。
+
+## 候補作成前のWorkItem所属登録
+
+Task_11 / #42 の `KernelStore.RegisterProductWorkItem` は trusted controller 専用の保存portで、P Waveのsource/source ID・scope/policy版にWorkItem ID、repository名/数値ID、criterion coverageを結び付ける。candidate作成前に所属を保存できる。モデルtoolやCLI/source入口はこの分割で追加しない。
+
+criterionは登録済み要求の非空・重複なし部分集合とし、順序を正規化する。同じscope/policyの定義は不変で、次の版への更新には前digestのCASを要求する。repository数値IDとWave所属は移動できない。所属・現在定義・不変履歴を一transactionで保存し、版更新時は古いcandidate所属を解除する。定義は64 KiB、Waveごと128件を上限とし、pause/cancel/終端/期限切れは新規更新を保留する。完全一致の再送はread-onlyで同じsnapshotを返す。
+
+保存入力には親の当該Wave全件とTask自身に割り当てたWorkItemだけを載せ、Task input digestへsource定義digestを含める。古いsource版は現在の定義として渡さず、不在理由を示す。Kの入力schemaは変更しない。候補projectionと登録済みrepositoryの不一致を拒否する。
+
+検証は `go test ./internal/storage -run '^TestProductWorkItemRegistration' -count=1`。direct/GitHub source識別、候補なし所属、再open/replay、rollback、他Wave/K/未知criterion拒否、親/Taskの入力分離、scope更新CASとcandidate解除、repository照合・件数上限・pause中再送を確認する。metadata登録は実行・検証・公開権限を生成せず、製品Taskのreadiness保留を維持する。source入口、worktree、製品結果/候補の適用とdaemon書込workerの配置はTask_11の後続である。

@@ -653,6 +653,16 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 			return "", fmt.Errorf("%w: WorkItem is outside the trusted Wave scope", ErrTaskEvidence)
 		}
 		references["work_item:"+id] = binding.CandidateID
+		registration, registrationErr := loadProductWorkItemRegistration(ctx, tx, id)
+		if registrationErr != nil && !errors.Is(registrationErr, sql.ErrNoRows) {
+			return "", registrationErr
+		}
+		if registrationErr == nil {
+			if !productRegistrationScope(registration, wave) {
+				return "", fmt.Errorf("%w: product source scope is unavailable", ErrTaskEvidence)
+			}
+			references["work_item_source:"+id] = registration.Digest
+		}
 	}
 	for _, dependency := range spec.DependsOn {
 		id := structureID("task-", wave.ID, dependency.TaskID)

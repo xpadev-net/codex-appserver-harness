@@ -94,6 +94,13 @@ func (k *KernelStore) SetProductTarget(ctx context.Context, expected string, p P
 	if w.Target() != p.Target || w.Policy.Stage != "P" || !w.Policy.Product {
 		return saved, errors.New("product registration requires current trusted P policy")
 	}
+	registration, registrationErr := loadProductWorkItemRegistration(ctx, tx, p.WorkItem.ID)
+	if registrationErr != nil && !errors.Is(registrationErr, sql.ErrNoRows) {
+		return saved, registrationErr
+	}
+	if registrationErr == nil && (!productRegistrationScope(registration, w) || registration.Value.Definition.RepositoryID != p.WorkItem.RepositoryID || registration.Value.Definition.Repository != p.Repository) {
+		return saved, errors.New("product projection differs from registered source ownership")
+	}
 	var membership struct {
 		Target      contract.Target `json:"target"`
 		CandidateID string          `json:"candidate_id"`

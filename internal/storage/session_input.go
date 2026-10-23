@@ -64,26 +64,28 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
-	SchemaVersion            int                            `json:"schema_version"`
-	SessionID                string                         `json:"session_id"`
-	Kind                     string                         `json:"kind"`
-	Wave                     domain.Wave                    `json:"wave"`
-	Plan                     *PlanAdmission                 `json:"plan"`
-	Tasks                    []domain.Task                  `json:"tasks"`
-	Results                  map[string]contract.TaskResult `json:"results"`
-	SourceResults            map[string]TaskResultInput     `json:"source_results"`
-	UnavailableSourceResults []unavailableSourceResult      `json:"unavailable_source_results"`
-	UnavailableResults       []unavailableInputResult       `json:"unavailable_results"`
-	TaskApplications         []ResultApplication            `json:"task_applications"`
-	TemplateContexts         map[string]json.RawMessage     `json:"template_contexts"`
-	TemplateSubjects         map[string]TemplateSubject     `json:"template_subjects"`
-	MainDecisions            []appliedMainDecision          `json:"main_decisions"`
-	Artifacts                []domain.Artifact              `json:"artifacts"`
-	UnavailableArtifacts     []unavailableInputArtifact     `json:"unavailable_artifacts"`
-	UnavailableTaskMetadata  []unavailableTaskMetadata      `json:"unavailable_task_metadata"`
-	Subscriptions            []inputSubscription            `json:"subscriptions"`
-	Direction                *WaveDirection                 `json:"direction"`
-	Budget                   WaveRunBudget                  `json:"budget"`
+	ProductWorkItems            []ProductWorkItemRegistrationSnapshot `json:"product_work_items,omitempty"`
+	UnavailableProductWorkItems []UnavailableProductWorkItem          `json:"unavailable_product_work_items,omitempty"`
+	SchemaVersion               int                                   `json:"schema_version"`
+	SessionID                   string                                `json:"session_id"`
+	Kind                        string                                `json:"kind"`
+	Wave                        domain.Wave                           `json:"wave"`
+	Plan                        *PlanAdmission                        `json:"plan"`
+	Tasks                       []domain.Task                         `json:"tasks"`
+	Results                     map[string]contract.TaskResult        `json:"results"`
+	SourceResults               map[string]TaskResultInput            `json:"source_results"`
+	UnavailableSourceResults    []unavailableSourceResult             `json:"unavailable_source_results"`
+	UnavailableResults          []unavailableInputResult              `json:"unavailable_results"`
+	TaskApplications            []ResultApplication                   `json:"task_applications"`
+	TemplateContexts            map[string]json.RawMessage            `json:"template_contexts"`
+	TemplateSubjects            map[string]TemplateSubject            `json:"template_subjects"`
+	MainDecisions               []appliedMainDecision                 `json:"main_decisions"`
+	Artifacts                   []domain.Artifact                     `json:"artifacts"`
+	UnavailableArtifacts        []unavailableInputArtifact            `json:"unavailable_artifacts"`
+	UnavailableTaskMetadata     []unavailableTaskMetadata             `json:"unavailable_task_metadata"`
+	Subscriptions               []inputSubscription                   `json:"subscriptions"`
+	Direction                   *WaveDirection                        `json:"direction"`
+	Budget                      WaveRunBudget                         `json:"budget"`
 }
 
 type unavailableInputResult struct {
@@ -309,6 +311,10 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 		return m, err
 	}
 	m.Budget = WaveRunBudget{WaveID: w.ID, ObservedTokens: tokens, UnobservedRuns: unknown, Saturated: saturated, TokenLimit: w.Policy.Limits.Tokens, MainTurns: w.MainTurns, MainTurnLimit: w.Policy.Limits.MainTurns, Deadline: w.Deadline, DeadlineExceeded: !k.clock().Before(w.Deadline)}
+	m.ProductWorkItems, m.UnavailableProductWorkItems, err = k.productWorkItemInputsTx(ctx, tx, b, w)
+	if err != nil {
+		return m, err
+	}
 	allowed := map[string]bool{}
 	if b.Kind == "task" {
 		task, err := loadTask(ctx, tx, b.TaskID)
