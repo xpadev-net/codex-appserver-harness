@@ -427,26 +427,67 @@ func TestIsolatedProbeStopsWrapperChildrenBeforeReaping(t *testing.T) {
 	for _, ending := range []string{"wait", "exit 0"} {
 		dir := t.TempDir()
 		childPath := filepath.Join(dir, "child")
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		before := time.Now()
-		_, err := isolatedProbe(ctx, "/bin/sh", []string{"-c", `sleep 30 & printf '%s' "$!" > "$1"; ` + ending, "probe", childPath}, []string{"PATH=" + isolatedPath}, dir)
-		cancel()
-		if ending == "wait" && !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatal(err)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		var probeErr error
+		go func() {
+			_, probeErr = isolatedProbe(ctx, "/bin/sh", []string{"-c", `sleep 30 & printf '%s' "$!" > "$1"; ` + ending, "probe", childPath}, []string{"PATH=" + isolatedPath}, dir)
+			close(done)
+		}()
+		// Wait for the actual child identity before requesting cancellation.
+		// A fixed 100ms timer could kill the shell between truncation and printf
+		// under CI load, leaving no PID with which to check descendant stopping.
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Error("probe cleanup did not join")
+			}
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		pid := 0
+		for pid == 0 {
+			raw, readErr := os.ReadFile(childPath)
+			if readErr == nil {
+				pid, _ = strconv.Atoi(string(raw))
+			}
+			if pid > 0 {
+				break
+			}
+			select {
+			case <-done:
+				// Publication may have completed just after the read above.
+				raw, readErr := os.ReadFile(childPath)
+				if readErr == nil {
+					pid, _ = strconv.Atoi(string(raw))
+				}
+				if pid <= 0 {
+					t.Fatalf("probe stopped before publishing child identity: %v", probeErr)
+				}
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("probe did not publish child identity")
+			}
+			time.Sleep(time.Millisecond)
 		}
-		if time.Since(before) > 2*time.Second {
-			t.Fatal("probe cancellation waited for descendants", time.Since(before), err)
+		if ending == "wait" {
+			cancel()
 		}
-		raw, readErr := os.ReadFile(childPath)
-		if readErr != nil {
-			t.Fatal(readErr)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("probe cancellation waited for descendants")
 		}
-		pid, parseErr := strconv.Atoi(string(raw))
-		if parseErr != nil {
-			t.Fatal(parseErr)
+		if ending == "wait" && !errors.Is(probeErr, context.Canceled) {
+			t.Fatal(probeErr)
+		}
+		if ending == "exit 0" && probeErr != nil {
+			t.Fatal(probeErr)
 		}
 		if process.Alive(process.Identity{PID: pid}) {
-			t.Fatal("probe child survived", pid, err)
+			t.Fatal("probe child survived", pid, probeErr)
 		}
 	}
 }
