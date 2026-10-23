@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -163,20 +164,10 @@ func (a IssueAdmitter) Admit(ctx context.Context, number int) (domain.Wave, erro
 		if item.State != "closed" {
 			return domain.Wave{}, errors.New("Issue dependency is not closed")
 		}
-		var id string
-		err = a.Store.DB.QueryRowContext(ctx, "SELECT id FROM kernel_waves WHERE source='github' AND source_id=?", issueSourceID(a.Policy.RepositoryID, dependency)).Scan(&id)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err := a.completedDependency(ctx, dependency); err != nil {
 			return domain.Wave{}, err
 		}
-		if err == nil {
-			wave, err := a.Store.Wave(ctx, id)
-			if err != nil {
-				return domain.Wave{}, err
-			}
-			if wave.State != domain.WaveCompleted || wave.Policy.Stage != "P" || !wave.Policy.Product {
-				return domain.Wave{}, errors.New("claimed Issue dependency has no completed Wave")
-			}
-		}
+
 	}
 	current, err := readSourceIssue(ctx, api, number)
 	if err != nil {
@@ -197,4 +188,62 @@ func (a IssueAdmitter) Admit(ctx context.Context, number int) (domain.Wave, erro
 		Wave:      storage.WaveRequest{OrchestratorSessionID: a.SessionID, Source: "github", SourceID: id, OriginalRequest: issue.Title + "\n\n" + issue.Body, Criteria: criteria, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: a.Limits}},
 		WorkItems: []storage.ProductWorkItemDefinition{{ID: id, Repository: a.Policy.Repository, RepositoryID: a.Policy.RepositoryID, Criteria: scope.Included}},
 	})
+}
+
+// A stable WorkItem may have been admitted from either source. Membership is
+// authoritative; the source index only covers older Waves without metadata.
+func (a IssueAdmitter) completedDependency(ctx context.Context, number int) error {
+	id := issueSourceID(a.Policy.RepositoryID, number)
+	registration, registrationErr := a.Store.ReadProductWorkItemRegistration(ctx, id)
+	if registrationErr != nil && !errors.Is(registrationErr, sql.ErrNoRows) {
+		return registrationErr
+	}
+	var membership struct {
+		Target contract.Target `json:"target"`
+	}
+	memberErr := a.Store.Record(ctx, "wave_work_item", id, &membership)
+	if memberErr != nil && !errors.Is(memberErr, sql.ErrNoRows) {
+		return memberErr
+	}
+	var waveID string
+	if memberErr == nil {
+		if !membership.Target.Valid() {
+			return errors.New("dependency WorkItem ownership is invalid")
+		}
+		waveID = membership.Target.WaveID
+	} else {
+		if registrationErr == nil {
+			return errors.New("dependency WorkItem ownership is missing")
+		}
+		err := a.Store.DB.QueryRowContext(ctx, "SELECT id FROM kernel_waves WHERE source='github' AND source_id=?", id).Scan(&waveID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	wave, err := a.Store.Wave(ctx, waveID)
+	if err != nil {
+		return err
+	}
+	if memberErr == nil && (membership.Target.ScopeRevision != wave.ScopeRevision || membership.Target.PolicyRevision != wave.Policy.Revision) {
+		return errors.New("dependency WorkItem ownership is stale")
+	}
+	if registrationErr == nil && (registration.Value.WaveID != wave.ID || registration.Value.Source != wave.Source || registration.Value.SourceID != wave.SourceID || registration.Value.Definition.RepositoryID != a.Policy.RepositoryID || registration.Value.ScopeRevision != wave.ScopeRevision || registration.Value.PolicyRevision != wave.Policy.Revision) {
+		return errors.New("dependency source ownership differs")
+	}
+	if wave.State != domain.WaveCompleted || wave.Policy.Stage != "P" || !wave.Policy.Product || wave.PendingDirectionID != "" {
+		return errors.New("claimed Issue dependency has no completed Wave")
+	}
+	if registrationErr != nil && memberErr == nil {
+		projection, err := a.Store.ReadProductTarget(ctx, membership.Target, id)
+		if err != nil {
+			return err
+		}
+		if projection.Value.WorkItem.RepositoryID != a.Policy.RepositoryID {
+			return errors.New("dependency projection repository differs")
+		}
+	}
+	return nil
 }

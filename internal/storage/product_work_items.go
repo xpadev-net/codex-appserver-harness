@@ -41,6 +41,12 @@ type UnavailableProductWorkItem struct {
 	Reason string `json:"reason"`
 }
 
+// ReadProductWorkItemRegistration is a trusted controller read. It validates
+// the saved content digest; it does not grant a model access to source metadata.
+func (k *KernelStore) ReadProductWorkItemRegistration(ctx context.Context, id string) (ProductWorkItemRegistrationSnapshot, error) {
+	return loadProductWorkItemRegistration(ctx, k.DB, id)
+}
+
 func loadProductWorkItemRegistration(ctx context.Context, q queryer, id string) (ProductWorkItemRegistrationSnapshot, error) {
 	var saved ProductWorkItemRegistrationSnapshot
 	if err := taskEvidenceRecord(ctx, q, "product_work_item_registration", id, &saved); err != nil {

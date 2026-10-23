@@ -175,7 +175,7 @@ func TestIssueAdmissionRejectsUnavailableHeldChangedAndUnsupportedLineage(t *tes
 }
 
 func TestIssueAdmissionRequiresClosedDependenciesAndCompletedClaimedWave(t *testing.T) {
-	for _, mode := range []string{"open", "unavailable", "claimed", "closed"} {
+	for _, mode := range []string{"open", "unavailable", "claimed", "direct", "direct_canceled", "missing_membership", "corrupt_registration", "repository_conflict", "closed"} {
 		t.Run(mode, func(t *testing.T) {
 			a, api := issueAdmissionFixture(t)
 			api.issue.Body += "\nharness-depends-on: 41\n"
@@ -188,16 +188,57 @@ func TestIssueAdmissionRequiresClosedDependenciesAndCompletedClaimedWave(t *test
 			if mode == "unavailable" {
 				api.fail = "issues/41"
 			}
-			if mode == "claimed" {
-				if _, err := a.Store.CreateProductWave(context.Background(), storage.ProductWaveRequest{Wave: storage.WaveRequest{OrchestratorSessionID: "main", Source: "github", SourceID: "r17-i41", OriginalRequest: "prior dependency", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "prior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: a.Limits}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "r17-i41", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}}); err != nil {
+			managed := mode != "open" && mode != "unavailable" && mode != "closed"
+			if managed {
+				source, sourceID := "direct", "direct-dependency"
+				if mode == "claimed" {
+					source, sourceID = "github", "r17-i41"
+				}
+				repositoryID := int64(17)
+				if mode == "repository_conflict" {
+					repositoryID = 18
+				}
+				owner, err := a.Store.CreateProductWave(context.Background(), storage.ProductWaveRequest{Wave: storage.WaveRequest{OrchestratorSessionID: "main", Source: source, SourceID: sourceID, OriginalRequest: "prior dependency", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "prior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: a.Limits}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "r17-i41", Repository: "owner/repo", RepositoryID: repositoryID, Criteria: []string{"AC"}}}})
+				if err != nil {
 					t.Fatal(err)
 				}
+				if mode == "direct_canceled" {
+					if _, err := a.Store.ApplyOperatorControl(context.Background(), storage.OperatorControl{Key: "cancel-dependency", Target: owner.Target(), Action: "cancel", Reason: "dependency canceled"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "missing_membership" {
+					if _, err := a.Store.DB.Exec("DELETE FROM records WHERE kind='wave_work_item' AND id='r17-i41'"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "corrupt_registration" {
+					registration, err := a.Store.ReadProductWorkItemRegistration(context.Background(), "r17-i41")
+					if err != nil {
+						t.Fatal(err)
+					}
+					registration.Digest = "corrupt"
+					if err := a.Store.Put(context.Background(), "product_work_item_registration", "r17-i41", owner.ID, registration); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
+
 			_, err := a.Admit(context.Background(), 42)
 			if (err == nil) != (mode == "closed") {
 				t.Fatal("dependency gate mismatch", mode, err)
 			}
-			if mode != "closed" && mode != "claimed" {
+			if mode == "direct" || mode == "direct_canceled" {
+				if !strings.Contains(err.Error(), "no completed Wave") {
+					t.Fatal("direct ownership guard was not reached", err)
+				}
+			}
+			var admitted int
+			if err := a.Store.DB.QueryRow("SELECT count(*) FROM kernel_waves WHERE source='github' AND source_id='r17-i42'").Scan(&admitted); err != nil || (admitted == 1) != (mode == "closed") {
+				t.Fatal("dependency rejection persisted an admission", admitted, err)
+			}
+
+			if mode != "closed" && !managed {
 				assertNoIssueAdmission(t, a)
 			}
 		})

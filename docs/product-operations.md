@@ -244,7 +244,7 @@ WorkItem一覧とcriterion一覧の順序を正規化して受付digestを固定
 
 `product.IssueAdmitter` / `wave import-issue` は、trusted repository数値ID・ready/hold labelとcontrollerのmain/上限から、GitHub Issueを共通`CreateProductWave`へ渡す。既存`service.ParseScope`のfence parserを`verification.ParseScope`へ共通化し、旧入口は同じ契約を維持する。
 
-GET専用ResourceAPIでrepositoryの数値ID/full_nameとIssueの番号/open/ready/hold/updated_atを検証し、Issueに似たPRを拒否する。本文/label/更新時刻とrepositoryを最後に読み直し、変化・権限/取得失敗を受付成功にしない。依存宣言は一つ、正数の非重複32件までとし、self/不正/曖昧な宣言を拒否する。依存はclosedを要求し、kernelで既に扱う依存はP Waveの完了も要求する。APIは128読取呼出し/16 MiB/30秒、gh各応答は4 MiB、CLIのwhole-mutation retryは10秒の枠内で動く。
+GET専用ResourceAPIでrepositoryの数値ID/full_nameとIssueの番号/open/ready/hold/updated_atを検証し、Issueに似たPRを拒否する。本文/label/更新時刻とrepositoryを最後に読み直し、変化・権限/取得失敗を受付成功にしない。依存宣言は一つ、正数の非重複32件までとし、self/不正/曖昧な宣言を拒否する。依存はclosedを要求し、kernelで既に扱う依存は、source名だけでなく共通WorkItem所属から管理Waveを解決し、direct/GitHubの入口にかかわらず現在のP Waveの完了も要求する。所属の欠落・破損・旧scope/policyとrepository ID不一致は保留する。旧metadata未登録Waveはsource indexでも照合する。APIは128読取呼出し/16 MiB/30秒、gh各応答は4 MiB、CLIのwhole-mutation retryは10秒の枠内で動く。
 
 初回のfull scope revision 1だけを扱い、部分/既merge/改訂済みのscopeは明示lineage importへ保留する。Issue source/WorkItem IDを数値repository IDとIssue番号から固定し、scopeの変化を単なる再送として上書きしない。Issueの選択条件は正式承認ではなく、外部書込・candidate・実行許可を作らない。保存前後のHTTP読取は外部サービスとのatomic snapshotではなく、公開gateでのfresh source再確認が後続に残る。
 
