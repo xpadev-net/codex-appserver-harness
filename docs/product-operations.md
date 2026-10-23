@@ -77,3 +77,11 @@ PR・issue comment・inline comment・reaction・review・check・status・histo
 最新state、不変の過去snapshot、scanの一意receiptとpending差分outboxを一transactionで保存する。scan再送は同じreceiptを返し、内容不変の再取得では新しい通知要求を作らない。入力は2048 entities/2 MiB、保持stateも2048 entities/4 MiBを上限とし、取得不能による保持分も数える。過大なscanは全体を保留し、黙って切り捨てない。
 
 検証: `go test ./internal/storage -run '^TestPRResource' -count=1`。編集・削除・review取消・好意的reaction、JSON順序差、履歴保持、取得不能と復帰、CAS/逆順/replay、失敗rollback、再openと容量を確認する。この分割は保存portであり、実API収集・署名済みraw deliveryとの回収・差分outboxの関連Task通知とdaemon配置は後続である。
+
+## 資源差分の通知と現在の待機条件
+
+`ReconcilePRResourceNotifications`はpending scan outboxを有界に処理し、元snapshot digest・種別/変更別の件数・PR資源key・scan IDを持つ通知を、binding済みの発行元購読へ保存する。外部本文を通知の指示欄へ挿入しない。event、fanout、queued状態は一transactionで確定し、snapshotが後から変わっても元versionを参照する。永続scan cursorはbad rowの後続を進め、再起動/再配送は同じevent/通知へ収束する。
+
+通常更新は明示waitまでdeferredとし、閲覧/配送ACKで判断入力を消費しない。session_waitまたはmain/Taskの新しいwait集合で以前のPR待機を置き換え、外れた購読の未予約resource入力はdeferredへ戻す。mainのplan/acceptでも古いwaitを終了する。reportは既存契約どおり待機条件を変更しない。runに予約済みの入力は変更せず、共通の適用/再投入規則を使う。cancel/終端session/旧scopeはarchivedとし、通常の資源更新でmainを無条件に起動しない。
+
+production KernelSourceのready処理から有界batchを回収する。この処理でAPI/modelを呼ばない。検証は`go test ./internal/storage -run 'TestPRResource|TestPRCompletion|TestPRWait' -count=1`。待機の前後・ACK・tool/main wait置換、失敗rollbackと再open、元version参照、cancel/実方向修正、bad row公平性、再配送の重複排除を確認する。API収集/raw deliveryの登録境界回収と、新しい関連Taskへの自動購読展開は後続である。

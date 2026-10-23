@@ -17,6 +17,17 @@ type prOperationAwait struct {
 	SubscriptionID string          `json:"subscription_id"`
 }
 
+// A new plan/wait/accept decision or explicit wait replaces the wait set for this
+// target. Bound inputs remain owned by their run; unbound resource updates wait
+// for a new declaration instead of waking main through an obsolete subscription.
+func (k *KernelStore) replacePRWaitsTx(ctx context.Context, tx *sql.Tx, session string, target contract.Target) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE kernel_notifications SET state='deferred',payload=json_set(payload,'$.state','deferred') WHERE session_id=? AND state='pending' AND run_id='' AND json_extract(payload,'$.kind')='external_update' AND subscription_id IN (SELECT id FROM kernel_subscriptions WHERE session_id=? AND wave_id=? AND scope_revision=? AND plan_revision=? AND json_extract(payload,'$.target.policy_revision')=?)`, session, session, target.WaveID, target.ScopeRevision, target.PlanRevision, target.PolicyRevision); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM records WHERE kind='product_pr_await' AND work_item_id=? AND json_extract(payload,'$.target.wave_id')=? AND json_extract(payload,'$.target.scope_revision')=? AND json_extract(payload,'$.target.plan_revision')=? AND json_extract(payload,'$.target.policy_revision')=?`, session, target.WaveID, target.ScopeRevision, target.PlanRevision, target.PolicyRevision)
+	return err
+}
+
 // Only explicit, already-authorized wait declarations activate these one-shot
 // completion inputs. Resource updates have separate subscription policy.
 func (k *KernelStore) awaitPRSubscriptionsTx(ctx context.Context, tx *sql.Tx, session, run string, target contract.Target, ids []string) error {
@@ -67,18 +78,21 @@ func (k *KernelStore) ReconcilePRCompletionNotifications(ctx context.Context, li
 	return completed, errors.Join(failures...)
 }
 func (k *KernelStore) nextPRCompletionNoticeBatch(ctx context.Context, limit int) ([]string, error) {
+	return k.nextPRPendingRecordBatch(ctx, "product_pr_completion", "pr_completions", limit)
+}
+func (k *KernelStore) nextPRPendingRecordBatch(ctx context.Context, kind, cursorKey string, limit int) ([]string, error) {
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 	var after string
-	err = completionRecord(ctx, tx, "kernel_reconcile_cursor", "pr_completions", &after)
+	err = completionRecord(ctx, tx, "kernel_reconcile_cursor", cursorKey, &after)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	read := func(cursor string) ([]string, error) {
-		return inputIDsTx(ctx, tx, "SELECT id FROM records WHERE kind='product_pr_completion' AND json_extract(payload,'$.notification_state')='pending' AND id>? ORDER BY id LIMIT ?", cursor, limit)
+		return inputIDsTx(ctx, tx, "SELECT id FROM records WHERE kind=? AND json_extract(payload,'$.notification_state')='pending' AND id>? ORDER BY id LIMIT ?", kind, cursor, limit)
 	}
 	ids, err := read(after)
 	if err != nil {
@@ -95,7 +109,7 @@ func (k *KernelStore) nextPRCompletionNoticeBatch(ctx context.Context, limit int
 		next = ids[len(ids)-1]
 	}
 	if next != after {
-		if err = kernelRecordTx(ctx, tx, "kernel_reconcile_cursor", "pr_completions", "controller", next); err != nil {
+		if err = kernelRecordTx(ctx, tx, "kernel_reconcile_cursor", cursorKey, "controller", next); err != nil {
 			return nil, err
 		}
 	}
