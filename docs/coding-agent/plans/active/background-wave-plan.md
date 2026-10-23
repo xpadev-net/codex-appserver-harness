@@ -463,6 +463,9 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_10: Wave kernelの受入と実演（K）
 
+- status: in_progress
+- split: native出力schemaのprovider必須キーを実接続で修正し、role別の結果契約を保存入力へ明記した。opt-in Go testで新DBのCLIからTask 2件の並行・findings→新fix/review→report→検証済みWave完了を実modelで観測した。既定token上限の停止とunverified保留は別試行として保存し、品質gateを緩めない。K適用ATの対応表・残りの統合/性能証拠を整理してからK全体を判定する。
+
 - type: test
 - owns:
   - internal/service/background_wave_acceptance_test.go

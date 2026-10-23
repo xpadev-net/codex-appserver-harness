@@ -1,0 +1,55 @@
+{
+  "acceptance": "completed_with_verified_evidence",
+  "accepted_artifact_digests": [
+    "7d55fbc715f8df2bf1e6479fe96796ec801da6b1e688cc395d3b271136d601c4"
+  ],
+  "all_managed_processes_stopped": true,
+  "authentication_subject_sha256": "3a4c3e142d779cc59c23ee5aa0c187c30b2dae038275caa39dfb847f8c5919ad",
+  "binary_version": "codex-cli 0.163.0",
+  "candidate": null,
+  "credential_values_recorded": false,
+  "executed_tests": 1,
+  "fix_rounds": 1,
+  "main_runs": 2,
+  "main_turns": 2,
+  "model": "gpt-6.1-sol",
+  "model_runs": 8,
+  "observed_at": "2026-10-23T02:41:45.281632309Z",
+  "private_paths_recorded": false,
+  "repository": null,
+  "stage": "K native CLI fix/review acceptance",
+  "task_kinds": [
+    "work",
+    "verification",
+    "review",
+    "work",
+    "fix",
+    "review",
+    "work"
+  ],
+  "task_sessions_unique": true,
+  "token_limit": 2000000,
+  "wave_state": "completed",
+  "two_initial_task_run_intervals_overlap": true,
+  "concurrent_running_snapshot_observed": true,
+  "review_verdicts": [
+    "clean",
+    "findings"
+  ],
+  "main_turns_during_fix_review": 0,
+  "required_result_remaining_counts": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "observed_tokens_lower_bound": 908212,
+  "final_usage_is_billing_total": false,
+  "completion_proof_count": 1,
+  "run_states": {
+    "completed": 8
+  },
+  "metrics_basis": "same persisted native DB; run.started to execute-owner.stopped_at, findings-review start to final-report start"
+}

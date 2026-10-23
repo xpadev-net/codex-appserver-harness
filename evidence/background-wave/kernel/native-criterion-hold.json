@@ -1,0 +1,31 @@
+{
+  "acceptance": "not_accepted",
+  "all_managed_processes_stopped": true,
+  "authentication_subject_sha256": "3a4c3e142d779cc59c23ee5aa0c187c30b2dae038275caa39dfb847f8c5919ad",
+  "binary_version": "codex-cli 0.163.0",
+  "candidate": null,
+  "credential_values_recorded": false,
+  "executed_tests": 1,
+  "main_runs": 2,
+  "model": "gpt-6.1-sol",
+  "model_runs": 8,
+  "observed_at": "2026-10-23T02:32:51.932510271Z",
+  "private_paths_recorded": false,
+  "repository": null,
+  "stage": "K native criterion evidence hold observation",
+  "task_kinds": [
+    "work",
+    "verification",
+    "review",
+    "work",
+    "fix",
+    "review",
+    "work"
+  ],
+  "task_sessions_unique": true,
+  "token_limit": 2000000,
+  "final_hold": "producer and reviewer must evaluate the mapped original criterion",
+  "remaining_counts_all_zero": true,
+  "producer_unverified_criterion": "AC_CLEAN",
+  "independent_review_verdict": "clean"
+}
