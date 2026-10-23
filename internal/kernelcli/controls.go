@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
@@ -12,7 +13,11 @@ func applyControlFile(ctx context.Context, k *storage.KernelStore, command, file
 	if file == "" {
 		return nil, errors.New("--file with explicit target versions, key and reason required")
 	}
-	raw, err := readFile(file, 1<<20, false)
+	limit := 1 << 20
+	if command == "retry-task" {
+		limit = 4 << 20
+	}
+	raw, err := readFile(file, int64(limit), false)
 	if err != nil {
 		return nil, err
 	}
@@ -41,6 +46,35 @@ func applyControlFile(ctx context.Context, k *storage.KernelStore, command, file
 			var err error
 			result, err = k.RequestWaveDirection(ctx, request)
 			return err
+		}
+	case "retry-task":
+		var request struct {
+			Expected domain.Task            `json:"expected"`
+			RunID    string                 `json:"run_id"`
+			Snapshot contract.InputSnapshot `json:"snapshot"`
+			Reason   string                 `json:"reason"`
+		}
+		if err = contract.DecodeStrictBounded(raw, &request, 4<<20); err != nil {
+			return nil, err
+		}
+		snapshot, loadErr := k.SavedInputSnapshot(ctx, request.Snapshot.ID, request.Snapshot.Digest)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		if err = storage.ValidateTaskRecoverySnapshot(snapshot, request.Expected.SessionID, request.Expected.Target()); err != nil {
+			return nil, err
+		}
+		apply = func(ctx context.Context) error {
+			if err := k.AuthorizeTaskRecovery(ctx, request.Expected, request.RunID, snapshot, request.Reason); err != nil {
+				return err
+			}
+			result = struct {
+				RunID      string `json:"run_id"`
+				SessionID  string `json:"session_id"`
+				SnapshotID string `json:"snapshot_id"`
+				State      string `json:"state"`
+			}{request.RunID, request.Expected.SessionID, snapshot.ID, "authorized"}
+			return nil
 		}
 	case "reject-main":
 		var request storage.MainRunRejectionRequest

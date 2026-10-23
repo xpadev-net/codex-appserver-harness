@@ -71,7 +71,14 @@ type RunInspection struct {
 	FinalBytes int64             `json:"final_bytes"`
 	Budget     *RunBudgetBinding `json:"budget,omitempty"`
 }
+type DispatchHoldInspection struct {
+	SessionID     string `json:"session_id"`
+	RunID         string `json:"run_id"`
+	PreparationID string `json:"preparation_id"`
+	Reason        string `json:"reason"`
+}
 type SessionInspection struct {
+	DispatchHold   *DispatchHoldInspection `json:"dispatch_hold,omitempty"`
 	Binding        contract.SessionBinding `json:"binding"`
 	Creating       bool                    `json:"creating"`
 	ProcessStopped bool                    `json:"process_stopped"`
@@ -124,6 +131,20 @@ func inspectSessionTx(ctx context.Context, tx *sql.Tx, id string) (SessionInspec
 	}
 	err = tx.QueryRowContext(ctx, "SELECT id FROM kernel_wake_intents WHERE session_id=? AND state IN ('reserved','bound') ORDER BY id LIMIT 1", id).Scan(&view.WakeID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return view, err
+	}
+	var hold DispatchHoldInspection
+	err = completionRecord(ctx, tx, "kernel_dispatch_hold", id, &hold)
+	if err == nil {
+		if hold.SessionID != id {
+			return view, errors.New("dispatch hold owner mismatch")
+		}
+		// Historical holds remain audit evidence. A replacement preparation/run
+		// no longer belongs to that hold and must not be displayed as currently held.
+		if hold.PreparationID == b.PreparationID && (view.ActiveRunID == "" || view.ActiveRunID == hold.RunID) {
+			view.DispatchHold = &hold
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return view, err
 	}
 	var run RunInspection

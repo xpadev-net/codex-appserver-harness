@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -84,6 +85,16 @@ func validateJSON(raw json.RawMessage, t reflect.Type, path string, maxStringRun
 	}
 	if bytes.Equal(raw, []byte("null")) {
 		return fmt.Errorf("%s: null not allowed", path)
+	}
+	if t == reflect.TypeFor[time.Time]() {
+		if err := validateJSON(raw, reflect.TypeFor[string](), path, maxStringRunes); err != nil {
+			return err
+		}
+		var timestamp time.Time
+		if err := json.Unmarshal(raw, &timestamp); err != nil {
+			return fmt.Errorf("%s: invalid timestamp: %w", path, err)
+		}
+		return nil
 	}
 	switch t.Kind() {
 	case reflect.Struct:
@@ -185,6 +196,9 @@ func Schema(value any) map[string]any {
 	return typeSchema(t)
 }
 func typeSchema(t reflect.Type) map[string]any {
+	if t == reflect.TypeFor[time.Time]() {
+		return map[string]any{"type": "string", "format": "date-time", "maxLength": 16384}
+	}
 	switch t.Kind() {
 	case reflect.Struct:
 		properties := map[string]any{}
