@@ -29,3 +29,13 @@ PR toolは既存のsession/run/thread/turn/call検査、元snapshot scope、paus
 この分割はstorage状態機械だけを追加する。実HTTP adapter、canonical sourceの直前guard、marker照合、resource binding/通知、native P tool公開は後続であり、現在のruntimeは外部送信を開始しない。SQLite BUSY/LOCKEDはdomain holdに変換せず返し、callerがrollback後の操作全体を再試行する。未知HTTP結果の再送と混同しない。
 
 追加検証: `go test ./internal/storage -run 'TestPRDispatch|TestPRBeforeSend|TestPRClaim|TestPRPrepared|TestPRReviewClaim|TestPRMark|TestConcurrentPRClaim|TestPRUnsent' -count=1`。別接続でのclaim競合と再試行、送信前の優先操作、prepared/unknownの一度消費、再起動・cancel後のunknown保持、同じPRの排他と存続枠、Cloudの別枠/一度予算、既知未送信の取消、保存失敗rollbackを確認する。
+
+## 観測したPR資源への確定
+
+`BindObservedPRPublication`は、実際のPR応答または読取専用照合から得た正の観測を保存するcontroller portである。repository・head/base repository・PR番号・固定SHA・head/base branch・markerを元のpublicationへ照合する。preparedの`not_started`は送信前に既存資源を発見した場合だけに使う。unknownには元transportの正常応答完了または停止確認後の照合の証拠が必要で、callerが実transportを検証してからproofを渡す。PR一覧が空だったことだけでunknownを未送信へ変えない。
+
+同じtransactionで、PRとWorkItemの一意な所有binding、購読intentの実PR番号/資源key、保存済み受信購読、操作結果、完了outbox、書き込みlease解放を確定する。open PRの存続枠を保持し、正のclose/merge観測だけで解放する。取消後やscope変更後の結果も元operationの履歴として照合できる。現在のprojectionにはPR identityだけを反映し、新しい候補・版・pause/holdを元snapshotへ戻さない。別WorkItemへのPR所有の差し替えを拒否する。
+
+`resource_bound`は外部資源の確定を表す。検証/独立review/Cloud承認/merge gateの合格やWave完了を生成しない。完了outboxは永続化し、通知配送・待機条件との結合は後続sliceで接続する。実HTTP/marker取得adapterとP runtimeも引き続き未接続である。
+
+追加検証: `go test ./internal/storage -run 'TestObservedPR|TestPRBinding|TestUnknownPRBinding|TestObservedTerminal|TestBoundPR|TestPreviouslyBound|TestCanceledUnsent' -count=1`。再送の同一receipt、購読/操作/候補/leaseの失敗rollback、誤った外部header/transport証拠拒否、再起動/cancel後の事実回収、現在の候補と禁止flagの保持、一意所有、terminal枠解放と既存PR更新の枠共有を確認する。

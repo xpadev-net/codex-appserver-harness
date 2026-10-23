@@ -155,6 +155,7 @@ func (k *KernelStore) SetProductTarget(ctx context.Context, expected string, p P
 }
 
 type PRSubscriptionIntent struct {
+	ResourceKey  string          `json:"resource_key,omitempty"`
 	ID           string          `json:"id"`
 	OperationID  string          `json:"operation_id"`
 	SessionID    string          `json:"session_id"`
