@@ -260,7 +260,7 @@ repositoryごとにsource policy/priority/collection版digest、group、ペー�
 
 1走査1〜32試行、metadata 2048件、API data/transport output 16 MiB、128読取呼出し、45秒、gh各応答4 MiBを上限とする。失敗した過大応答やdecode失敗も親のbudgetへ計上する。予算切れは途中結果と診断を返し、未取得Issueのcursorを進めない。走査自身のdeadlineは読取終了後に、daemon contextに従う1秒の保存用contextで処理済み位置を保存する。daemonのcancel/deadlineを迂回した保存は行わない。
 
-`wave run --issue-pool private.json`はschema1・private same-user設定をruntime構築前に検査し、同じmain/上限/Storeのworkerをcontroller-owned lifecycleへ配置する。既存source Waveの再open・初回event再発行は行わず、commit後のhintだけを送る。shutdownは読取の終了までjoinする。既存Issueの方向修正・hold/close同期と製品Task/候補/公開は別の接続として残る。
+`wave run --issue-pool private.json`はschema1・private same-user設定をruntime構築前に検査し、同じmain/上限/Storeのworkerをcontroller-owned lifecycleへ配置する。既存source Waveの再open・初回event再発行は行わず、commit後のhintだけを送る。shutdownは読取の終了までjoinする。既存Issueのhold/close/編集の禁止は後述のsource observerで接続する。方向修正の自動採用と製品Task/候補/公開は別の接続として残る。
 
 検証: `go test ./internal/product ./internal/github ./internal/kernelcli -run 'TestIssuePool|TestIssueMetadata' -count=1`。32件ページとページ内位置の再open、4 MiBを超える旧形式collectionでもmetadataから高priorityの後方Issueを先に受付できること、選択した本文だけのGET、fresh labelのpriority再確認、完全/不完全なページ境界を確認する。既存の容量/rollback、過大応答の累積budget、未取得5件目の再開、deadline/cancel、private設定とdaemon lifecycleの回帰も維持する。fixtureと実GitHub/実modelを含むP全体の受入は区別する。
 
@@ -278,4 +278,18 @@ source保留、manual pause、pending directionは独立で、手動resumeはsou
 
 現在snapshot・不変history・Wave/authority・watch eventを原子的に保存し、完全一致の再送はread-onlyにする。watch eventから通知intentを生成せず、source pollだけで無条件のmain turnを要求しない。破損/missing headの履歴は上書きして再構築せず、active Waveへ`state_invalid`の禁止だけを保存し、元の証拠を残す。SQL/保存失敗はrollbackする。
 
-検証: `go test ./internal/storage -run '^TestProductSourceObservation' -count=1`。CAS/再open/履歴、手動保留との独立、状態別保留、scope/foreign/K拒否、再計画と競合する観測、history/watch失敗rollback、warm saved input/準備済みPRの禁止、通知/run非増加、破損証拠保持と終端観測を確認する。この分割は保存と共通禁止の接続であり、既存Issueをpollしてこのportへ渡すworker配置と版付き要求同期は後続である。
+検証: `go test ./internal/storage -run '^TestProductSourceObservation' -count=1`。CAS/再open/履歴、手動保留との独立、状態別保留、scope/foreign/K拒否、再計画と競合する観測、history/watch失敗rollback、warm saved input/準備済みPRの禁止、通知/run非増加、破損証拠保持と終端観測を確認する。この分割は保存と共通禁止の接続であり、既存Issueをpollしてこのportへ渡すworker配置は次節を参照。版付き要求同期は後続である。
+
+## 受付済みIssueの定期観測
+
+`wave run --issue-source-observer private.json` は、初回受付とは独立したtrusted readerをcontrollerのbackground lifecycleへ配置する。private same-user設定はschema 1、`source_policy`（初回受付と同じrepository/repository_id/ready_label/hold_label）、`attempts` 1〜32、`every_seconds` 1〜3600を要求し、runtime生成前に検証する。初回受付も継続する場合は`--issue-pool`を併用する。
+
+対象は数値repository IDに属する非終端のGitHub P sourceだけで、DBからID順に最大32件ずつ読む。repositoryごとにpolicy digestと最後のWave IDを保存し、再open後も継続する。末尾で先頭へ戻り、hold/closed/not_readyの既存sourceも再確認する。全Waveの読込やschedulerのready走査内でHTTPを行わない。
+
+読取前にsnapshot CASと現在policy版のpinを取得する。設定のdigestがpinと異なる場合はGETせず、Issueの成功factsを含まない`policy_changed`の禁止を保存し、同一再送も診断上は失敗として報告する。pinそのものは更新しない。GET専用transportでrepository数値ID/name、Issue番号・非PR・状態・時刻を検査する。Issueとrepositoryを再読し、本文・label・更新時刻等の変化や不正な応答、取得失敗は`unavailable`として禁止する。安定した取得からready/holdと元要求digestを計算し、共通`ObserveProductSource`へ渡す。異なる選択policyは既存pinと衝突して保留し、外部本文からpolicyやscopeを更新しない。
+
+1 scanは45秒・128 GET・16 MiB、各sourceの読取は5秒。応答失敗のbytesも共通budgetへ課金する。ローカル読取/scan期限が切れた試行は読取終了をjoinし、生きているcontroller contextで各1秒以内の保存とcursor checkpointを行う。daemonのcancel後は新たな保存を開始しない。未読のsourceはbudget到達後にcursorを進めない。観測またはstate_invalidの禁止が保存済みと確認できた試行だけcursorを進める。取得失敗をunavailableとして保存できた場合は次のsourceへ進むが、preflight期限切れ・CAS競合・SQL失敗等で未保存なら元のcursorから再試行する。
+
+実行用禁止が変わった場合だけcommit後のwake hintを送る。pollは通知intent/無条件のmain turn、candidate、外部writeを作らない。実行中のreadはshutdownまでjoinする。pollとGitHubはatomic snapshotではなく、公開直前のfresh source gateと版付き要求同期・後続作業は引き続き後続の接続範囲である。
+
+検証: `go test ./internal/product ./internal/storage ./internal/kernelcli -run 'TestIssueSourceObserver|TestProductSourceObservationTargets' -count=1`。状態別保留/復旧・manual pause維持、再送、古いreadと新しいholdのCAS競合、repo/PR/変化/取得不能の禁止、pagination/再open、read/scan期限checkpoint、出力budget、shutdown join、private設定とGET argv/commit後hintを確認する。transport fixtureの成功を実GitHub/モデル/Cloud承認やP全体の合格には数えない。

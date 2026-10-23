@@ -157,6 +157,25 @@ func (k *KernelStore) ReadProductSourceObservation(ctx context.Context, waveID s
 	return loadProductSourceSnapshot(ctx, k.DB, waveID)
 }
 
+// ReadProductSourcePolicy returns the immutable digest for the current policy
+// epoch. Empty means no initial admission/observation has pinned this epoch yet.
+// It neither adopts a policy nor repairs missing or corrupt evidence.
+func (k *KernelStore) ReadProductSourcePolicy(ctx context.Context, target contract.Target) (string, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	w, err := loadWave(ctx, tx, target.WaveID)
+	if err != nil {
+		return "", err
+	}
+	if !target.Valid() || w.ScopeRevision != target.ScopeRevision || w.Policy.Revision != target.PolicyRevision || w.Policy.Stage != "P" || !w.Policy.Product || w.Source != "github" {
+		return "", errors.New("current GitHub product policy target required")
+	}
+	return productSourcePolicyTx(ctx, tx, w)
+}
+
 func sourceStatusTx(ctx context.Context, tx *sql.Tx, w domain.Wave, facts ProductSourceFacts) (string, error) {
 	switch {
 	case !facts.Available:

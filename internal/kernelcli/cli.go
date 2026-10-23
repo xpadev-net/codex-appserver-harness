@@ -41,6 +41,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	model := fs.String("model", "", "configured model (init)")
 	runtimeFile := fs.String("runtime", "", "private runtime launch-policy JSON (run)")
 	poolFile := fs.String("issue-pool", "", "optional private Issue pool intake JSON (run)")
+	sourceObserverFile := fs.String("issue-source-observer", "", "optional private admitted Issue source observer JSON (run)")
 	observerFile := fs.String("pr-observer", "", "optional private PR read-observer JSON (run)")
 	webhookFile := fs.String("pr-webhook", "", "optional private PR webhook ingress JSON (run)")
 	file := fs.String("file", "", "direct request or versioned operator JSON")
@@ -97,6 +98,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["pr-observer"] = true
 		allowed["pr-webhook"] = true
 		allowed["issue-pool"] = true
+		allowed["issue-source-observer"] = true
 	case "watch":
 		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
@@ -205,6 +207,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		sourceObserver, err := loadIssueSourceObserver(*sourceObserverFile, k)
+		if err != nil {
+			return err
+		}
 		observer, err := loadPRObserver(*observerFile)
 		if err != nil {
 			return err
@@ -224,6 +230,9 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		var background []daemonWorker
 		if pool != nil {
 			background = append(background, pool)
+		}
+		if sourceObserver != nil {
+			background = append(background, sourceObserver)
 		}
 		if observer != nil {
 			background = append(background, observer)
