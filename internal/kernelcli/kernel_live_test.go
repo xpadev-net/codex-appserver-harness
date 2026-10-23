@@ -147,7 +147,9 @@ Configure a saved FixReviewTemplate with input_task_id=review, classifications=[
 		evidence["task_kinds"] = kinds
 		evidence["task_sessions_unique"] = len(sessions) == len(tasks)
 		var live int
-		if err := k.DB.QueryRowContext(clean, "SELECT count(*) FROM records WHERE kind='managed_process' AND json_extract(payload,'$.state')<>'stopped'").Scan(&live); err == nil {
+		if err := k.DB.QueryRowContext(clean, "SELECT count(*) FROM records WHERE kind='managed_process' AND json_extract(payload,'$.state')<>'stopped'").Scan(&live); err != nil {
+			t.Error("read native physical-stop evidence failed")
+		} else {
 			evidence["all_managed_processes_stopped"] = live == 0
 		}
 		var runs, mainRuns int
@@ -161,6 +163,12 @@ Configure a saved FixReviewTemplate with input_task_id=review, classifications=[
 			evidence["authentication_subject_sha256"] = hex.EncodeToString(digest[:])
 		}
 		evidence["observed_at"] = time.Now().UTC()
+		if readErr != nil {
+			t.Error("read native task evidence failed")
+		}
+		if live != 0 {
+			t.Error("native managed processes remain unstopped")
+		}
 		if readErr == nil && !t.Failed() {
 			evidence["acceptance"] = "completed_with_verified_evidence"
 		}
@@ -223,6 +231,13 @@ Configure a saved FixReviewTemplate with input_task_id=review, classifications=[
 				finalDigests = append(finalDigests, artifact.Digest)
 			}
 			evidence["accepted_artifact_digests"] = finalDigests
+			schedule, scheduleErr := readNativeSchedule(ctx, k, waveID)
+			if scheduleErr != nil || verifyNativeSchedule(schedule) != nil {
+				t.Fatal("native schedule must overlap independent initial Tasks and use only initial/final main turns")
+			}
+			evidence["two_initial_task_run_intervals_overlap"] = true
+			evidence["main_turns_during_fix_review"] = 0
+			evidence["metrics_basis"] = "persisted model run starts through execute-owner physical stops; exactly initial and final main turns"
 
 			t.Logf("native K verified: main_turns=%d fix_rounds=%d", view.Wave.MainTurns, view.Wave.FixRounds)
 			return
