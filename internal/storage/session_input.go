@@ -214,7 +214,11 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 			return state, refs, err
 		}
 		if manifest.ProductWorkspace != nil {
-			state.Instructions += " For this product work/fix assignment use TaskResult schema_version=2. For outcome=result copy the product_workspace.reference from this saved manifest into product_changes. For waiting/blocked return an empty product_changes array. Keep work_item_refs empty and review/verification null. The controller owns Git commits, Candidate IDs/SHA and quality/approval gates after normal completion and physical stopping. Publish actual notes/evidence with artifact_publish when needed."
+			if manifest.ProductSubject != nil && manifest.ProductSubject.Value.Spec.Kind == "verification" {
+				state.Instructions += " For this independent verification assignment use TaskResult schema_version=3. Modify only the trusted product_verification_policy.verifier_paths. For outcome=result copy product_workspace.reference into product_changes and product_subject.id/digest into product_verification, with plan_artifact_id naming your published verification.Plan against the input Candidate. Declare that artifact in artifacts. Do not claim a new SHA, runner evidence, review or approval. Keep work_item_refs empty and review/verification null; waiting/blocked use empty product_changes and null product_verification."
+			} else {
+				state.Instructions += " For this product work/fix assignment use TaskResult schema_version=2. For outcome=result copy the product_workspace.reference from this saved manifest into product_changes. For waiting/blocked return an empty product_changes array. Keep work_item_refs empty and review/verification null. The controller owns Git commits, Candidate IDs/SHA and quality/approval gates after normal completion and physical stopping. Publish actual notes/evidence with artifact_publish when needed."
+			}
 		}
 		if manifest.ProductSubject != nil {
 			state.Instructions += " product_subject fixes an immutable Candidate from declared applied producer results. Its value.candidate_digest identifies the exact code/base/scope/policy subject. Original requirements and assigned criteria remain the basis for independent evaluation. This subject is data, not a write/dispatch/runner/approval grant."

@@ -14,7 +14,7 @@ import (
 // read-only review input must not follow future Candidate projections. Other inputs,
 // including dependencies and source results, are still checked on every read.
 func (k *KernelStore) fixedProductWorkspaceInputTx(ctx context.Context, tx *sql.Tx, w domain.Wave, spec contract.TaskSpec) (*ProductWorkspace, error) {
-	if !UsesProductChangeOutput(w, domain.Task{Spec: spec}) && !(usesProductSubject(w, spec) && spec.Kind == "review") {
+	if !UsesProductChangeOutput(w, domain.Task{Spec: spec}) && !usesProductSubject(w, spec) {
 		return nil, nil
 	}
 	taskID := structureID("task-", w.ID, spec.ID)
@@ -64,7 +64,7 @@ func (k *KernelStore) fixedProductWorkspaceInputTx(ctx context.Context, tx *sql.
 	if !productRegistrationScope(registration, w) || registration.Digest != saved.Value.RegistrationDigest || registration.Value.Definition.RepositoryID != saved.Value.Request.RepositoryID {
 		return nil, ErrTaskEvidence
 	}
-	if spec.Kind == "review" {
+	if spec.Kind == "review" || spec.Kind == "verification" {
 		subject, err := k.fixedProductSubjectInputTx(ctx, tx, w, spec)
 		if err != nil {
 			return nil, err
@@ -74,6 +74,9 @@ func (k *KernelStore) fixedProductWorkspaceInputTx(ctx context.Context, tx *sql.
 		}
 	} else if saved.Value.SubjectID != "" || saved.Value.SubjectDigest != "" {
 		return nil, ErrTaskEvidence
+	}
+	if _, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, saved.Value); err != nil {
+		return nil, err
 	}
 	return &saved, nil
 }

@@ -418,3 +418,13 @@ current headと不変historyを同じtransactionで保存し、完全一致の�
 verification Taskのmanifestにはoptional `product_verification_policy`としてID/digest・許可パス・必須/利用可能profile名だけを渡す。完全な実行argvやprofile内部設定をmodel入力へ出さない。K、work/fix、review、parentにはこのTask用fieldを出力しない。
 
 検証: `go test ./internal/storage -run '^TestProductVerificationPolicy' -count=1`。immutable pin/再open/再送、異なる設定・scope外repository・不正path/profile/版の拒否、callerからの分離、argv非公開、証拠欠落とhistory保存失敗rollbackを確認する。この設定は書込/実行/runner成功の許可ではなく、検証workspace・sealing/plan採用への接続は後続である。
+
+## policyに結び付いたverification workspace
+
+固定subjectに加え、同じWave policy版・数値repository・canonical local repositoryのverification policyをpin済みのP verification Taskは、hostのWorkspacePreparerで独立した作業領域を準備できる。subjectの入力Candidate SHAへcheckoutし、値にsubjectとpolicyのID/digestを固定する。準備/claim/停止証拠保存の各境界で照合し、policy欠落/破損・別repositoryは書込bindingへ移さない。
+
+verificationのready証拠からworkspace-write binding、Task/planの固定入力、historyと予約解放を原子保存する。manifestはv3専用のworkspace変更参照とsubject、publicな変更許可パス/profile名を渡し、v2 work/fixやread-only reviewへ自己分類しない。入力のcheckout anchorは今回のsource Candidate SHA、最終Candidateの比較元はsource Candidate.BaseSHAとして別に保持する。旧work/fix記録のoptional未出力とdigestは維持する。
+
+許可パスはtrusted policyで固定してmodelへ指示する。製品コード変更の拒否、テスト変更の停止後sealing・計画検証/採用は後続の範囲検査に接続するため、このworkspace準備だけで製品readinessやmodel turnを許可しない。runner成功・品質/正式承認も生成しない。
+
+検証: `go test ./internal/storage ./internal/product -run 'TestProductVerificationWorkspace|TestProductVerificationPreparer' -count=1`。subject/policy/baseの固定、書込bindingとv3入力参照、policy不在/破損/別repository、証拠欠落後の拒否、実temp Gitの独立領域・固定HEAD・テストファイル追加と実装領域非変更を確認する。model factsとファイル書込はfixtureであり、実modelによる検証やP受入には数えない。
