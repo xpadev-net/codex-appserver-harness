@@ -15,6 +15,11 @@ import (
 
 func productTemplateFixture(t *testing.T, classification string, configure ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, ProductVerificationPlanSnapshot, ProductRunnerRuntime, domain.Task) {
 	t.Helper()
+	return productTemplateRunnerFixture(t, classification, "passed", configure...)
+}
+
+func productTemplateRunnerFixture(t *testing.T, classification, runnerStatus string, configure ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, ProductVerificationPlanSnapshot, ProductRunnerRuntime, domain.Task) {
+	t.Helper()
 	ctx := context.Background()
 	k, w, plan, runtime, review, run := productQualityFixture(t, func(p *contract.PlanProposal) {
 		p.Templates = []contract.FixReviewTemplate{{ID: "product-repair", InputTaskID: "quality-review", Classifications: []string{"implementation_defect", "test_defect"}, FixInstruction: "repair the classified defect against original requirements", ReviewInstruction: "independently review repaired code and tests", MaxRounds: 2}}
@@ -51,7 +56,9 @@ func productTemplateFixture(t *testing.T, classification string, configure ...fu
 	if err != nil {
 		t.Fatal(err)
 	}
-	completeProductRunnerFixture(t, k, plan, runtime, "unit", "passed")
+	if runnerStatus != "pending" {
+		completeProductRunnerFixture(t, k, plan, runtime, "unit", runnerStatus)
+	}
 	return k, w, plan, runtime, review
 }
 
@@ -201,6 +208,45 @@ func TestProductTemplateAutomaticProgressUsesNoMainOrWorkerRun(t *testing.T) {
 	var after int
 	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='agent_run'").Scan(&after); err != nil || before != after {
 		t.Fatal("template planning started a model", before, after, err)
+	}
+}
+
+func TestProductTemplateWaitsOnlyForPendingRunnerAndNotifiesTerminalExceptionsOnce(t *testing.T) {
+	for _, status := range []string{"pending", "infrastructure_failure", "timeout", "canceled"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, _, _, review := productTemplateRunnerFixture(t, "implementation_defect", status)
+			_, err := k.ExpandReviewTemplates(ctx, TemplateExpansionRequest{Target: w.Target(), ReviewTaskID: review.ID})
+			if status == "pending" {
+				if !errors.Is(err, ErrProductRunnerHeld) {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, ErrTemplateNeedsMain) || !strings.Contains(err.Error(), status) {
+				t.Fatal("terminal runner exception silently waits", err)
+			}
+			changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID)
+			if err != nil || changed != (status != "pending") {
+				t.Fatal(changed, err)
+			}
+			if changed, err := k.ReconcileSessionTemplates(ctx, w.OrchestratorSessionID); err != nil || changed {
+				t.Fatal("runner exception attention repeated", changed, err)
+			}
+			var count int
+			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='parent_attention' AND json_extract(payload,'$.reason')='template_requires_main'").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if status == "pending" {
+				want = 0
+			}
+			if count != want {
+				t.Fatal("wrong parent attention count", count, want)
+			}
+			latest, err := k.Wave(ctx, w.ID)
+			if err != nil || latest.PlanRevision != w.PlanRevision || latest.FixRounds != w.FixRounds {
+				t.Fatal("runner exception admitted repairs", latest, err)
+			}
+		})
 	}
 }
 

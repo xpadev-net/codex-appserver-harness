@@ -501,7 +501,7 @@ scope/policy/Candidateが同じで、親planが完了結果・元inputを明示c
 
 ### 製品 findings の有界 template 展開
 
-Pの末尾review Phaseでは、`ExpandReviewTemplates`と共通の自動template照合が、固定Candidateの正常停止・適用済み報告、保存plan/template、全source Phase、既知のrunner完了を検査する。`implementation_defect`は新fix Task、その後の別verification Taskへ、`test_defect`はtest-path/schema v3の新verification Taskへ戻す。分類不明・曖昧なowner・template変更・上限超過は親の例外再計画へ戻し、runner結果待ちではmodelを起動しない。
+Pの末尾review Phaseでは、`ExpandReviewTemplates`と共通の自動template照合が、固定Candidateの正常停止・適用済み報告、保存plan/template、全source Phase、既知のrunner完了を検査する。`implementation_defect`は新fix Task、その後の別verification Taskへ、`test_defect`はtest-path/schema v3の新verification Taskへ戻す。分類不明・曖昧なowner・template変更・上限超過は親の例外再計画へ戻し、runner結果待ちではmodelを起動しない。終了済みの環境障害・timeout・cancelは未完了と区別して親attentionを一度だけ保存し、未接続のretryを待つだけで止めない。
 
 複数ownerは実装修復→検証修復の順に一意に並べ、元の全review役割を新sessionへ保持する。新reviewは最終verification結果へ依存する。実runner成功の生成は行わず、最終Candidateの全profile成功がない間は品質gateを通さない。元report/raw finalは保持し、保存したreplacement lineageから全役割の新clean報告を確認した場合だけ旧報告の役割を置き換える。同じSHAに残るfindingsの拒否は維持する。
 

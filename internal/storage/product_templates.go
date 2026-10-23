@@ -195,7 +195,7 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 	}
 	for _, job := range machine.Value.Jobs {
 		if job.Completion.Result.Status != "passed" && job.Completion.Result.Status != "failed" {
-			return receipt, ErrProductRunnerHeld
+			return receipt, fmt.Errorf("%w: terminal runner result %q requires parent decision", ErrTemplateNeedsMain, job.Completion.Result.Status)
 		}
 	}
 	verificationTask, err := loadTask(ctx, tx, verificationSource.Value.TaskID)
