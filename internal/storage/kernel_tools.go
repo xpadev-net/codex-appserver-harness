@@ -34,6 +34,10 @@ type kernelToolOperation struct {
 
 func kernelToolTarget(command any) (string, contract.Target) {
 	switch a := command.(type) {
+	case *contract.PublishPRRequest:
+		return "pr_publish", a.Target
+	case *contract.RequestPRReviewRequest:
+		return "pr_review_request", a.Target
 	case *contract.CreateWaveRequest:
 		return "wave_create", contract.Target{}
 	case *contract.PlanWaveRequest:
@@ -203,6 +207,7 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 		}
 		target = wave.Target()
 	}
+	productOperation := call.Name == "pr_publish" || call.Name == "pr_review_request"
 	var oldRaw, oldReply []byte
 	var oldName, oldDigest, oldThread, state string
 	err = tx.QueryRowContext(ctx, "SELECT name,argument_digest,thread_id,state,result,payload FROM kernel_tool_operations WHERE session_id=? AND turn_id=? AND call_id=?", b.ID, call.TurnID, call.CallID).Scan(&oldName, &oldDigest, &oldThread, &state, &oldReply, &oldRaw)
@@ -211,11 +216,14 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 		if err = json.Unmarshal(oldRaw, &prior); err != nil {
 			return reply, err
 		}
-		if oldName != call.Name || oldDigest != digest || oldThread != b.ThreadID || prior.RunID != call.RunID || prior.SnapshotID != snapshotID || state != "completed" {
+		if oldName != call.Name || oldDigest != digest || oldThread != b.ThreadID || prior.RunID != call.RunID || prior.SnapshotID != snapshotID || (state != "completed" && !(productOperation && (state == "accepted" || state == "unknown"))) {
 			return reply, errors.New("tool call replay identity conflict")
 		}
 		if err = json.Unmarshal(oldReply, &reply); err != nil {
 			return reply, err
+		}
+		if productOperation && state == "unknown" {
+			reply.State = "unknown"
 		}
 		return reply, tx.Commit()
 	}
@@ -225,6 +233,16 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	op := kernelToolOperation{ID: structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID), SessionID: b.ID, RunID: call.RunID, ThreadID: b.ThreadID, TurnID: call.TurnID, CallID: call.CallID, Name: call.Name, ArgumentDigest: digest, Target: target, SnapshotID: snapshotID, CreatedAt: k.clock()}
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
+	case *contract.PublishPRRequest:
+		reply, err = k.acceptPRIntentTx(ctx, tx, op, b, r.Candidate)
+		if err != nil {
+			return reply, err
+		}
+	case *contract.RequestPRReviewRequest:
+		reply, err = k.acceptPRIntentTx(ctx, tx, op, b, r.Candidate)
+		if err != nil {
+			return reply, err
+		}
 	case *contract.CreateWaveRequest:
 		reply, err = k.acceptWaveToolTx(ctx, tx, op, b, target, nil)
 		if err != nil {
@@ -329,7 +347,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	if err != nil {
 		return reply, err
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_tool_operations(id,session_id,thread_id,turn_id,call_id,name,argument_digest,state,result,payload) VALUES(?,?,?,?,?,?,?,'completed',?,?)", op.ID, b.ID, b.ThreadID, call.TurnID, call.CallID, call.Name, digest, result, raw); err != nil {
+	operationState := "completed"
+	if productOperation {
+		operationState = "accepted"
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO kernel_tool_operations(id,session_id,thread_id,turn_id,call_id,name,argument_digest,state,result,payload) VALUES(?,?,?,?,?,?,?,?,?,?)", op.ID, b.ID, b.ThreadID, call.TurnID, call.CallID, call.Name, digest, operationState, result, raw); err != nil {
 		return reply, err
 	}
 	return reply, tx.Commit()
