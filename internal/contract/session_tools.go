@@ -378,6 +378,10 @@ type ToolDefinition struct {
 
 func toolArgument(name string) any {
 	switch name {
+	case "pr_publish":
+		return &PublishPRRequest{}
+	case "pr_review_request":
+		return &RequestPRReviewRequest{}
 	case "wave_create":
 		return &CreateWaveRequest{}
 	case "wave_plan":
@@ -466,6 +470,16 @@ func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolRep
 	}
 	var target Target
 	switch a := command.(type) {
+	case *PublishPRRequest:
+		target = a.Target
+		if a.SchemaVersion != 1 || !validProductCandidate(a.Candidate) {
+			return reject("invalid product candidate request")
+		}
+	case *RequestPRReviewRequest:
+		target = a.Target
+		if a.SchemaVersion != 1 || !validProductCandidate(a.Candidate) {
+			return reject("invalid product candidate request")
+		}
 	case *ContextReadRequest:
 		target = a.Target
 		if !a.Valid() {
