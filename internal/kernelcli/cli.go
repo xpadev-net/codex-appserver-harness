@@ -26,22 +26,22 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message")
+		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message, runs, output")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message":
+	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message", "runs", "output":
 	default:
 		return errors.New("unknown wave command")
 	}
 	fs := flag.NewFlagSet("wave "+command, flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	root := fs.String("root", "", "absolute private kernel root")
-	session := fs.String("session", "main", "logical main session ID (init)")
+	session := fs.String("session", "main", "logical session ID (init or session reads)")
 	model := fs.String("model", "", "configured model (init)")
 	runtimeFile := fs.String("runtime", "", "private runtime launch-policy JSON (run)")
 	file := fs.String("file", "", "direct request or versioned operator JSON")
-	id := fs.String("id", "", "Wave ID (inspect)")
+	id := fs.String("id", "", "stored Wave, Artifact, message, observation, or run ID")
 	after := fs.String("after", "", "last Wave/Task ID from a previous page")
 	afterPhase := fs.String("after-phase", "", "last Phase ID from a previous inspect page")
 	defaultLimit := 64
@@ -49,10 +49,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		defaultLimit = contract.MaxStatePage
 	}
 	limit := fs.Int("limit", defaultLimit, "page size, 1..128 (watch: 1..32)")
-	cursor := fs.Int64("cursor", 0, "last successfully displayed state cursor (watch)")
+	cursor := fs.Int64("cursor", 0, "last cursor from this command (watch, mailbox, runs)")
 	content := fs.Bool("content", false, "read a verified Artifact excerpt")
-	offset := fs.Int64("offset", 0, "Artifact byte offset")
-	bytes := fs.Int("bytes", contract.MaxInline, "Artifact excerpt bytes, 1..16384")
+	offset := fs.Int64("offset", 0, "Artifact or run output byte offset")
+	bytes := fs.Int("bytes", contract.MaxInline, "Artifact or run output excerpt bytes, 1..16384")
 	once := fs.Bool("once", false, "read one stored page without a running daemon (watch)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -62,6 +62,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	allowed := map[string]bool{"root": true}
 	switch command {
+	case "runs":
+		allowed["session"], allowed["cursor"], allowed["limit"] = true, true, true
+	case "output":
+		allowed["id"], allowed["offset"], allowed["bytes"] = true, true, true
 	case "artifact":
 		allowed["id"], allowed["content"] = true, true
 		if *content {
@@ -120,6 +124,18 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		*session = c.SessionID
 	}
 	switch command {
+	case "runs":
+		page, err := k.InspectRuns(ctx, *session, *cursor, *limit)
+		if err != nil {
+			return err
+		}
+		return encode(page)
+	case "output":
+		excerpt, err := runOutputExcerpt(ctx, k, *id, *offset, *bytes)
+		if err != nil {
+			return err
+		}
+		return encode(excerpt)
 	case "artifact":
 		if *content {
 			excerpt, err := artifactExcerpt(ctx, k, *id, *offset, *bytes)
