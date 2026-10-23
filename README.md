@@ -123,6 +123,21 @@ main用の`recover.json`は`{key,action:"recover_main",expected,snapshot:{id,dig
 
 Task用の`retire.json`は`{key,action:"retire_task",expected,reason}`です。旧Task/sessionを終端にし、置き換えが必要な場合は新しいTask/session IDを計画します。canceled Taskの作成を処理してもcancel状態は保持します。どちらも未停止・古いbindingやscopeを拒否し、既にthreadがあるunknown runを棄却する操作には使えません。同じkeyの再送は元receiptを返し、後で生じた別の未確定作成を処理しません。
 
+### 成果物と親子メッセージの閲覧
+
+```sh
+./harness wave artifact --root /absolute/private/kernel --id ARTIFACT_ID
+./harness wave artifact --root /absolute/private/kernel --id ARTIFACT_ID --content --offset 0 --bytes 16384
+./harness wave mailbox --root /absolute/private/kernel --session TASK_SESSION_ID --cursor 0 --limit 64
+./harness wave message --root /absolute/private/kernel --session TASK_SESSION_ID --id MESSAGE_ID
+```
+
+`artifact`は保存manifestを表示し、`--content`は内容全体のdigestを検証して最大16 KiBの抜粋を返します。`next_offset`を次の`--offset`へ渡し、`done`まで読めます。抜粋はUTF-8なら`encoding: utf8`、binaryや文字境界で分かれたbyte列は`encoding: base64`です。読み取りは有界bufferで検証し、破損した抜粋を返しません。
+
+private rootを持つoperatorは過去scopeの保存成果も確認できます。これはworker toolのscope/grantとは別の閲覧portで、モデルの参照権限や現在の成果判定を変更しません。期限切れで削除された内容は復元しません。
+
+`mailbox`は`cursor`/`more`で続きを辿り、送達状態・ACK状態・返信の有無を表示します。`message`の`request.reply_to`から元の質問を参照できます。sessionを省略すると保存したOrchestrator IDを使い、明示したsession以外の会話は読みません。閲覧はACK・返信送信・wake・model実行を行いません。
+
 ## 設定と起動
 
 ```sh

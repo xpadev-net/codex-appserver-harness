@@ -26,11 +26,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread")
+		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread":
+	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -50,6 +50,9 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	limit := fs.Int("limit", defaultLimit, "page size, 1..128 (watch: 1..32)")
 	cursor := fs.Int64("cursor", 0, "last successfully displayed state cursor (watch)")
+	content := fs.Bool("content", false, "read a verified Artifact excerpt")
+	offset := fs.Int64("offset", 0, "Artifact byte offset")
+	bytes := fs.Int("bytes", contract.MaxInline, "Artifact excerpt bytes, 1..16384")
 	once := fs.Bool("once", false, "read one stored page without a running daemon (watch)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -59,6 +62,15 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	allowed := map[string]bool{"root": true}
 	switch command {
+	case "artifact":
+		allowed["id"], allowed["content"] = true, true
+		if *content {
+			allowed["offset"], allowed["bytes"] = true, true
+		}
+	case "mailbox":
+		allowed["session"], allowed["cursor"], allowed["limit"] = true, true, true
+	case "message":
+		allowed["session"], allowed["id"] = true, true
 	case "init":
 		allowed["session"], allowed["model"] = true, true
 	case "create", "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":
@@ -79,7 +91,11 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
 	var flagErr error
+	sessionProvided := false
 	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "session" {
+			sessionProvided = true
+		}
 		if !allowed[f.Name] {
 			flagErr = errors.New("flag --" + f.Name + " does not apply to wave " + command)
 		}
@@ -100,7 +116,35 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return err
 	}
 	defer k.Close()
+	if !sessionProvided {
+		*session = c.SessionID
+	}
 	switch command {
+	case "artifact":
+		if *content {
+			excerpt, err := artifactExcerpt(ctx, k, *id, *offset, *bytes)
+			if err != nil {
+				return err
+			}
+			return encode(excerpt)
+		}
+		artifact, err := k.Artifact(ctx, *id)
+		if err != nil {
+			return err
+		}
+		return encode(artifact)
+	case "mailbox":
+		page, err := mailboxPage(ctx, k, *session, *cursor, *limit)
+		if err != nil {
+			return err
+		}
+		return encode(page)
+	case "message":
+		message, err := k.Message(ctx, *session, *id)
+		if err != nil {
+			return err
+		}
+		return encode(message)
 	case "recovery-input":
 		raw, err := readFile(*file, 64<<10, false)
 		if err != nil {
