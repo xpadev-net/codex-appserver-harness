@@ -193,3 +193,88 @@ func TestWorkspacePreparationExcludesExistingGitOperationBelowDestination(t *tes
 		t.Fatal("preparation overlapped live Git directory", err)
 	}
 }
+
+func TestWorkspacePreparationPinsDanglingSymlinkTargetsAndRejectsAliasBypass(t *testing.T) {
+	for _, mode := range []string{"absolute", "relative", "parent_alias", "link_dotdot"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, _ := operationFixture(t)
+			root := t.TempDir()
+			target := filepath.Join(root, "future")
+			alias := filepath.Join(root, "alias")
+			linkTarget := target
+			switch mode {
+			case "relative":
+				linkTarget = "future"
+			case "parent_alias":
+				target = filepath.Join(root, "missing-parent", "future")
+				if err := os.Symlink(filepath.Join(root, "missing-parent"), alias); err != nil {
+					t.Fatal(err)
+				}
+				alias = filepath.Join(alias, "future")
+			case "link_dotdot":
+				actual := filepath.Join(root, "actual", "nested")
+				if err := os.MkdirAll(actual, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(actual, filepath.Join(root, "jump")); err != nil {
+					t.Fatal(err)
+				}
+				linkTarget = "jump/../future"
+				target = filepath.Join(root, "actual", "future")
+			}
+			if mode != "parent_alias" {
+				if err := os.Symlink(linkTarget, alias); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resolved, err := resourcePath(alias)
+			if err != nil || resolved != target {
+				t.Fatal("dangling symlink lost intended target", mode, resolved, target, err)
+			}
+			first := OperationCapacityRequest{ID: "prepare-dangling-alias", Kind: "git", SessionID: "main", Target: w.Target(), Repository: operationRepo(t), Worktree: alias}
+			saved, err := k.ReserveOperationCapacity(ctx, first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pinned := false
+			for _, lease := range saved.Resources {
+				pinned = pinned || lease.Resource == workspacePreparationPrefix+target
+			}
+			if !pinned {
+				t.Fatal("did not pin resolved destination", saved.Resources, target)
+			}
+			second := first
+			second.ID = "prepare-direct-target"
+			second.Repository = operationRepo(t)
+			second.Worktree = target
+			if _, err := k.ReserveOperationCapacity(ctx, second); !errors.Is(err, ErrResourceBusy) {
+				t.Fatal("dangling alias permitted two preparations", err)
+			}
+			runner := OperationCapacityRequest{ID: "runner-at-dangling-target", Kind: "runner", SessionID: "main", Target: w.Target(), Worktree: target}
+			if _, err := k.ReserveOperationCapacity(ctx, runner); !errors.Is(err, ErrResourceBusy) {
+				t.Fatal("runner bypassed dangling alias", err)
+			}
+		})
+	}
+}
+func TestWorkspacePreparationPathResolutionRejectsSymlinkCyclesAndNonDirectories(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resourcePath(a); err == nil {
+		t.Fatal("symlink cycle accepted")
+	}
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resourcePath(file + "/../future"); err == nil {
+		t.Fatal("non-directory traversal accepted")
+	}
+}
