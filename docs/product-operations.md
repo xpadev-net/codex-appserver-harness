@@ -179,3 +179,13 @@ JSON と secret file は同一ユーザー所有・0600 の通常ファイルに
 HTTP は header/body/idle timeout と同時 handler 上限32を持ち、過負荷時は503を返す。daemon cancel は request context に伝わり、5秒の graceful shutdown 後は接続を閉じる。controller は開始済み handler が戻るまで DB / lock を保持する。bind failure も全 daemon loop の停止へ伝播する。host のポート公開や実 GitHub 配送確認はこの fixture 検証とは別である。
 
 検証: `go test ./internal/kernelcli -run 'TestPRWebhook|TestPRObserver|TestKernelDaemon|TestKernelCLIRun' -count=3`。実 loopback HTTP で正確な payload 保存後の hint、誤署名/foreign/conflicting replay 拒否、再送の非重複、handler cancel/join、終了後の listener close、bind failure、private secret と設定境界を確認する。書込 dispatch/canonical 工程の接続は後続である。
+
+### 外部書込の非同期 dispatch
+
+`product.Dispatcher` は canonical publication/review gate と transport を明示する controller 専用 worker pool である。`PRDispatchOperations` は同一 DB snapshot の accepted PR tool intent だけを 128 件以下の cursor page で返し、unknown / completed / canceled は送信 queue に戻さない。model dispatch の Ready では外部 I/O を待たない。
+
+既定2・最大8 workerで異なる操作を並行処理し、各実行は共有cancelと1分のdeadlineを渡す。既存 adapter が候補・scope・pause/cancel・capacity・mutation lease・canonical gateを照合する。同じPRの書込は既存leaseで直列化する。失敗は次回間隔（既定1分）まで待ち、他の操作を選べる。callbackは非blockingで使い、cancel時は全子workerをjoinしてから返る。timer用cacheは期限切れを除去する。
+
+準備済み・未送信の再試行はoperation IDから導く同じownerを使う。これで再起動後も prepared を照合できるが、物理停止の証拠にはしない。旧executorが残っていても送信直前の `MarkPRMayHaveSent` はtransactionで一度しか成功せず、成功後のunknownを再度送らない。異なるownerの既存claimを奪わない。結果不明のread-only回収には従来どおり別途停止証拠を要求する。
+
+検証: `go test ./internal/product ./internal/storage -run 'TestPRDispatcher|TestPRDispatchOperations' -count=3`。共通gatewayで実際に受付した操作から、PR公開/reviewの既存guard付きadapter、preparedのDB再open後再開、応答欠落unknownの非再送、別PR/DBの並行進行、cancel join、cursor/状態filterを確認する。並行fixtureはmodel run開始前にPR枠2を明示し、既定値1を変更しない。APIはfixture transportであり実Cloud合格ではない。canonical工程のport実装とdaemon書込opt-inへの配置は後続である。
