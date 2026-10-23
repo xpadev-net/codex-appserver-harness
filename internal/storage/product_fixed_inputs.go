@@ -10,11 +10,11 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-// A ready workspace fixes the work/fix origin before the first model run. Its
-// own future Candidate projection must not change that origin. Other inputs,
+// A ready workspace fixes its origin before the first model run. Work/fix and
+// read-only review input must not follow future Candidate projections. Other inputs,
 // including dependencies and source results, are still checked on every read.
 func (k *KernelStore) fixedProductWorkspaceInputTx(ctx context.Context, tx *sql.Tx, w domain.Wave, spec contract.TaskSpec) (*ProductWorkspace, error) {
-	if !UsesProductChangeOutput(w, domain.Task{Spec: spec}) {
+	if !UsesProductChangeOutput(w, domain.Task{Spec: spec}) && !(usesProductSubject(w, spec) && spec.Kind == "review") {
 		return nil, nil
 	}
 	taskID := structureID("task-", w.ID, spec.ID)
@@ -62,6 +62,17 @@ func (k *KernelStore) fixedProductWorkspaceInputTx(ctx context.Context, tx *sql.
 		return nil, err
 	}
 	if !productRegistrationScope(registration, w) || registration.Digest != saved.Value.RegistrationDigest || registration.Value.Definition.RepositoryID != saved.Value.Request.RepositoryID {
+		return nil, ErrTaskEvidence
+	}
+	if spec.Kind == "review" {
+		subject, err := k.fixedProductSubjectInputTx(ctx, tx, w, spec)
+		if err != nil {
+			return nil, err
+		}
+		if subject == nil || saved.Value.SubjectID != subject.ID || saved.Value.SubjectDigest != subject.Digest || saved.Value.Request.BaseSHA != subject.Value.Candidate.SHA {
+			return nil, ErrTaskEvidence
+		}
+	} else if saved.Value.SubjectID != "" || saved.Value.SubjectDigest != "" {
 		return nil, ErrTaskEvidence
 	}
 	return &saved, nil
