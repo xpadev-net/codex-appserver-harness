@@ -57,3 +57,13 @@ PR toolは既存のsession/run/thread/turn/call検査、元snapshot scope、paus
 送信前の読取/DB/gateエラーはpreparedを保持し、dispatcherが有界再試行または明示的な未送信取消を判断する。送信開始後のエラーはunknownのまま保つ。`ReconcilePublication`は停止/応答完了を確認したcallerのproofで、保存packetと操作markerに一致する資源だけを読取専用で回収する。現policyの変更やpauseは過去の正の事実の回収を妨げない。一覧の不在や別操作のmarkerでunknownを解消せず、古い操作を再送しない。
 
 この分割はlibrary adapterとfake/gh wire試験であり、canonical gateの既存PR工程への接続・daemon配置・native P公開はTask_11を含む後続である。Cloud正式承認やP全体の実接続成立の証拠にはしない。検証は`go test ./internal/product ./internal/github ./internal/storage`。書込直前のunknown、既定branch/remote SHA/候補/flag/gateの変化、packetの不変性、既知未送信の同一owner再試行、応答欠落と操作marker照合、再送なし、ghのroot metadata/branch取得を確認する。
+
+## Review依頼adapterと受付結果
+
+`internal/product.ReviewRequester`はcanonical candidate/検証/configと検証済みCloud依頼経路を確認する必須gateを受け取る。controller由来の依頼文・依頼者の数値ID・operation固有のround IDを送信前に不変packetへ保存する。モデルが依頼者や投稿内容を指定する経路は追加しない。`GitHubReviewAPI`は認証済みghの公開comment APIを使い、全pageを照合する。
+
+POST直前にrepository/default branch、固定candidateのPR header/open/draft、最新gateと同じ依頼内容、優先操作と両capacity枠を再検査し、unknownを保存してから一度送る。応答のcomment IDを同じPRのcomment一覧へ照合し、元の依頼者ID・本文全体・round markerに一致した正の事実だけを保存する。既存の完全一致commentは読取だけで関連付ける。応答欠落や再起動後にunknownを再送しない。元transportの停止を確認したcallerだけが、保存packetに一致するcommentを読取専用で回収できる。欠落/編集/別依頼者/重複は未解決のまま保持する。
+
+`BindObservedPRReviewRequest`は既存PR所有binding・自動購読・operation結果・完了outbox・書込lease解放を一transactionで確定する。`review_requested`は依頼受付であり、正式承認やreview終了ではない。PR存続枠とCloud実行枠を保持し、後続の正のreview終了観測までCloud枠を解放しない。通知はpublicationと同じ明示wait/旧scope archiveの処理を使う。pause/cancelやpolicy変更後も、既に送った依頼の正の事実を回収できる。
+
+検証: `go test ./internal/product ./internal/storage -run 'TestReviewRequest|TestLostReview|TestObservedReview' -count=1`。送信直前のunknown・gate/remote/優先操作の変化、誤ったmutation、既存comment/必須guard、保存rollback、再open/cancel後の回収、Cloud枠保持、通常通知のdeferredを確認する。これはlibrary接続であり、既存canonical gate/Cloud結果終了の接続、継続資源更新、daemon/P tool公開は後続である。
