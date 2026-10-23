@@ -199,3 +199,13 @@ thread作成前に `PinSessionTools` が論理session / generationごとの kern
 この設定は外部操作の受付toolを公開する。canonical gate実装とdaemon書込dispatcherの配置、WorkItem割当Taskのreadiness解放は後続であり、受付を外部送信成功へ読み替えない。
 
 検証: `go test ./internal/worker ./internal/control ./internal/storage ./internal/kernelcli -run 'TestProductTools|TestSessionToolProfile|TestRuntimeProductTools|TestRuntimeNativeProductTool|TestKernelCLIRun' -count=3`。main/Taskのrole別tool公開、profile保存失敗時のRPCゼロ、世代/再open/既存thread拒否/明示rotation後の構成変更、production Runtimeと実DBのprofile照合、private runtime opt-inの読込を確認する。RPC fixtureでP mainから実共通gatewayへpr_publishし、同じcallの再送がoperation/購読を増やさず、K Waveが同じnative tool要求を拒否することを確認した。fixtureの汎用最終出力は製品候補やWave受入の証拠にしない。実model/GitHub接続の検証とは区別する。
+
+### 既存 canonical journal の gate adapter
+
+`service.Controller.ProductPublicationGate` / `ProductReviewGate` を既存 `product.Publisher.Gate` / `ReviewRequester.Gate` に渡せる。これらはsourceの既存WorkItem journalを読み、kernelのprojectionそのものを検証証拠として扱わない。明示した信頼済みConfig、WorkItem全体/候補/PR番号の一致、保存policy snapshot、最新Issue本文/hold、検証計画のidentity/criterion coverageと固定commit内のtest参照、現在候補のrequired runner結果を確認する。部分範囲では残作業記録とcommitのclosing textも確認する。公開bodyは従来と同じ `publicationBody` から構成する。最後にWorkItemを読み直し、途中のpause等を拒否する。
+
+review gateはさらに最新のPRのrepo/branch/base/candidate SHA/open/non-draftを照合する。CapabilitiesPathがあれば、上限1MiB・他ユーザー書込不可の通常ファイルをsymlink/FIFOを避けて毎回読み、欠落したfieldを以前のverified値で埋めない。構成とrepositoryの一致、cloud_requestのverified evidenceとtrusted requester/triggerを要求する。cloud_native_approvalがunknownでも依頼capabilityとは分け、依頼可能という結果から正式承認を生成しない。
+
+gate自体はdomainの状態変更・publish/review/mergeを行わず、DB/APIの失敗は呼出元へ返す。実際の送信は既存adapterの直前gate再評価・kernel capacity/lease・一度だけのunknown guardを通る。このadapterは既存source journal用で、新K DBにlegacy tableを暗黙作成しない。新P sourceの作成/同期とdaemonへの書込配置はTask_11接続で扱う。
+
+検証: `go test ./internal/service -run TestProductCanonical -count=3`。既存のfake agent/runner workflowと実git worktreeでREVIEWINGまで到達したsourceから、公開資料の構成、外部書込ゼロ、projectionやsource/policy/Issue/validation/candidate/test参照/partial residual/PR番号の不一致拒否、capability取消と欠落reportの拒否を確認する。fixtureのrequest capabilityは実Cloudの合格証拠にしない。
