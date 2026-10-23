@@ -115,6 +115,12 @@ func sourceRepository(ctx context.Context, api ResourceAPI, policy IssueSourcePo
 }
 
 func (a IssueAdmitter) Admit(ctx context.Context, number int) (domain.Wave, error) {
+	return a.admit(ctx, number, nil)
+}
+
+var errIssueNotSelected = errors.New("Issue no longer belongs to this priority group")
+
+func (a IssueAdmitter) admit(ctx context.Context, number int, selected func(github.Issue) bool) (domain.Wave, error) {
 	if a.Store == nil || a.API == nil || a.SessionID == "" || number < 1 {
 		return domain.Wave{}, errors.New("trusted Issue source and positive number required")
 	}
@@ -142,6 +148,9 @@ func (a IssueAdmitter) Admit(ctx context.Context, number int) (domain.Wave, erro
 	}
 	if issue.State != "open" || !ready || hold {
 		return domain.Wave{}, errors.New("Issue is not ready or is held")
+	}
+	if selected != nil && !selected(issue) {
+		return domain.Wave{}, errIssueNotSelected
 	}
 	scope, err := verification.ParseScope(issue.Body)
 	if err != nil {

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,11 +21,12 @@ import (
 
 type issuePoolAPI struct {
 	*issueAdmissionAPI
-	items   []json.RawMessage
-	pageErr error
-	started chan struct{}
-	stopped chan struct{}
-	release chan struct{}
+	items     []json.RawMessage
+	pageErr   error
+	oversized bool
+	started   chan struct{}
+	stopped   chan struct{}
+	release   chan struct{}
 }
 
 type stallingPoolCandidate struct {
@@ -40,7 +43,7 @@ type deadlinePoolMetadata struct {
 func (a *deadlinePoolMetadata) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
 	if path == "" {
 		a.metadataReads++
-		if a.metadataReads == 2 {
+		if a.metadataReads == 1 {
 			// Metadata finished at the scan deadline. A subsequent canceled
 			// Issue call is not an attempted fetch and must not move cursor.
 			<-ctx.Done()
@@ -60,18 +63,76 @@ func (a *stallingPoolCandidate) ResourceGET(ctx context.Context, path string) (j
 	return a.ResourceAPI.ResourceGET(ctx, path)
 }
 
-func (a *issuePoolAPI) ResourcePages(ctx context.Context, path, field string) ([]json.RawMessage, error) {
-	if path != "issues?state=open&per_page=100" || field != "" {
-		return nil, errors.New("unexpected Issue pool collection")
-	}
+func (a *stallingPoolCandidate) IssuePoolMetadata(ctx context.Context, labels []string, after string) (github.IssuePoolPage, error) {
+	return a.ResourceAPI.(IssuePoolMetadataAPI).IssuePoolMetadata(ctx, labels, after)
+}
+func (a *deadlinePoolMetadata) IssuePoolMetadata(ctx context.Context, labels []string, after string) (github.IssuePoolPage, error) {
+	return a.ResourceAPI.(IssuePoolMetadataAPI).IssuePoolMetadata(ctx, labels, after)
+}
+func (a *issuePoolAPI) ResourcePages(context.Context, string, string) ([]json.RawMessage, error) {
+	return nil, errors.New("legacy full-pool enumeration forbidden")
+}
+func (a *issuePoolAPI) IssuePoolMetadata(ctx context.Context, labels []string, after string) (github.IssuePoolPage, error) {
+	page := github.IssuePoolPage{RepositoryID: a.repositoryID, Repository: "owner/repo", Nodes: []github.IssuePoolNode{}}
 	if a.started != nil {
 		close(a.started)
 		<-ctx.Done()
 		close(a.stopped)
 		<-a.release
-		return nil, ctx.Err()
+		return page, ctx.Err()
 	}
-	return a.items, a.pageErr
+	if a.pageErr != nil {
+		return page, a.pageErr
+	}
+	last := 0
+	if after != "" {
+		var err error
+		last, err = strconv.Atoi(strings.TrimPrefix(after, "n:"))
+		if err != nil {
+			return page, err
+		}
+	}
+	for _, raw := range a.items {
+		var issue github.Issue
+		if err := json.Unmarshal(raw, &issue); err != nil {
+			return page, err
+		}
+		if issue.Number < 1 {
+			return page, errors.New("invalid metadata identity")
+		}
+		if issue.Number <= last || issue.State != "open" || len(issue.PullRequest) != 0 {
+			continue
+		}
+		names := []string{}
+		for _, label := range issue.Labels {
+			names = append(names, label.Name)
+		}
+		matches := true
+		for _, wanted := range labels {
+			found := false
+			for _, label := range names {
+				found = found || label == wanted
+			}
+			matches = matches && found
+		}
+		if matches {
+			page.Nodes = append(page.Nodes, github.IssuePoolNode{Number: issue.Number, State: "OPEN", Labels: names, LabelsComplete: true})
+		}
+	}
+	sort.Slice(page.Nodes, func(i, j int) bool { return page.Nodes[i].Number < page.Nodes[j].Number })
+	if len(page.Nodes) > github.IssuePoolPageSize {
+		page.Nodes = page.Nodes[:github.IssuePoolPageSize]
+		page.HasNext = true
+	}
+	if len(page.Nodes) > 0 {
+		page.EndCursor = fmt.Sprintf("n:%d", page.Nodes[len(page.Nodes)-1].Number)
+	}
+	if a.oversized {
+		for len(page.Nodes) <= github.IssuePoolPageSize {
+			page.Nodes = append(page.Nodes, github.IssuePoolNode{Number: 1000 + len(page.Nodes), State: "OPEN", Labels: []string{"ready"}, LabelsComplete: true})
+		}
+	}
+	return page, nil
 }
 
 func issuePoolFixture(t *testing.T, numbers ...int) (IssuePool, *issuePoolAPI) {
@@ -202,7 +263,7 @@ func TestIssuePoolRejectsIncompleteDuplicateAndForeignCollections(t *testing.T) 
 			case "repository":
 				api.repositoryID++
 			case "bound":
-				api.items = make([]json.RawMessage, 2049)
+				api.oversized = true
 			}
 			if _, err := p.Scan(context.Background()); err == nil {
 				t.Fatal("invalid pool was treated as a complete empty collection")
@@ -235,6 +296,23 @@ func TestIssuePoolCannotExceedControllerWaveCapacity(t *testing.T) {
 	}
 }
 
+func issueMetadataJSON(t *testing.T, issues []github.Issue, next bool, cursor string) []byte {
+	t.Helper()
+	nodes := []any{}
+	for _, issue := range issues {
+		names := []any{}
+		for _, label := range issue.Labels {
+			names = append(names, map[string]any{"name": label.Name})
+		}
+		nodes = append(nodes, map[string]any{"number": issue.Number, "state": strings.ToUpper(issue.State), "labels": map[string]any{"nodes": names, "pageInfo": map[string]any{"hasNextPage": false}}})
+	}
+	raw, err := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"databaseId": 17, "nameWithOwner": "owner/repo", "issues": map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": next, "endCursor": cursor}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func nativeIssuePoolBudgetFixture(t *testing.T, count, goodNumber int) (IssuePool, string) {
 	t.Helper()
 	p, api := issuePoolFixture(t)
@@ -244,10 +322,7 @@ func nativeIssuePoolBudgetFixture(t *testing.T, count, goodNumber int) (IssuePoo
 		items[i] = api.issue
 		items[i].Number = i + 1
 	}
-	pages, err := json.Marshal([][]github.Issue{items})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pages := issueMetadataJSON(t, items, false, fmt.Sprintf("n:%d", count))
 	dir := t.TempDir()
 	meta, pageFile, oversized, calls := filepath.Join(dir, "meta"), filepath.Join(dir, "pages"), filepath.Join(dir, "oversized"), filepath.Join(dir, "calls")
 	for path, data := range map[string][]byte{meta: []byte(`{"id":17,"full_name":"owner/repo"}`), pageFile: pages, oversized: []byte(strings.Repeat("x", github.MaxResourceReadBytes+1))} {
@@ -268,7 +343,7 @@ func nativeIssuePoolBudgetFixture(t *testing.T, count, goodNumber int) (IssuePoo
 	script := fmt.Sprintf(`#!/bin/sh
 case "$*" in
  'api --method GET repos/owner/repo') /bin/cat "$ISSUE_POOL_BUDGET_META" ;;
- 'api --method GET --paginate --slurp repos/owner/repo/issues?state=open&per_page=100') /bin/cat "$ISSUE_POOL_BUDGET_PAGES" ;;
+ 'api --method POST graphql --input -') /bin/cat "$ISSUE_POOL_BUDGET_PAGES" ;;
  'api --method GET repos/owner/repo/issues/%d') /bin/cat "$ISSUE_POOL_BUDGET_GOOD" ;;
  'api --method GET repos/owner/repo/issues/'*)
   printf 'oversized\n' >> "$ISSUE_POOL_BUDGET_CALLS"
@@ -316,7 +391,7 @@ func TestIssuePoolWireExhaustionResumesFirstUnreadIssueAfterReopen(t *testing.T)
 	}
 	defer p.Admitter.Store.Close()
 	second, err := p.Scan(context.Background())
-	if !errors.Is(err, ErrIssuePoolScanBudget) || len(second.Admitted) != 1 || len(second.Held) != 4 {
+	if err != nil || len(second.Admitted) != 1 || len(second.Held) != 0 {
 		t.Fatal("valid fifth Issue starved after budget exhaustion", second, err)
 	}
 	wave, err := p.Admitter.Store.Wave(context.Background(), second.Admitted[0])
@@ -324,7 +399,7 @@ func TestIssuePoolWireExhaustionResumesFirstUnreadIssueAfterReopen(t *testing.T)
 		t.Fatal(wave, err)
 	}
 	readCalls, err := os.ReadFile(calls)
-	if err != nil || strings.Count(string(readCalls), "oversized\n") != 8 {
+	if err != nil || strings.Count(string(readCalls), "oversized\n") != 4 {
 		t.Fatal(string(readCalls), err)
 	}
 }
@@ -343,10 +418,10 @@ func TestIssuePoolCallBudgetExhaustedBeforeIssueReadKeepsCursor(t *testing.T) {
 		return "\nharness-depends-on: " + strings.Join(ids, ",")
 	}
 	full := dependencies(100, 32)
-	held := dependencies(200, 15)
-	item := api.dependencies["issues/214"]
+	held := dependencies(200, 16)
+	item := api.dependencies["issues/215"]
 	item.State = "open"
-	api.dependencies["issues/214"] = item
+	api.dependencies["issues/215"] = item
 	for i := 0; i < 3; i++ {
 		setPoolItem(t, api, i, func(issue *github.Issue) { issue.Body += full })
 	}

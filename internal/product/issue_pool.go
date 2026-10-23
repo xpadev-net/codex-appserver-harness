@@ -37,7 +37,13 @@ var ErrIssuePoolScanBudget = errors.New("Issue pool scan budget exhausted; resum
 
 type issuePoolCursor struct {
 	PolicyDigest string `json:"policy_digest"`
+	Group        int    `json:"group"`
+	After        string `json:"after"`
 	LastNumber   int    `json:"last_number"`
+}
+
+type IssuePoolMetadataAPI interface {
+	IssuePoolMetadata(context.Context, []string, string) (github.IssuePoolPage, error)
 }
 
 // Metadata reads may exhaust the scan budget before the candidate Issue is
@@ -60,6 +66,9 @@ func (p IssuePool) Validate() error {
 	if p.Admitter.Store == nil || p.Admitter.API == nil || p.Admitter.SessionID == "" || p.Attempts < 1 || p.Attempts > 32 || len(p.PriorityLabels) > 16 {
 		return errors.New("configured Issue pool and attempts 1..32 required")
 	}
+	if _, ok := p.Admitter.API.(IssuePoolMetadataAPI); !ok {
+		return errors.New("explicit Issue metadata paging transport required")
+	}
 	if err := p.Admitter.Policy.Validate(); err != nil {
 		return err
 	}
@@ -80,6 +89,33 @@ func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
 	return p.scan(ctx, 45*time.Second)
 }
 
+func (p IssuePool) rank(labels []string) int {
+	for i, wanted := range p.PriorityLabels {
+		for _, label := range labels {
+			if label == wanted {
+				return i
+			}
+		}
+	}
+	return len(p.PriorityLabels)
+}
+func (p IssuePool) eligible(node github.IssuePoolNode, group int) bool {
+	if node.State != "OPEN" {
+		return false
+	}
+	ready := false
+	for _, label := range node.Labels {
+		if label == p.Admitter.Policy.HoldLabel {
+			return false
+		}
+		ready = ready || label == p.Admitter.Policy.ReadyLabel
+	}
+	rank := p.rank(node.Labels)
+	if rank < group {
+		return false
+	}
+	return !node.LabelsComplete || (ready && rank == group)
+}
 func (p IssuePool) scan(parent context.Context, timeout time.Duration) (IssuePoolScan, error) {
 	result := IssuePoolScan{Admitted: []string{}, Held: []int{}}
 	if err := p.Validate(); err != nil {
@@ -89,56 +125,12 @@ func (p IssuePool) scan(parent context.Context, timeout time.Duration) (IssuePoo
 	defer cancel()
 	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	api := &budgetResourceAPI{ResourceAPI: p.Admitter.API}
-	if err := sourceRepository(ctx, api, p.Admitter.Policy); err != nil {
-		return result, err
-	}
-	items, err := api.ResourcePages(ctx, "issues?state=open&per_page=100", "")
-	if err != nil {
-		return result, err
-	}
-	if len(items) > 2048 {
-		return result, errors.New("Issue pool exceeds collection bound")
-	}
-	var eligible []github.Issue
-	seen := map[int]bool{}
-	for _, raw := range items {
-		var issue github.Issue
-		if err := json.Unmarshal(raw, &issue); err != nil {
-			return result, err
-		}
-		if issue.Number < 1 || seen[issue.Number] || issue.UpdatedAt.IsZero() || (issue.State != "open" && issue.State != "closed") {
-			return result, errors.New("invalid or duplicate Issue pool identity")
-		}
-		seen[issue.Number] = true
-		ready, hold := false, false
-		for _, label := range issue.Labels {
-			ready = ready || label.Name == p.Admitter.Policy.ReadyLabel
-			hold = hold || label.Name == p.Admitter.Policy.HoldLabel
-		}
-		if issue.State == "open" && len(issue.PullRequest) == 0 && ready && !hold {
-			eligible = append(eligible, issue)
-		}
-	}
-	rank := func(issue github.Issue) int {
-		for i, wanted := range p.PriorityLabels {
-			for _, label := range issue.Labels {
-				if label.Name == wanted {
-					return i
-				}
-			}
-		}
-		return len(p.PriorityLabels)
-	}
-	sort.Slice(eligible, func(i, j int) bool {
-		if a, b := rank(eligible[i]), rank(eligible[j]); a != b {
-			return a < b
-		}
-		return eligible[i].Number < eligible[j].Number
-	})
+	metadata := p.Admitter.API.(IssuePoolMetadataAPI)
 	policy, err := json.Marshal(struct {
+		Version  int
 		Source   IssueSourcePolicy
 		Priority []string
-	}{p.Admitter.Policy, p.PriorityLabels})
+	}{2, p.Admitter.Policy, p.PriorityLabels})
 	if err != nil {
 		return result, err
 	}
@@ -149,90 +141,173 @@ func (p IssuePool) scan(parent context.Context, timeout time.Duration) (IssuePoo
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return result, err
 	}
-	if cursor.LastNumber < 0 {
-		return result, errors.New("invalid Issue pool cursor")
+	if cursor.PolicyDigest != digest {
+		cursor = issuePoolCursor{PolicyDigest: digest}
 	}
-	start := 0
-	if cursor.PolicyDigest == digest {
-		for i, issue := range eligible {
-			if issue.Number == cursor.LastNumber {
-				start = i + 1
-				break
-			}
+	if cursor.Group < 0 || cursor.Group > len(p.PriorityLabels) || cursor.LastNumber < 0 || len(cursor.After) > 4096 || !utf8.ValidString(cursor.After) || strings.ContainsAny(cursor.After, "\x00\r\n") {
+		return result, errors.New("invalid Issue metadata cursor")
+	}
+	dirty := false
+	save := func(write context.Context) error {
+		if !dirty {
+			return nil
 		}
+		if err := p.Admitter.Store.Put(write, "product_issue_pool_cursor", key, "controller", cursor); err != nil {
+			return err
+		}
+		dirty = false
+		return nil
 	}
+	timedOut := func() error {
+		if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && dirty {
+			progress, stop := context.WithTimeout(parent, time.Second)
+			err := save(progress)
+			stop()
+			return errors.Join(ctx.Err(), err)
+		}
+		return ctx.Err()
+	}
+	exhausted := func() (IssuePoolScan, error) { return result, errors.Join(ErrIssuePoolScanBudget, save(ctx)) }
+	seen := 0
 	admitter := p.Admitter
-	for i := 0; i < len(eligible) && result.Attempted < p.Attempts; i++ {
-		issue := eligible[(start+i)%len(eligible)]
-		var existing string
-		err := p.Admitter.Store.DB.QueryRowContext(ctx, "SELECT id FROM kernel_waves WHERE source='github' AND source_id=?", issueSourceID(p.Admitter.Policy.RepositoryID, issue.Number)).Scan(&existing)
-		if err == nil {
-			continue // Intake does not revise, reopen or wake an existing Wave.
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return result, err
-		}
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		if !api.available(ctx) {
-			break
-		}
-		attempt := &poolAdmissionAPI{budgetResourceAPI: api, issuePath: "issues/" + strconv.Itoa(issue.Number)}
-		admitter.API = attempt
-		result.Attempted++
-		wave, admitErr := admitter.Admit(ctx, issue.Number)
+	for {
 		if ctx.Err() != nil {
-			if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && attempt.started {
-				// The read has joined, but the scan's own deadline prevents a
-				// cursor write using ctx. Preserve this attempted candidate with
-				// a short parent-bound write; daemon cancellation still stops it.
-				progress, stop := context.WithTimeout(parent, time.Second)
-				cursor = issuePoolCursor{PolicyDigest: digest, LastNumber: issue.Number}
-				saveErr := p.Admitter.Store.Put(progress, "product_issue_pool_cursor", key, "controller", cursor)
-				stop()
-				if admitErr == nil {
-					result.Admitted = append(result.Admitted, wave.ID)
-					if parent.Err() == nil && p.OnMutation != nil {
-						p.OnMutation()
-					}
-				} else {
-					result.Held = append(result.Held, issue.Number)
-				}
-				return result, errors.Join(fmt.Errorf("Issue pool repository %d Issue %d: %w", p.Admitter.Policy.RepositoryID, issue.Number, ctx.Err()), saveErr)
-			}
-			return result, ctx.Err()
+			return result, timedOut()
 		}
-		if !api.available(ctx) && !attempt.started {
-			// The scan ran out while checking repository metadata, before this
-			// Issue could be fetched. Resume with this Issue on the next scan.
-			break
+		if !api.available(ctx) || seen >= 2048 {
+			return exhausted()
 		}
-		if admitErr != nil {
-			result.Held = append(result.Held, issue.Number)
-			if p.Report != nil {
-				p.Report(fmt.Errorf("Issue pool repository %d Issue %d: %w", p.Admitter.Policy.RepositoryID, issue.Number, admitErr))
-			}
-		} else {
-			result.Admitted = append(result.Admitted, wave.ID)
-			if p.OnMutation != nil {
-				p.OnMutation()
-			}
+		if result.Attempted >= p.Attempts {
+			return result, save(ctx)
 		}
-		// Persist progress even after a held item so it cannot block later
-		// independent sources after a restart. The sorted order rotates fairly.
-		cursor = issuePoolCursor{PolicyDigest: digest, LastNumber: issue.Number}
-		if err := p.Admitter.Store.Put(ctx, "product_issue_pool_cursor", key, "controller", cursor); err != nil {
+		labels := []string{p.Admitter.Policy.ReadyLabel}
+		group := cursor.Group
+		if group < len(p.PriorityLabels) && p.PriorityLabels[group] != labels[0] {
+			labels = append(labels, p.PriorityLabels[group])
+		}
+		api.calls++
+		page, pageErr := metadata.IssuePoolMetadata(ctx, labels, cursor.After)
+		if ctx.Err() != nil {
+			return result, timedOut()
+		}
+		if pageErr != nil {
+			if !api.available(ctx) {
+				return exhausted()
+			}
+			return result, pageErr
+		}
+		if err := page.Validate(p.Admitter.Policy.RepositoryID, p.Admitter.Policy.Repository, cursor.After); err != nil {
 			return result, err
 		}
+		size := page.Bytes
+		if size == 0 {
+			encoded, err := json.Marshal(page)
+			if err != nil {
+				return result, err
+			}
+			size = len(encoded)
+		}
+		api.bytes += size
+		if api.bytes > 16<<20 {
+			return exhausted()
+		}
+		sort.Slice(page.Nodes, func(i, j int) bool { return page.Nodes[i].Number < page.Nodes[j].Number })
+		for _, node := range page.Nodes {
+			if node.Number <= cursor.LastNumber {
+				continue
+			}
+			if ctx.Err() != nil {
+				return result, timedOut()
+			}
+			if !api.available(ctx) || seen >= 2048 {
+				return exhausted()
+			}
+			if result.Attempted >= p.Attempts {
+				return result, save(ctx)
+			}
+			seen++
+			advance := func() { cursor.LastNumber = node.Number; dirty = true }
+			if !p.eligible(node, group) {
+				advance()
+				continue
+			}
+			var existing string
+			err := p.Admitter.Store.DB.QueryRowContext(ctx, "SELECT id FROM kernel_waves WHERE source='github' AND source_id=?", issueSourceID(p.Admitter.Policy.RepositoryID, node.Number)).Scan(&existing)
+			if ctx.Err() != nil {
+				return result, timedOut()
+			}
+			if err == nil {
+				advance()
+				continue
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return result, err
+			}
+			attempt := &poolAdmissionAPI{budgetResourceAPI: api, issuePath: "issues/" + strconv.Itoa(node.Number)}
+			admitter.API = attempt
+			result.Attempted++
+			wave, admitErr := admitter.admit(ctx, node.Number, func(issue github.Issue) bool {
+				names := make([]string, 0, len(issue.Labels))
+				for _, label := range issue.Labels {
+					names = append(names, label.Name)
+				}
+				return p.rank(names) == group
+			})
+			if ctx.Err() != nil {
+				if attempt.started {
+					advance()
+					if admitErr == nil {
+						result.Admitted = append(result.Admitted, wave.ID)
+						if parent.Err() == nil && p.OnMutation != nil {
+							p.OnMutation()
+						}
+					} else {
+						result.Held = append(result.Held, node.Number)
+					}
+				}
+				return result, timedOut()
+			}
+			if !api.available(ctx) && !attempt.started {
+				return exhausted()
+			}
+			if admitErr != nil {
+				if !errors.Is(admitErr, errIssueNotSelected) {
+					result.Held = append(result.Held, node.Number)
+					if p.Report != nil {
+						p.Report(fmt.Errorf("Issue pool repository %d Issue %d: %w", p.Admitter.Policy.RepositoryID, node.Number, admitErr))
+					}
+				}
+			} else {
+				result.Admitted = append(result.Admitted, wave.ID)
+				if p.OnMutation != nil {
+					p.OnMutation()
+				}
+			}
+			advance()
+			if err := save(ctx); err != nil {
+				return result, err
+			}
+		}
+		if page.HasNext {
+			cursor.After = page.EndCursor
+			cursor.LastNumber = 0
+		} else {
+			cursor.Group++
+			cursor.After = ""
+			cursor.LastNumber = 0
+		}
+		complete := cursor.Group > len(p.PriorityLabels)
+		if complete {
+			cursor.Group = 0
+		}
+		dirty = true
+		if err := save(ctx); err != nil {
+			return result, err
+		}
+		if complete {
+			return result, nil
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		return result, err
-	}
-	if !api.available(ctx) {
-		return result, ErrIssuePoolScanBudget
-	}
-	return result, nil
 }
 
 func (p IssuePool) Run(ctx context.Context) error {

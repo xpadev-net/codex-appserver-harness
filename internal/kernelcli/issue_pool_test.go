@@ -122,7 +122,10 @@ func TestIssuePoolConfiguredWorkerCommitsBeforeWakeWithoutModelOrWrites(t *testi
 		t.Fatal(err)
 	}
 	meta, item, pages, calls := filepath.Join(bin, "meta"), filepath.Join(bin, "issue"), filepath.Join(bin, "pages"), filepath.Join(bin, "calls")
-	for path, data := range map[string][]byte{meta: []byte(`{"id":17,"full_name":"owner/repo"}`), item: raw, pages: []byte("[[" + string(raw) + "]]")} {
+	for path, data := range map[string][]byte{meta: []byte(`{"id":17,"full_name":"owner/repo"}`), item: raw, pages: []byte(`{"data":{"repository":{"databaseId":17,"nameWithOwner":"owner/repo","issues":{"nodes":[{"number":42,"state":"OPEN","labels":{"nodes":[{"name":"ready"}],"pageInfo":{"hasNextPage":false}}}],"pageInfo":{"hasNextPage":false,"endCursor":"node42"}}}}}`)} {
+		if !json.Valid(data) {
+			t.Fatal("invalid Issue pool transport fixture")
+		}
 		if err := os.WriteFile(path, data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +135,7 @@ printf '%s\n' "$*" >> "$ISSUE_POOL_TEST_CALLS"
 case "$*" in
  'api --method GET repos/owner/repo') /bin/cat "$ISSUE_POOL_TEST_META" ;;
  'api --method GET repos/owner/repo/issues/42') /bin/cat "$ISSUE_POOL_TEST_ISSUE" ;;
- 'api --method GET --paginate --slurp repos/owner/repo/issues?state=open&per_page=100') /bin/cat "$ISSUE_POOL_TEST_PAGES" ;;
+ 'api --method POST graphql --input -') /bin/cat "$ISSUE_POOL_TEST_PAGES" ;;
  *) exit 49 ;;
 esac
 `
@@ -163,7 +166,7 @@ esac
 		t.Fatal(err, wakes)
 	}
 	observed, err := os.ReadFile(calls)
-	if err != nil || strings.Count(string(observed), "\n") != 6 || strings.Contains(string(observed), "POST") || strings.Contains(string(observed), "PATCH") {
+	if err != nil || strings.Count(string(observed), "\n") != 6 || strings.Count(string(observed), "api --method POST graphql --input -\n") != 2 || strings.Contains(string(observed), "PATCH") {
 		t.Fatal("unexpected transport", string(observed), err)
 	}
 }

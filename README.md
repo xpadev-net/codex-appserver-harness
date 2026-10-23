@@ -200,9 +200,11 @@ chmod 600 issue-pool.json
 ./harness wave run --root /absolute/private/kernel --runtime runtime.json --issue-pool issue-pool.json
 ```
 
-`attempts`は1走査1〜32件、間隔は1〜3600秒です。初回はpriority label順・Issue番号順で選び、以後は永続cursorの続きから同じ順序を循環します。保留された先頭Issueが独立した後続を塞ぎ続けず、再起動でも進行を保持します。走査のbyte/call予算が尽きたら停止し、未取得Issueのcursorは進めずに次回へ残します。走査のtimeoutは取得開始済み候補の進行を保存し、daemonの停止要求とは区別します。各候補は`import-issue`と同じfresh read/依存/原子的な受付を通り、controller全体のWave上限も維持します。
+`attempts`は1走査1〜32件、間隔は1〜3600秒です。priority labelのgroup順に作成順のmetadataページを読み、各ページをIssue番号順で処理します。ページcursorとページ内の処理位置を保存して続きを読みます。各groupを読み終えると次へ進み、全groupの完了後は先頭から再走査します。保留された先頭Issueが独立した後続を塞ぎ続けず、再起動でも進行を保持します。走査のbyte/call予算が尽きたら停止し、未取得Issueのcursorは進めずに次回へ残します。走査のtimeoutは取得開始済み候補の進行を保存し、daemonの停止要求とは区別します。各候補は`import-issue`と同じfresh read/依存/原子的な受付を通り、controller全体のWave上限も維持します。
 
-1走査は最大2048 entities・API data 16 MiB・128読取呼出し・45秒で、各gh応答は4 MiBまでです。失敗した過大応答も共通のtransport予算へ計上し、子の取得で走査予算をresetしません。取得不能や過大なcollectionを完全な空集合にせず、保留/障害をdaemon診断へ出します。初回通知をcommitしてからwake hintを送ります。`IssuePool`は受付とhintを行い、model起動は共通scheduler/runtimeが担当します。daemonはcancel時に読取workerもjoinするまでcontroller lock/storeを保持します。
+一覧は固定の読取専用GraphQL queryで番号・状態・labelだけを32件ずつ取得し、選んだIssueの本文だけをfresh GETで読みます。GraphQLのPOST transportはmutationを公開せず、任意queryも受け付けません。label一覧が部分的でも推測で選ばず、受付時の完全なlabelを再確認します。
+
+1走査は最大2048 metadata entities・API data 16 MiB・128読取呼出し・45秒で、各gh応答は4 MiBまでです。失敗した過大応答も共通のtransport予算へ計上し、子の取得で走査予算をresetしません。取得不能・部分応答・不正なページ境界を完全な空集合にせず、保留/障害をdaemon診断へ出します。初回通知をcommitしてからwake hintを送ります。`IssuePool`は受付とhintを行い、model起動は共通scheduler/runtimeが担当します。daemonはcancel時に読取workerもjoinするまでcontroller lock/storeを保持します。
 
 これは初回受付のworkerです。既存Waveを再取得/再openせず、既存Issueのhold/close/編集をWaveへ同期する処理は後続です。製品Taskのreadiness保留・正式承認・公開gateは維持します。PR observer/Webhookとは別workerで、必要なら同時にopt-inできます。
 
