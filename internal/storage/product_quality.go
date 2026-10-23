@@ -125,7 +125,14 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 			if err != nil {
 				return proof, err
 			}
-			if len(input.Result.Blockers) > 0 || len(input.Result.Remaining) > 0 {
+			replaced := false
+			if input.ProductReview != nil && input.ProductReview.Value.Candidate != value.Candidate {
+				replaced, err = k.productReviewReplacedTx(ctx, tx, w, task.ID, value.Candidate, map[string]bool{})
+				if err != nil {
+					return proof, err
+				}
+			}
+			if !replaced && (len(input.Result.Blockers) > 0 || len(input.Result.Remaining) > 0) {
 				return proof, productQualityHeld("required result still has blockers or remaining work")
 			}
 			inputs[task.ID], tasks[task.ID] = input, task
@@ -148,7 +155,9 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 				continue
 			}
 			if spec.Kind == "review" {
-				reviewers = append(reviewers, task)
+				if !replaced {
+					reviewers = append(reviewers, task)
+				}
 				continue
 			}
 			if input.ProductCandidate == nil {

@@ -20,6 +20,7 @@ type TemplateExpansionRequest struct {
 	ReviewTaskID string          `json:"review_task_id"`
 }
 type TemplateExpansion struct {
+	Product         *ProductTemplateBinding  `json:"product,omitempty"`
 	Request         TemplateExpansionRequest `json:"request"`
 	Key             string                   `json:"key"`
 	Round           int                      `json:"round"`
@@ -64,6 +65,9 @@ func (k *KernelStore) expandReviewTemplates(ctx context.Context, request Templat
 	defer tx.Rollback()
 	err = completionRecord(ctx, tx, "template_expansion_request", requestKey, &receipt)
 	if err == nil {
+		if receipt.Product != nil || strings.HasPrefix(receipt.Key, "product-template:") {
+			return k.productTemplateExpansionTx(ctx, tx, receipt.Key)
+		}
 		return receipt, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -75,6 +79,9 @@ func (k *KernelStore) expandReviewTemplates(ctx context.Context, request Templat
 	}
 	if wave.Target() != request.Target || wave.DispatchPaused() || wave.State == domain.WaveCanceled || wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline) {
 		return receipt, errors.New("stale/paused/terminal/expired template target")
+	}
+	if wave.Policy.Stage == "P" && wave.Policy.Product {
+		return k.expandProductTemplateTx(ctx, tx, wave, request, requestKey, automatic)
 	}
 	if wave.Policy.Stage != "K" || wave.Policy.Product {
 		return receipt, fmt.Errorf("%w: product expansion needs independent verification adapter", ErrTemplateNeedsMain)
