@@ -468,3 +468,11 @@ job IDはplan/profileから一意に決まり、immutable value/historyとrunner
 host専用`FinishProductRunnerJob`は実測completion・terminal history・自身の予約解放を一transactionで保存する。再送/reopenは元結果を返し、証拠欠落や異なる結果で再保存しない。保存失敗では枠を保持する。これは履歴上の実行事実であり、現行Candidateへの品質認定は別途fresh検査を要する。WorkItemはVERIFYINGを維持し、独立review、品質gate、retry、daemon dispatchとP受入はまだ接続しない。
 
 検証は実temp Gitの実装・テスト追加Candidateから独立checkout、detached wrapperによるtrusted smoke profile、cancel、実結果のDB保存とreopenを含む。native modelやproduction隔離launcher/Cloudの合格証拠ではない。runner単体ではpass/fail/empty/timeout/cancel/環境障害、spec/SHA/profile/log改変、生存中wrapperと欠落identityの拒否も確認する。
+
+### 現行計画の全 profile 検証 gate
+
+host専用`ReadProductVerificationEvidence(planID)`は、一transaction内で現行Wave・出所・scope・停止状態・active Candidateとcanonical plan/policyを検査し、`Plan.Profiles`の全profileについて決定的job IDから実測completionを読む。callerによるCandidate/profile/results/成功値の申告は受け取らない。必須profile、追加要求、criterion mappingのいずれも省略できない。
+
+未実行、予約済み、結果待ち、停止確認後の完了を区別し、未完了を成功にしない。全件完了でもfail/cancel/timeout/環境障害が一件あれば`Passed=false`となる。job headやhistory、terminal history、plan/policyの証拠欠落は、未実行へ戻さずerrorにする。結果と出所をまとめたdigestは読取時点のsnapshotであり、将来の公開・mergeの許可としてcacheしない。各副作用の直前に再検査する。
+
+このgateは機械検証の事実だけを評価する。独立review/品質認定/正式承認を生成せず、WorkItemはVERIFYINGのまま、P readinessも保留する。回帰は4profile（必須2・追加1・mapping1）の不足/失敗/全件成功、起動中、改変・証拠欠落、Candidate更新/停止/要求変更と、実subprocessの成功/cancel結果からの照合を含む。
