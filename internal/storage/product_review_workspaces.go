@@ -8,7 +8,7 @@ import (
 )
 
 func (k *KernelStore) productWorkspaceSubjectTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, value ProductWorkspaceValue) (*ProductCandidateSubjectSnapshot, error) {
-	if task.Spec.Kind != "review" {
+	if task.Spec.Kind != "review" && task.Spec.Kind != "verification" {
 		if value.SubjectID != "" || value.SubjectDigest != "" {
 			return nil, ErrTaskEvidence
 		}
@@ -49,4 +49,33 @@ func (k *KernelStore) productWorkspaceSubjectTx(ctx context.Context, tx *sql.Tx,
 		}
 	}
 	return subject, nil
+}
+
+func productWorkspaceVerificationPolicyTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, value ProductWorkspaceValue) (*ProductVerificationPolicySnapshot, error) {
+	if task.Spec.Kind != "verification" {
+		if value.VerificationPolicyID != "" || value.VerificationPolicyDigest != "" || value.ComparisonBaseSHA != "" {
+			return nil, ErrTaskEvidence
+		}
+		return nil, nil
+	}
+	saved, err := loadProductVerificationPolicy(ctx, tx, w.ID, w.Policy.Revision, value.Request.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	if saved.Value.Repository != value.Request.Repository {
+		return nil, ErrProductWorkspaceHeld
+	}
+	if value.Target.Valid() {
+		if value.VerificationPolicyID != saved.ID || value.VerificationPolicyDigest != saved.Digest {
+			return nil, ErrTaskEvidence
+		}
+		subject, err := loadProductSubject(ctx, tx, task.ID)
+		if err != nil {
+			return nil, err
+		}
+		if value.ComparisonBaseSHA != subject.Value.Candidate.BaseSHA {
+			return nil, ErrTaskEvidence
+		}
+	}
+	return &saved, nil
 }

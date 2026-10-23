@@ -28,17 +28,20 @@ type ProductWorkspaceRequest struct {
 	BaseSHA      string `json:"base_sha"`
 }
 type ProductWorkspaceValue struct {
-	SubjectID          string                  `json:"subject_id,omitempty"`
-	SubjectDigest      string                  `json:"subject_digest,omitempty"`
-	ParentSessionID    string                  `json:"parent_session_id"`
-	Request            ProductWorkspaceRequest `json:"request"`
-	Target             contract.Target         `json:"target"`
-	WorkItemID         string                  `json:"work_item_id"`
-	RegistrationDigest string                  `json:"registration_digest"`
-	InputDigest        string                  `json:"input_digest"`
-	SessionID          string                  `json:"session_id"`
-	CWD                string                  `json:"cwd"`
-	Branch             string                  `json:"branch"`
+	VerificationPolicyID     string                  `json:"verification_policy_id,omitempty"`
+	VerificationPolicyDigest string                  `json:"verification_policy_digest,omitempty"`
+	ComparisonBaseSHA        string                  `json:"comparison_base_sha,omitempty"`
+	SubjectID                string                  `json:"subject_id,omitempty"`
+	SubjectDigest            string                  `json:"subject_digest,omitempty"`
+	ParentSessionID          string                  `json:"parent_session_id"`
+	Request                  ProductWorkspaceRequest `json:"request"`
+	Target                   contract.Target         `json:"target"`
+	WorkItemID               string                  `json:"work_item_id"`
+	RegistrationDigest       string                  `json:"registration_digest"`
+	InputDigest              string                  `json:"input_digest"`
+	SessionID                string                  `json:"session_id"`
+	CWD                      string                  `json:"cwd"`
+	Branch                   string                  `json:"branch"`
 }
 
 // Only the synchronous Git owner submits physical-stop and filesystem facts.
@@ -99,6 +102,9 @@ func (k *KernelStore) productWorkspaceTx(ctx context.Context, q queryer, id stri
 	if (saved.Value.SubjectID == "") != (saved.Value.SubjectDigest == "") || saved.Value.SubjectID != "" && (saved.Value.SubjectID != productSubjectID(saved.Value.Request.TaskID) || !validSourceDigest(saved.Value.SubjectDigest)) {
 		return saved, ErrTaskEvidence
 	}
+	if (saved.Value.VerificationPolicyID == "") != (saved.Value.VerificationPolicyDigest == "") || saved.Value.VerificationPolicyID != "" && (!validSourceDigest(saved.Value.VerificationPolicyDigest) || saved.Value.SubjectID == "" || !fixedSHA(saved.Value.ComparisonBaseSHA)) || saved.Value.ComparisonBaseSHA != "" && !fixedSHA(saved.Value.ComparisonBaseSHA) {
+		return saved, ErrTaskEvidence
+	}
 	digest, err := contentDigest(saved.Value)
 	if err != nil {
 		return saved, err
@@ -143,7 +149,7 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 	if err := w.Validate(); err != nil {
 		return w, task, b, err
 	}
-	if w.Policy.Stage != "P" || !w.Policy.Product || w.Target() != task.Target() || value.Target.Valid() && value.Target != w.Target() || task.State != contract.TaskReady || task.Attempts != 0 || (task.Spec.Kind != "work" && task.Spec.Kind != "fix" && task.Spec.Kind != "review") || len(task.Spec.WorkItemIDs) != 1 {
+	if w.Policy.Stage != "P" || !w.Policy.Product || w.Target() != task.Target() || value.Target.Valid() && value.Target != w.Target() || task.State != contract.TaskReady || task.Attempts != 0 || (task.Spec.Kind != "work" && task.Spec.Kind != "fix" && task.Spec.Kind != "review" && task.Spec.Kind != "verification") || len(task.Spec.WorkItemIDs) != 1 {
 		return w, task, b, ErrProductWorkspaceHeld
 	}
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
@@ -157,6 +163,9 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 		return w, task, b, ErrProductWorkspaceHeld
 	}
 	if _, err := k.productWorkspaceSubjectTx(ctx, tx, w, task, value); err != nil {
+		return w, task, b, err
+	}
+	if _, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, value); err != nil {
 		return w, task, b, err
 	}
 	inputs, err := k.taskInputDigestTx(ctx, tx, w, task.Spec)
@@ -243,7 +252,7 @@ func (k *KernelStore) ReserveProductWorkspace(ctx context.Context, request Produ
 	value.ParentSessionID = w.OrchestratorSessionID
 	value.Target, value.WorkItemID, value.RegistrationDigest, value.InputDigest = w.Target(), task.Spec.WorkItemIDs[0], registration.Digest, task.InputDigest
 	value.SessionID, value.CWD, value.Branch = b.ID, b.CWD, "harness/"+b.ID
-	if task.Spec.Kind == "review" {
+	if task.Spec.Kind == "review" || task.Spec.Kind == "verification" {
 		subject, err := k.fixedProductSubjectInputTx(ctx, tx, w, task.Spec)
 		if err != nil {
 			return saved, err
@@ -252,6 +261,13 @@ func (k *KernelStore) ReserveProductWorkspace(ctx context.Context, request Produ
 			return saved, ErrProductWorkspaceHeld
 		}
 		value.SubjectID, value.SubjectDigest = subject.ID, subject.Digest
+		if task.Spec.Kind == "verification" {
+			p, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, ProductWorkspaceValue{Request: request})
+			if err != nil {
+				return saved, err
+			}
+			value.VerificationPolicyID, value.VerificationPolicyDigest, value.ComparisonBaseSHA = p.ID, p.Digest, subject.Value.Candidate.BaseSHA
+		}
 	}
 	operation := OperationCapacityRequest{ID: id, Kind: "git", SessionID: w.OrchestratorSessionID, Target: w.Target(), Repository: request.Repository, Worktree: b.CWD}
 	reservation, err := k.reserveOperationCapacityTx(ctx, tx, operation)

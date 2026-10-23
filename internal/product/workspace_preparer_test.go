@@ -15,7 +15,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
-func workspacePreparerFixture(t *testing.T) (WorkspacePreparer, storage.ProductWorkspaceRequest, domain.Wave, domain.Task) {
+func workspacePreparerFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (WorkspacePreparer, storage.ProductWorkspaceRequest, domain.Wave, domain.Task) {
 	t.Helper()
 	ctx := context.Background()
 	a, _ := issueAdmissionFixture(t)
@@ -26,6 +26,9 @@ func workspacePreparerFixture(t *testing.T) (WorkspacePreparer, storage.ProductW
 	work := contract.TaskSpec{ID: "implementation", Kind: "work", Instruction: "implement the registered acceptance criterion", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{w.SourceID}}
 	review := contract.TaskSpec{ID: "review", Kind: "review", Instruction: "independently review the fixed candidate", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: work.ID}}, InputArtifactIDs: []string{}, WorkItemIDs: []string{w.SourceID}}
 	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "implementation", Tasks: []contract.TaskSpec{work}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID}}, FailurePolicy: "drain_and_block"}, {ID: "review", Tasks: []contract.TaskSpec{review}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{review.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	for _, apply := range configure {
+		apply(&plan)
+	}
 	admitted, err := a.Store.AdoptPlan(ctx, w.Target(), "prepare-product", plan)
 	if err != nil {
 		t.Fatal(err)

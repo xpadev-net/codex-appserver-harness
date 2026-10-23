@@ -18,10 +18,10 @@ import (
 
 // A real private temp Git checkout, with trusted normal/stopped model facts
 // seeded in SQLite. This is no evidence of real model dispatch or P acceptance.
-func candidateSealerFixture(t *testing.T) (CandidateSealer, storage.ProductWorkspace, domain.Task, contract.SessionRun) {
+func candidateSealerFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (CandidateSealer, storage.ProductWorkspace, domain.Task, contract.SessionRun) {
 	t.Helper()
 	ctx := context.Background()
-	p, request, w, task := workspacePreparerFixture(t)
+	p, request, w, task := workspacePreparerFixture(t, configure...)
 	ready, err := p.Prepare(ctx, request)
 	if err != nil {
 		t.Fatal(err)

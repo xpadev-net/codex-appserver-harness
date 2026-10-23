@@ -37,7 +37,7 @@ func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b
 	if err != nil {
 		return nil, err
 	}
-	if !UsesProductChangeOutput(w, task) {
+	if !UsesProductChangeOutput(w, task) && !UsesProductVerificationOutput(w, task) {
 		return nil, nil
 	}
 	saved, err := k.productWorkspaceTx(ctx, tx, productWorkspaceID(task.ID))
@@ -59,6 +59,18 @@ func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b
 	}
 	if saved.State != "ready" || saved.Value.SessionID != b.ID || saved.Value.Target != b.Target || saved.Value.Target != w.Target() || saved.Value.WorkItemID != task.Spec.WorkItemIDs[0] {
 		return nil, nil
+	}
+	if UsesProductVerificationOutput(w, task) {
+		subject, err := k.fixedProductSubjectInputTx(ctx, tx, w, task.Spec)
+		if err != nil {
+			return nil, err
+		}
+		if subject == nil || saved.Value.SubjectID != subject.ID || saved.Value.SubjectDigest != subject.Digest {
+			return nil, ErrTaskEvidence
+		}
+		if _, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, saved.Value); err != nil {
+			return nil, err
+		}
 	}
 	return &ProductWorkspaceInput{Reference: contract.ProductChangeReference{WorkItemID: saved.Value.WorkItemID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest}, BaseSHA: saved.Value.Request.BaseSHA, Branch: saved.Value.Branch}, nil
 }
