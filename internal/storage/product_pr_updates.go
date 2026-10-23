@@ -92,7 +92,7 @@ func canonicalResourceSections(sections []PRResourceSection) ([]PRResourceSectio
 		for _, e := range s.Entities {
 			count++
 			total += len(e.Data)
-			if count > 2048 || total > 2<<20 || !validPRProofID(e.ID) || seen[e.ID] || len(e.Data) > 64<<10 || (e.CandidateSHA != "" && !fixedSHA(e.CandidateSHA)) || !json.Valid(e.Data) || !utf8.Valid(e.Data) {
+			if count > 2048 || total > 2<<20 || !validPRProofID(e.ID) || seen[e.ID] || len(e.Data) > 512<<10 || (e.CandidateSHA != "" && !fixedSHA(e.CandidateSHA)) || !json.Valid(e.Data) || !utf8.Valid(e.Data) {
 				return nil, errors.New("bounded, unique PR resource entities required")
 			}
 			seen[e.ID] = true
