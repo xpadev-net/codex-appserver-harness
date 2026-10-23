@@ -402,7 +402,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 ### Task_8: GitHub tool gatewayと自動購読
 
 - status: in_progress
-- split: 共通gatewayへ明示opt-inのpr_publish/pr_review_request契約を追加し、trusted P WorkItem/candidate projectionのCAS・Wave所属と、operation/自動resource購読intent/応答receiptを同一transactionで保存する。Kの公開toolとruntime dispatchは変更しない。storage上の直前projection照合、PR/Cloud枠と書き込みleaseの原子的claim、prepared→unknownの一度消費、未送信取消を追加する。実adapterのcanonical検証guard・marker照合・resource bindingと更新通知、P runtimeへの接続は後続slice。[P受付の契約](../../../product-operations.md)を参照。
+- split: 共通gatewayへ明示opt-inのpr_publish/pr_review_request契約を追加し、trusted P WorkItem/candidate projectionのCAS・Wave所属と、operation/自動resource購読intent/応答receiptを同一transactionで保存する。Kの公開toolとruntime dispatchは変更しない。storage上の直前projection照合、PR/Cloud枠と書き込みleaseの原子的claim、prepared→unknownの一度消費、未送信取消を追加する。正のPR応答/照合から一意な資源binding、購読の実PR確定、元候補の結果と完了outbox、lease/terminal枠解放を原子的に保存する。現在の候補/flagを戻さない。実adapterのcanonical検証guard・remote marker取得・通知/更新回収、P runtimeへの接続は後続slice。[P受付の契約](../../../product-operations.md)を参照。
 
 - type: impl
 - owns:
