@@ -95,3 +95,13 @@ production KernelSourceのready処理から有界batchを回収する。この�
 各gh応答は4 MiB、collector全体は16 MiB/128 collection読取呼出し/30秒を上限とする。paginationのHTTP回数を128回と主張するものではない。限界時のreaction等は取得不能として明示し、黙って完全取得にしない。保存側は大きなPR本文とJSON metadata/escapingを収めるため1 entityを512 KiBまでとし、scan全体2 MiB/保持4 MiBと2048 entitiesの上限を維持する。`ResourceGET/ResourcePages`は書込guardを持たず、GET以外を実行するAPIを公開しない。
 
 検証: `go test ./internal/product ./internal/github -run TestResource -count=1`。全種別/親reaction/古いSHA、権限等のread失敗と保持、header変化/CAS競合、collection予算、全page/object collection、null/欠落collection拒否、subprocess出力上限と完了scan再送を確認する。daemonへの非同期配置、署名済みraw deliveryの登録境界回収と関連Task購読展開は後続である。
+
+## 署名済みraw deliveryの先行保存
+
+`PRInbox{Store, RepositoryID}`はcontroller専用の`github.Inbox`実装で、必ずHMAC検証を行う`github.Webhook`の後ろへ接続する。モデルtoolとして公開しない。設定したrepository数値IDとの一致、delivery/event識別子、UTF-8 JSONと1 MiB上限を検査し、PR・Wave・購読がまだなくても受信bytesを保存する。本文・action・好意的reaction等から操作権限や最新PR状態を生成しない。
+
+元の署名対象bytesはbase64で正確に保持し、ID/event/repositoryとともにdigestへ含める。同じIDと同じ入力は一つの受信となり、異なる入力の再利用は拒否する。raw record・repository/sequence索引・独立の単調sequence counter・初回受信coverageを一transactionで確定する。保存失敗はHTTP成功にせずrollbackし、SQLiteの競合/IOエラーも返して呼出し全体の再試行へ委ねる。
+
+`PRRawDeliveries`はcontroller用のrepository別cursor読取で、workerへの履歴grantではない。小さな索引をseekし、最大128件/2 MiBのページに制限する。`NextAfter`は後続ページ、`LastSequence`は現在の末尾で再接続・次の受信待ちに使える。rowidに依存せずVACUUM/reopen後も同じsequenceとなる。coverageは初回受信時刻と`history_before=unavailable`・`captured_deliveries_only`を保存し、受信前履歴やWebhook欠落を架空の完全取得にしない。
+
+検証: `go test ./internal/storage -run '^TestPRInbox' -count=1`。実HMAC handlerの署名/設定repo/再送/衝突、binding前保存と権限非生成、元bytes、rollback、複数repo cursor、VACUUM/reopen、末尾後の新規受信、大きなpayloadのページ境界を確認する。この分割は受信portであり、daemon HTTP配置・raw履歴のPR登録境界回収・関連Task通知は後続である。
