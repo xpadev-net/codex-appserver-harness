@@ -47,3 +47,13 @@ PR toolは既存のsession/run/thread/turn/call検査、元snapshot scope、paus
 通常の完了はdeferredで保存し、`session_wait`または正常に適用したmain/Taskのwait結果が、本人の同じtarget/購読を明示して初めてpending入力へ進める。待機宣言と完了保存の前後関係を問わず同じ通知を使う。通常の成功や閲覧だけでmainを起動しない。cancel/終端session/旧scopeの通知はarchivedとして履歴に残す。未送信取消の通知はcanceledであり、資源作成や品質成功に読み替えない。ACK済みでも未判断入力を保持し、wake/runへの関連付けと論理適用は共通kernelの契約を使う。
 
 追加検証: `go test ./internal/storage -run 'TestPRCompletionNotification|TestPRWaitBefore|TestPRNotice|TestFailedPRNotice|TestPRCompletionFromPrevious' -count=1`。前後/同一再送、ACK後のwait、main構造化wait、同じ再開intent、保存失敗と再open、bad rowの後続進行、cancel/旧版を確認する。実HTTPと継続的な外部資源更新・native P公開は後続である。
+
+## Controller側のPR送信adapter
+
+`internal/product.Publisher`はstorage claimと明示指定のAPI transportを接続する。callerが渡すcanonical gateは元WorkItem/configと必須検証証拠を読む必要があり、model主張やprojectionだけを検証成功の根拠にできない。git pushはこのadapterの前にcontrollerのGit工程で行い、adapterは送信直前のremote branchが固定candidate SHAかを読む。
+
+送信前にcontroller由来のtitle/bodyと操作markerを不変packetへ保存する。`GitHubAPI`は認証済みghを使い、repository数値IDとAPIから取得したdefault branchを照合する。POST/PATCH直前のguardで対象PR、remote SHA、最新canonical gateと同じpublication内容、storageの優先操作/claim/枠を確認してからunknownを保存する。PUT/mergeなど想定外のmutationを拒否する。本文へWorkItem markerと操作固有markerを付け、応答のrepo/branch/SHA/title/bodyを照合してから資源へ確定する。
+
+送信前の読取/DB/gateエラーはpreparedを保持し、dispatcherが有界再試行または明示的な未送信取消を判断する。送信開始後のエラーはunknownのまま保つ。`ReconcilePublication`は停止/応答完了を確認したcallerのproofで、保存packetと操作markerに一致する資源だけを読取専用で回収する。現policyの変更やpauseは過去の正の事実の回収を妨げない。一覧の不在や別操作のmarkerでunknownを解消せず、古い操作を再送しない。
+
+この分割はlibrary adapterとfake/gh wire試験であり、canonical gateの既存PR工程への接続・daemon配置・native P公開はTask_11を含む後続である。Cloud正式承認やP全体の実接続成立の証拠にはしない。検証は`go test ./internal/product ./internal/github ./internal/storage`。書込直前のunknown、既定branch/remote SHA/候補/flag/gateの変化、packetの不変性、既知未送信の同一owner再試行、応答欠落と操作marker照合、再送なし、ghのroot metadata/branch取得を確認する。

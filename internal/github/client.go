@@ -48,7 +48,11 @@ func (c Client) API(ctx context.Context, method, endpoint string, body any, out 
 			return fmt.Errorf("%w: %v", contract.ErrUnsent, err)
 		}
 	}
-	args := []string{"api", "--method", method, "repos/" + c.Repository + "/" + endpoint}
+	path := "repos/" + c.Repository
+	if endpoint != "" {
+		path += "/" + endpoint
+	}
+	args := []string{"api", "--method", method, path}
 	var stdin bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&stdin).Encode(body); err != nil {
@@ -115,7 +119,7 @@ func (c Client) Pull(ctx context.Context, number int) (PR, error) {
 	err := c.API(ctx, "GET", fmt.Sprintf("pulls/%d", number), nil, &p)
 	return p, err
 }
-func Marker(workItem string) string { return "<!-- harness-work-item:" + workItem + " -->" }
+func Marker(workItem string) string { return contract.PublicationWorkItemMarker(workItem) }
 func (c Client) FindPR(ctx context.Context, branch, workItem string) (*PR, error) {
 	var all []PR
 	if err := c.Pages(ctx, "pulls?state=all&per_page=100", &all); err != nil {
