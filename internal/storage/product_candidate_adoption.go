@@ -17,18 +17,19 @@ import (
 // ProductTaskCandidate is a controller sidecar; the raw model TaskResult stays
 // unchanged. It records provenance, never verification or formal approval.
 type ProductTaskCandidate struct {
-	TaskID       string                          `json:"task_id"`
-	RunID        string                          `json:"run_id"`
-	ResultID     string                          `json:"result_id"`
-	Target       contract.Target                 `json:"target"`
-	SealID       string                          `json:"seal_id"`
-	SealDigest   string                          `json:"seal_digest"`
-	InputDigest  string                          `json:"input_digest"`
-	OutputDigest string                          `json:"output_digest"`
-	Reference    contract.ProductChangeReference `json:"reference"`
-	Candidate    runner.Candidate                `json:"candidate"`
-	Repository   string                          `json:"repository"`
-	BaseBranch   string                          `json:"base_branch"`
+	VerificationPlan *ProductVerificationPlanReference `json:"verification_plan,omitempty"`
+	TaskID           string                            `json:"task_id"`
+	RunID            string                            `json:"run_id"`
+	ResultID         string                            `json:"result_id"`
+	Target           contract.Target                   `json:"target"`
+	SealID           string                            `json:"seal_id"`
+	SealDigest       string                            `json:"seal_digest"`
+	InputDigest      string                            `json:"input_digest"`
+	OutputDigest     string                            `json:"output_digest"`
+	Reference        contract.ProductChangeReference   `json:"reference"`
+	Candidate        runner.Candidate                  `json:"candidate"`
+	Repository       string                            `json:"repository"`
+	BaseBranch       string                            `json:"base_branch"`
 }
 type ProductTaskCandidateSnapshot struct {
 	Value  ProductTaskCandidate `json:"value"`
@@ -126,7 +127,21 @@ func loadProductTaskCandidate(ctx context.Context, q queryer, resultID string) (
 	if err := taskEvidenceRecord(ctx, q, "task_result", resultID, &result); err != nil {
 		return saved, err
 	}
-	if result.Validate() != nil || result.SchemaVersion != 2 || result.TaskID != v.TaskID || result.Target != v.Target || result.Outcome != "result" || len(result.ProductChanges) != 1 || result.ProductChanges[0] != ref {
+	if result.Validate() != nil || (result.SchemaVersion != 2 && result.SchemaVersion != 3) || result.TaskID != v.TaskID || result.Target != v.Target || result.Outcome != "result" || len(result.ProductChanges) != 1 || result.ProductChanges[0] != ref {
+		return saved, ErrTaskEvidence
+	}
+	if result.SchemaVersion == 3 {
+		if v.VerificationPlan == nil || sealed.Value.Verification == nil {
+			return saved, ErrTaskEvidence
+		}
+		plan, err := loadProductVerificationPlan(ctx, q, v.VerificationPlan.ID)
+		if err != nil {
+			return saved, err
+		}
+		if plan.Digest != v.VerificationPlan.Digest || plan.Value.ResultID != resultID || plan.Value.Candidate != v.Candidate {
+			return saved, ErrTaskEvidence
+		}
+	} else if v.VerificationPlan != nil {
 		return saved, ErrTaskEvidence
 	}
 	var run contract.SessionRun
@@ -211,6 +226,13 @@ func (k *KernelStore) adoptProductCandidateTx(ctx context.Context, tx *sql.Tx, t
 		return err
 	}
 	value := ProductTaskCandidate{TaskID: task.ID, RunID: sealed.Value.RunID, ResultID: resultID, Target: task.Target(), SealID: sealed.ID, SealDigest: sealed.Digest, InputDigest: sealed.Value.InputDigest, OutputDigest: sealed.Value.OutputDigest, Reference: contract.ProductChangeReference{WorkItemID: v.WorkItemID, WorkspaceID: sealed.Value.Workspace.ID, WorkspaceDigest: sealed.Value.Workspace.Digest}, Candidate: p.Candidate, Repository: p.Repository, BaseBranch: baseBranch}
+	if sealed.Value.Verification != nil {
+		plan, err := k.adoptProductVerificationPlanTx(ctx, tx, task, resultID, sealed)
+		if err != nil {
+			return err
+		}
+		value.VerificationPlan = &ProductVerificationPlanReference{ID: plan.ID, Digest: plan.Digest}
+	}
 	digest, err := contentDigest(value)
 	if err != nil {
 		return err
