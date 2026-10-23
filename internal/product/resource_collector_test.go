@@ -71,7 +71,7 @@ func TestResourceCollectorReadsAllKindsAndParentReactionsWithoutApproval(t *test
 	api.collections["issues/42/reactions?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":91,"content":"+1"}`)}
 	api.collections["issues/comments/11/reactions?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":92,"content":"heart"}`)}
 	api.collections["pulls/comments/12/reactions?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":93,"content":"+1"}`)}
-	api.collections["commits/"+p.Candidate.SHA+"/check-runs?per_page=100"] = []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"id":31,"head_sha":%q,"conclusion":"success"}`, p.Candidate.SHA))}
+	api.collections["commits/"+p.Candidate.SHA+"/check-runs?filter=all&per_page=100"] = []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"id":31,"head_sha":%q,"conclusion":"failure"}`, p.Candidate.SHA)), json.RawMessage(fmt.Sprintf(`{"id":32,"head_sha":%q,"conclusion":"success"}`, p.Candidate.SHA))}
 	api.collections["commits/"+p.Candidate.SHA+"/statuses?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":41,"state":"success"}`)}
 	api.collections["issues/42/events?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":51,"event":"closed"}`)}
 	receipt, err := c.Collect(ctx, p, "scan")
@@ -94,6 +94,9 @@ func TestResourceCollectorReadsAllKindsAndParentReactionsWithoutApproval(t *test
 	}
 	if len(section(state, "reaction").Entities) != 3 || section(state, "review").Entities[0].CandidateSHA != oldSHA || section(state, "status").Entities[0].CandidateSHA != p.Candidate.SHA {
 		t.Fatal(state)
+	}
+	if len(section(state, "check").Entities) != 2 {
+		t.Fatal("rerun check omitted older resource", section(state, "check"))
 	}
 	var count int
 	if err = c.Store.DB.QueryRow("SELECT count(*) FROM records WHERE kind IN ('review_approval','wave_completion')").Scan(&count); err != nil || count != 0 {

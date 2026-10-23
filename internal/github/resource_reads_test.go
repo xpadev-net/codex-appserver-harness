@@ -49,3 +49,30 @@ func TestResourceReadsBoundOutputEvenThroughCopyAndRequireCompletePages(t *testi
 		t.Fatal("oversized subprocess output accepted")
 	}
 }
+
+func TestFailedResourcePageDecodingConsumesSharedWireBudgetBeforeNextCommand(t *testing.T) {
+	dir := t.TempDir()
+	payload := filepath.Join(dir, "payload")
+	calls := filepath.Join(dir, "calls")
+	if err := os.WriteFile(payload, []byte(strings.Repeat("x", 100)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf 'call\\n' >> \"$RESOURCE_TEST_CALLS\"\n/bin/cat \"$RESOURCE_TEST_PAYLOAD\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("RESOURCE_TEST_CALLS", calls)
+	t.Setenv("RESOURCE_TEST_PAYLOAD", payload)
+	ctx := WithResourceReadBudget(context.Background(), 400)
+	c := Client{Repository: "owner/repo", RepositoryID: 17}
+	for i := 0; i < 6; i++ {
+		if _, err := c.ResourcePages(ctx, "issues/42/comments", ""); err == nil {
+			t.Fatal("malformed response accepted")
+		}
+	}
+	wire, err := os.ReadFile(calls)
+	if err != nil || strings.Count(string(wire), "call\n") != 4 {
+		t.Fatal("failed reads bypassed shared budget", string(wire), err)
+	}
+}

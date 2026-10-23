@@ -7,13 +7,48 @@ import (
 	"errors"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 const MaxResourceReadBytes = 4 << 20
 
-type boundedResourceOutput struct{ buffer bytes.Buffer }
+type resourceBudgetKey struct{}
+type resourceReadBudget struct {
+	mu        sync.Mutex
+	remaining int64
+}
+
+// WithResourceReadBudget shares wire/output accounting across this scan, even
+// when JSON decoding, entity validation, or a per-response limit fails.
+func WithResourceReadBudget(ctx context.Context, limit int64) context.Context {
+	return context.WithValue(ctx, resourceBudgetKey{}, &resourceReadBudget{remaining: limit})
+}
+func (b *resourceReadBudget) available() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.remaining > 0
+}
+func (b *resourceReadBudget) charge(n int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.remaining -= int64(n)
+	if b.remaining < 0 {
+		return errors.New("shared resource read budget exhausted")
+	}
+	return nil
+}
+
+type boundedResourceOutput struct {
+	buffer bytes.Buffer
+	budget *resourceReadBudget
+}
 
 func (b *boundedResourceOutput) Write(p []byte) (int, error) {
+	if b.budget != nil {
+		if err := b.budget.charge(len(p)); err != nil {
+			return 0, err
+		}
+	}
 	if len(p) > MaxResourceReadBytes-b.buffer.Len() {
 		return 0, errors.New("resource response exceeds read budget")
 	}
@@ -39,7 +74,11 @@ func (c Client) resourceRead(ctx context.Context, endpoint string, paginated boo
 	}
 	args = append(args, path)
 	cmd := exec.CommandContext(ctx, "gh", args...)
-	var output boundedResourceOutput
+	budget, _ := ctx.Value(resourceBudgetKey{}).(*resourceReadBudget)
+	if budget != nil && !budget.available() {
+		return nil, errors.New("shared resource read budget exhausted")
+	}
+	output := boundedResourceOutput{budget: budget}
 	cmd.Stdout = &output
 	if err := cmd.Run(); err != nil {
 		return nil, err

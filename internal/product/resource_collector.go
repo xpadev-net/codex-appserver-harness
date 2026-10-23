@@ -136,6 +136,7 @@ func (c ResourceCollector) Collect(ctx context.Context, p storage.ProductTarget,
 	api := &budgetResourceAPI{ResourceAPI: transport}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	started := time.Now().UTC()
 	raw, err := api.ResourceGET(ctx, "")
 	if err != nil {
@@ -166,7 +167,7 @@ func (c ResourceCollector) Collect(ctx context.Context, p storage.ProductTarget,
 	inline := readResourceSection(ctx, api, "inline_comment", path+"/comments?per_page=100", "", "")
 	scan.Sections = append(scan.Sections, issue, inline,
 		readResourceSection(ctx, api, "review", path+"/reviews?per_page=100", "", ""),
-		readResourceSection(ctx, api, "check", "commits/"+pr.Head.SHA+"/check-runs?per_page=100", "check_runs", pr.Head.SHA),
+		readResourceSection(ctx, api, "check", "commits/"+pr.Head.SHA+"/check-runs?filter=all&per_page=100", "check_runs", pr.Head.SHA),
 		readResourceSection(ctx, api, "status", "commits/"+pr.Head.SHA+"/statuses?per_page=100", "", pr.Head.SHA),
 		readResourceSection(ctx, api, "history", issuePath+"/events?per_page=100", "", ""))
 	reactions := readResourceSection(ctx, api, "reaction", issuePath+"/reactions?per_page=100", "", "")
