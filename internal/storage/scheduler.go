@@ -250,7 +250,7 @@ func (k *KernelStore) activePhaseTx(ctx context.Context, tx *sql.Tx, target cont
 				if result.Review == nil || result.Review.Verdict == "inconclusive" {
 					reason = "review_inconclusive"
 				} else if result.Review.Verdict == "findings" {
-					expanded, err := expandedReviewResultTx(ctx, tx, wave, task)
+					expanded, err := k.expandedReviewResultTx(ctx, tx, wave, task)
 					if err != nil {
 						return set, nil, false, err
 					}

@@ -172,6 +172,15 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 	if err != nil {
 		return w, task, b, err
 	}
+	if inputs != task.InputDigest {
+		captured, err := k.captureProductTemplateFixInputTx(ctx, tx, w, task, value)
+		if err != nil {
+			return w, task, b, err
+		}
+		if captured {
+			task.InputDigest = inputs
+		}
+	}
 	if inputs != task.InputDigest || value.ParentSessionID != "" && value.ParentSessionID != w.OrchestratorSessionID {
 		return w, task, b, ErrProductWorkspaceHeld
 	}

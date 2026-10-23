@@ -13,7 +13,7 @@ import (
 // A findings report completes execution, but later phases need its saved
 // fix/review expansion. Require the generated fix/review Tasks to remain bound
 // to this plan, so a parent cannot drop the repair while carrying the report.
-func expandedReviewResultTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task) (bool, error) {
+func (k *KernelStore) expandedReviewResultTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task) (bool, error) {
 	ids, err := inputIDsTx(ctx, tx, `SELECT id FROM records WHERE kind='template_expansion' AND work_item_id=? AND EXISTS(SELECT 1 FROM json_each(json_extract(payload,'$.source_result_ids')) WHERE value=?) ORDER BY id`, wave.ID, task.ResultID)
 	if err != nil {
 		return false, err
@@ -22,6 +22,16 @@ func expandedReviewResultTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, t
 		var expansion TemplateExpansion
 		if err = completionRecord(ctx, tx, "template_expansion", id, &expansion); err != nil {
 			return false, err
+		}
+		if expansion.Product != nil {
+			bound, err := k.productExpandedReviewTx(ctx, tx, wave, task, expansion)
+			if err != nil {
+				return false, err
+			}
+			if bound {
+				return true, nil
+			}
+			continue
 		}
 		if expansion.Key != id || expansion.Request.Target.WaveID != wave.ID || expansion.Request.Target.ScopeRevision != wave.ScopeRevision || expansion.Request.Target.PolicyRevision != wave.Policy.Revision || !slices.Contains(expansion.SourceResultIDs, task.ResultID) || expansion.Admission.Mode != "template" {
 			return false, errors.New("template progression receipt conflict")
@@ -207,7 +217,7 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 			return false, err
 		}
 		if result.Review != nil && result.Review.Verdict == "findings" {
-			expanded, err := expandedReviewResultTx(ctx, tx, wave, task)
+			expanded, err := k.expandedReviewResultTx(ctx, tx, wave, task)
 			if err != nil {
 				return false, err
 			}
@@ -224,6 +234,12 @@ func (k *KernelStore) reconcileWaveTemplate(ctx context.Context, waveID string) 
 		return false, err
 	}
 	receipt, err := k.expandReviewTemplates(ctx, request, true)
+	if errors.Is(err, ErrProductRunnerHeld) {
+		return false, nil
+	}
+	if errors.Is(err, ErrProductSubjectHeld) {
+		return k.saveTemplateAttention(ctx, request, err.Error())
+	}
 	if errors.Is(err, ErrTemplateNeedsMain) {
 		return k.saveTemplateAttention(ctx, request, err.Error())
 	}

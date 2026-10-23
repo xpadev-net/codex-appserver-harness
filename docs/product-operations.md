@@ -498,3 +498,15 @@ host専用`CheckProductQuality(target, workItemID)`は、現行planと登録済�
 scope/policy/Candidateが同じで、親planが完了結果・元inputを明示carryし、hostが現行product targetをCAS更新した場合は、保存済みrunner成功を読取で再利用できる。carryを推測したり元snapshot/raw finalを書き換えたり、LLM/runnerを再実行して予算をリセットしない。新job起動/claimは元planとの厳密版一致を維持し、carryだけで新たな実行権限を与えない。
 
 回帰は実行factsを明示するSQLite fixtureで、検証とreviewの片方だけ、複数必須reviewer、criterion不足、全件成功、report bytes改変、古いCandidate、history欠落、退役後のfindings保持、thread再利用拒否、明示carryと予算維持を確認する。native P受入の代用にはしない。
+
+### 製品 findings の有界 template 展開
+
+Pの末尾review Phaseでは、`ExpandReviewTemplates`と共通の自動template照合が、固定Candidateの正常停止・適用済み報告、保存plan/template、全source Phase、既知のrunner完了を検査する。`implementation_defect`は新fix Task、その後の別verification Taskへ、`test_defect`はtest-path/schema v3の新verification Taskへ戻す。分類不明・曖昧なowner・template変更・上限超過は親の例外再計画へ戻し、runner結果待ちではmodelを起動しない。
+
+複数ownerは実装修復→検証修復の順に一意に並べ、元の全review役割を新sessionへ保持する。新reviewは最終verification結果へ依存する。実runner成功の生成は行わず、最終Candidateの全profile成功がない間は品質gateを通さない。元report/raw finalは保持し、保存したreplacement lineageから全役割の新clean報告を確認した場合だけ旧報告の役割を置き換える。同じSHAに残るfindingsの拒否は維持する。
+
+adopted plan、product targetの明示CAS更新、生成Task/lineage/receipt/history、fix_round ledgerを一transactionで保存する。一batchはWave FixRoundsを一回消費し、保存templateごとのMaxRoundsはCandidate・role・planが変わっても同じ履歴を数える。正確な再送は同じreceiptを返す。history欠落、rollback、pause/期限/出所変更では新しい実行権限を生成しない。
+
+後続の生成fixは、直前のCandidateが変わった場合に限り、未使用session・attemptゼロ・thread/run未作成・全依存完了・元の生成spec/history・現在Candidate SHAを検査して、workspace予約と同じtransactionで入力を固定する。既存workspaceや使用済みsnapshotを再束縛しない。
+
+現段階のP自動展開は末尾reviewと独立review役割を対象とする。中間Phaseやpeer review出力の明示依存の再配置は理由付き親再計画とし、後続のP接続で拡張する。daemonの製品dispatch/readiness、実model/隔離launcher/Cloudを含むP受入、環境障害のrunner retryとmerge経路は引き続き未接続である。fixtureは実行factsを明示し、Kのtemplate回帰と共に分類、複数owner/role、修復→再検証→再review→品質、rollback/history欠落、繰返し上限、main/worker run増加ゼロを検証する。
