@@ -147,6 +147,9 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 	if validationErr == nil && result.SchemaVersion == 2 && !UsesProductChangeOutput(wave, task) {
 		validationErr = errors.New("TaskResult schema 2 requires a trusted P work/fix assignment")
 	}
+	if validationErr == nil && result.SchemaVersion == 3 && !UsesProductVerificationOutput(wave, task) {
+		validationErr = errors.New("TaskResult schema 3 requires a trusted P verification assignment")
+	}
 	if validationErr == nil && task.Spec.Kind == "review" && result.Outcome == "result" && result.Review == nil {
 		validationErr = errors.New("review Task requires a structured review verdict")
 	}
@@ -154,6 +157,25 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 		task.State, task.Reason, task.CompletedAt = contract.TaskFailed, "invalid Task result: "+validationErr.Error(), k.clock()
 		receipt.State, receipt.Reason = task.State, task.Reason
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
+	}
+	if result.SchemaVersion == 3 && result.Outcome == "result" {
+		if result.ProductVerification.SubjectID != productSubjectID(task.ID) || result.ProductChanges[0].WorkItemID != task.Spec.WorkItemIDs[0] || result.ProductChanges[0].WorkspaceID != productWorkspaceID(task.ID) {
+			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "verification output is outside its Task subject/workspace")
+		}
+		subject, err := k.fixedProductSubjectInputTx(ctx, tx, wave, task.Spec)
+		if readinessHoldError(err) {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "verification subject evidence is unavailable")
+		}
+		if err != nil {
+			return receipt, err
+		}
+		if subject == nil {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "verification subject is not fixed")
+		}
+		if subject.Digest != result.ProductVerification.SubjectDigest {
+			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "verification output does not match its saved subject")
+		}
+		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product verification sealing and plan adoption are not connected")
 	}
 	var productSeal *ProductSeal
 	if productBaseBranch != nil && (!UsesProductChangeOutput(wave, task) || result.SchemaVersion != 2 || result.Outcome != "result") {

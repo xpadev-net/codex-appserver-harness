@@ -316,3 +316,31 @@ func TestCommonDriverProductOutputUsesDedicatedVersionAndPreservesRawChanges(t *
 		t.Fatal("model supplied candidate SHA in workspace output")
 	}
 }
+
+func TestCommonDriverVerificationOutputIsVersionLockedAndKeepsRawPlanReference(t *testing.T) {
+	ctx := context.Background()
+	driver, store, rpc := newSessionDriverFixture("task")
+	output := contract.TaskResult{SchemaVersion: 3, Target: store.binding.Target, TaskID: store.binding.TaskID, PhaseID: store.binding.PhaseID, Outcome: "result", Artifacts: []string{"artifact-plan"}, CriterionResults: []contract.CriterionResult{}, WorkItemRefs: []contract.CandidateReference{}, ProductChanges: []contract.ProductChangeReference{{WorkItemID: "work", WorkspaceID: "workspace", WorkspaceDigest: strings.Repeat("a", 64)}}, ProductVerification: &contract.ProductVerificationReference{SubjectID: "subject", SubjectDigest: strings.Repeat("b", 64), PlanArtifactID: "artifact-plan"}, Remaining: []string{}, Blockers: []string{}, SubscriptionIDs: []string{}}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateTaskOutput(raw, store.binding); err == nil {
+		t.Fatal("v1 accepted verification change output")
+	}
+	if err := ValidateProductTaskOutput(raw, store.binding); err == nil {
+		t.Fatal("v2 accepted verification change output")
+	}
+	if err := ValidateProductVerificationTaskOutput(raw, store.binding); err != nil {
+		t.Fatal(err)
+	}
+	rpc.output = string(raw)
+	prepared, err := driver.Prepare(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := driver.Execute(ctx, prepared, "verification-change", snapshotFixture(), contract.StrictOutputSchema(contract.ProductVerificationTaskResultSchema()), ValidateProductVerificationTaskOutput)
+	if err != nil || run.Final != string(raw) {
+		t.Fatal("driver rewrote plan or sealed SHA", run, err)
+	}
+}

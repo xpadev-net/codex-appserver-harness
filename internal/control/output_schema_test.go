@@ -57,7 +57,9 @@ func TestKernelSourceSelectsProductOutputVersionFromTrustedTaskRole(t *testing.T
 	review.ID, review.Kind, review.Instruction = "independent-review", "review", "independently review behavior"
 	multi := work
 	multi.ID, multi.WorkItemIDs = "multi-work", []string{"work", "other"}
-	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "implementation", Tasks: []contract.TaskSpec{work, review, multi}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID, review.ID, multi.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	verify := work
+	verify.ID, verify.Kind = "independent-verification", "verification"
+	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "implementation", Tasks: []contract.TaskSpec{work, review, multi, verify}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID, review.ID, multi.ID, verify.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
 	receipt, err := k.AdoptPlan(ctx, w.Target(), "product-output-role", plan)
 	if err != nil {
 		t.Fatal(err)
@@ -81,11 +83,14 @@ func TestKernelSourceSelectsProductOutputVersionFromTrustedTaskRole(t *testing.T
 		if task.Spec.Kind == "work" && len(task.Spec.WorkItemIDs) == 1 {
 			expected = 2
 		}
+		if task.Spec.Kind == "verification" && len(task.Spec.WorkItemIDs) == 1 {
+			expected = 3
+		}
 		if props["schema_version"].(map[string]any)["const"] != expected {
 			t.Fatal(task.Spec.Kind, props["schema_version"])
 		}
 		_, hasChanges := props["product_changes"]
-		if hasChanges != (expected == 2) {
+		if hasChanges != (expected == 2 || expected == 3) {
 			t.Fatal("product profile leaked across trusted roles", task.Spec.Kind, props)
 		}
 	}
