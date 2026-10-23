@@ -56,8 +56,16 @@ func sealedProductEvidence(ctx context.Context, q queryer, taskID, runID string)
 	}
 	v, prepared := saved.Value.Workspace.Value, saved.Value.Workspace.Proof
 	pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: v.Request.BaseSHA}
-	expected := runner.Candidate{ID: structureID("candidate-", saved.ID, saved.Proof.Frozen.SHA), SHA: saved.Proof.Frozen.SHA, BaseSHA: v.Request.BaseSHA, ScopeRevision: v.Target.ScopeRevision, PolicyRevision: v.Target.PolicyRevision}
+	expected := runner.Candidate{ID: structureID("candidate-", saved.ID, saved.Proof.Frozen.SHA), SHA: saved.Proof.Frozen.SHA, BaseSHA: productWorkspaceComparisonBase(v), ScopeRevision: v.Target.ScopeRevision, PolicyRevision: v.Target.PolicyRevision}
 	if !fixedSHA(expected.SHA) || saved.Proof.Outcome != "sealed" || saved.Proof.Frozen.PinnedCheckout != pinned || *saved.Candidate != expected {
+		return saved, ErrTaskEvidence
+	}
+	if input := saved.Value.Verification; input != nil {
+		expected := verificationCheckProof(*input)
+		if saved.Proof.Verification == nil || *saved.Proof.Verification != expected || saved.VerificationPlan == nil || saved.VerificationPlan.InputCandidateID != saved.Candidate.ID {
+			return saved, ErrTaskEvidence
+		}
+	} else if saved.Proof.Verification != nil || saved.VerificationPlan != nil {
 		return saved, ErrTaskEvidence
 	}
 	reservation, err := loadOperationReservationTx(ctx, q, saved.ID)

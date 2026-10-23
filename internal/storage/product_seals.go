@@ -11,6 +11,7 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
+	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
@@ -19,30 +20,33 @@ var ErrProductSealHeld = errors.New("product candidate sealing requires owner re
 // ProductSealValue binds a local Git operation to one stopped normal model run.
 // No field is a model grant or a verification/approval verdict.
 type ProductSealValue struct {
-	TaskID         string           `json:"task_id"`
-	RunID          string           `json:"run_id"`
-	Workspace      ProductWorkspace `json:"workspace"`
-	InputDigest    string           `json:"input_digest"`
-	OutputDigest   string           `json:"output_digest"`
-	SnapshotID     string           `json:"snapshot_id"`
-	SnapshotDigest string           `json:"snapshot_digest"`
+	Verification   *ProductVerificationSealInput `json:"verification,omitempty"`
+	TaskID         string                        `json:"task_id"`
+	RunID          string                        `json:"run_id"`
+	Workspace      ProductWorkspace              `json:"workspace"`
+	InputDigest    string                        `json:"input_digest"`
+	OutputDigest   string                        `json:"output_digest"`
+	SnapshotID     string                        `json:"snapshot_id"`
+	SnapshotDigest string                        `json:"snapshot_digest"`
 }
 type ProductSealProof struct {
-	ProofID string                    `json:"proof_id"`
-	Outcome string                    `json:"outcome"` // sealed, failed, not_started; stopped Git owner only
-	Reason  string                    `json:"reason"`
-	Frozen  *workspace.FrozenCheckout `json:"frozen,omitempty"`
+	Verification *ProductVerificationCheckProof `json:"verification,omitempty"`
+	ProofID      string                         `json:"proof_id"`
+	Outcome      string                         `json:"outcome"` // sealed, failed, not_started; stopped Git owner only
+	Reason       string                         `json:"reason"`
+	Frozen       *workspace.FrozenCheckout      `json:"frozen,omitempty"`
 }
 type ProductSeal struct {
-	ID         string            `json:"id"`
-	Value      ProductSealValue  `json:"value"`
-	Digest     string            `json:"digest"`
-	State      string            `json:"state"` // prepared, launching, sealed, failed, stale
-	CreatedAt  time.Time         `json:"created_at"`
-	ClaimedAt  time.Time         `json:"claimed_at"`
-	FinishedAt time.Time         `json:"finished_at"`
-	Proof      *ProductSealProof `json:"proof,omitempty"`
-	Candidate  *runner.Candidate `json:"candidate,omitempty"`
+	VerificationPlan *verification.Plan `json:"verification_plan,omitempty"`
+	ID               string             `json:"id"`
+	Value            ProductSealValue   `json:"value"`
+	Digest           string             `json:"digest"`
+	State            string             `json:"state"` // prepared, launching, sealed, failed, stale
+	CreatedAt        time.Time          `json:"created_at"`
+	ClaimedAt        time.Time          `json:"claimed_at"`
+	FinishedAt       time.Time          `json:"finished_at"`
+	Proof            *ProductSealProof  `json:"proof,omitempty"`
+	Candidate        *runner.Candidate  `json:"candidate,omitempty"`
 }
 type ProductSealClaim struct {
 	Seal  ProductSeal `json:"seal"`
@@ -77,6 +81,20 @@ func loadProductSeal(ctx context.Context, q queryer, id string) (ProductSeal, er
 		return saved, err
 	}
 	if record.Digest != digest || saved.Digest != valueDigest || saved.ID != id || id != productSealID(saved.Value.TaskID, saved.Value.RunID) || saved.Value.TaskID == "" || saved.Value.RunID == "" || saved.CreatedAt.IsZero() || saved.Value.Workspace.State != "ready" || saved.Value.Workspace.Value.Request.TaskID != saved.Value.TaskID || !validSourceDigest(saved.Value.InputDigest) || !validSourceDigest(saved.Value.OutputDigest) || !validSourceDigest(saved.Value.SnapshotDigest) || saved.Value.SnapshotID == "" {
+		return saved, ErrTaskEvidence
+	}
+	if input := saved.Value.Verification; input != nil {
+		v := saved.Value.Workspace.Value
+		if input.Subject.ID != v.SubjectID || input.Subject.Digest != v.SubjectDigest || input.Policy.ID != v.VerificationPolicyID || input.Policy.Digest != v.VerificationPolicyDigest || input.PlanArtifact.TaskID != saved.Value.TaskID || input.InputPlan.InputCandidateID != input.Subject.Value.Candidate.ID || !validSourceDigest(input.ScopeDigest) {
+			return saved, ErrTaskEvidence
+		}
+		if saved.State == "sealed" && (saved.VerificationPlan == nil || saved.Candidate == nil || saved.VerificationPlan.InputCandidateID != saved.Candidate.ID) {
+			return saved, ErrTaskEvidence
+		}
+		if saved.State != "sealed" && saved.VerificationPlan != nil {
+			return saved, ErrTaskEvidence
+		}
+	} else if saved.VerificationPlan != nil {
 		return saved, ErrTaskEvidence
 	}
 	switch saved.State {
@@ -234,6 +252,9 @@ func (k *KernelStore) FinishProductSeal(ctx context.Context, taskID, runID strin
 		return saved, err
 	}
 	saved.State = "failed"
+	if proof.Outcome != "sealed" && proof.Verification != nil {
+		return saved, ErrTaskEvidence
+	}
 	if proof.Outcome == "sealed" {
 		v := saved.Value.Workspace.Value
 		prepared := saved.Value.Workspace.Proof
@@ -241,15 +262,46 @@ func (k *KernelStore) FinishProductSeal(ctx context.Context, taskID, runID strin
 		if proof.Frozen.PinnedCheckout != expected || !fixedSHA(proof.Frozen.SHA) {
 			return saved, ErrTaskEvidence
 		}
+		if saved.Value.Verification != nil {
+			expected := verificationCheckProof(*saved.Value.Verification)
+			if proof.Verification == nil || *proof.Verification != expected {
+				return saved, ErrTaskEvidence
+			}
+		} else if proof.Verification != nil {
+			return saved, ErrTaskEvidence
+		}
 		value, evidenceErr := k.productSealEvidenceTx(ctx, tx, taskID, runID)
-		if evidenceErr != nil && !errors.Is(evidenceErr, ErrProductSealHeld) && !errors.Is(evidenceErr, ErrProductChangeReference) && !errors.Is(evidenceErr, ErrTaskEvidence) && !errors.Is(evidenceErr, ErrTaskBinding) && !errors.Is(evidenceErr, sql.ErrNoRows) {
+		if evidenceErr != nil && !readinessHoldError(evidenceErr) && !errors.Is(evidenceErr, ErrProductSealHeld) && !errors.Is(evidenceErr, ErrProductChangeReference) {
 			return saved, evidenceErr
 		}
 		saved.State = "sealed"
 		if evidenceErr != nil || !reflect.DeepEqual(value, saved.Value) {
 			saved.State = "stale"
 		}
-		saved.Candidate = &runner.Candidate{ID: structureID("candidate-", saved.ID, proof.Frozen.SHA), SHA: proof.Frozen.SHA, BaseSHA: v.Request.BaseSHA, ScopeRevision: v.Target.ScopeRevision, PolicyRevision: v.Target.PolicyRevision}
+		saved.Candidate = &runner.Candidate{ID: structureID("candidate-", saved.ID, proof.Frozen.SHA), SHA: proof.Frozen.SHA, BaseSHA: productWorkspaceComparisonBase(v), ScopeRevision: v.Target.ScopeRevision, PolicyRevision: v.Target.PolicyRevision}
+		if saved.State == "sealed" && saved.Value.Verification != nil {
+			w, err := loadWave(ctx, tx, v.Target.WaveID)
+			if err != nil {
+				return saved, err
+			}
+			registration, err := loadProductWorkItemRegistration(ctx, tx, v.WorkItemID)
+			if err != nil {
+				return saved, err
+			}
+			scope := productVerificationScope(w, registration)
+			digest, err := contentDigest(scope)
+			if err != nil {
+				return saved, err
+			}
+			if digest != saved.Value.Verification.ScopeDigest {
+				return saved, ErrTaskEvidence
+			}
+			plan, err := verification.Rebind(saved.Value.Verification.InputPlan, v.WorkItemID, *saved.Candidate, scope, saved.Value.Verification.Policy.Value.Verification)
+			if err != nil {
+				return saved, err
+			}
+			saved.VerificationPlan = &plan
+		}
 	}
 	saved.Proof, saved.FinishedAt = &proof, k.clock()
 	disposition := "process_stopped"

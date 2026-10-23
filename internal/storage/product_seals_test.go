@@ -33,7 +33,7 @@ func productSealFixture(t *testing.T, configure ...func(*contract.PlanProposal))
 	return seedProductSealRun(t, k, w, task, saved)
 }
 
-func seedProductSealRun(t *testing.T, k *KernelStore, w domain.Wave, task domain.Task, saved ProductWorkspace) (*KernelStore, domain.Wave, domain.Task, contract.SessionRun) {
+func seedProductSealRun(t *testing.T, k *KernelStore, w domain.Wave, task domain.Task, saved ProductWorkspace, configure ...func(*contract.TaskResult)) (*KernelStore, domain.Wave, domain.Task, contract.SessionRun) {
 	t.Helper()
 	ctx := context.Background()
 	b, err := k.SessionBinding(ctx, task.SessionID)
@@ -44,8 +44,11 @@ func seedProductSealRun(t *testing.T, k *KernelStore, w domain.Wave, task domain
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.ThreadID, b.PreparationID = "product-thread", "product-process"
+	b.ThreadID, b.PreparationID = structureID("test-thread-", task.ID, "seal"), structureID("test-process-", task.ID, "seal")
 	result := contract.TaskResult{SchemaVersion: 2, Target: task.Target(), TaskID: task.ID, PhaseID: task.PhaseID, Outcome: "result", ProductChanges: []contract.ProductChangeReference{{WorkItemID: saved.Value.WorkItemID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest}}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "unverified", EvidenceIDs: []string{}, Basis: "implementation ready for independent verification"}}}
+	for _, apply := range configure {
+		apply(&result)
+	}
 	raw, err := marshalTaskResultFixture(result)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +56,7 @@ func seedProductSealRun(t *testing.T, k *KernelStore, w domain.Wave, task domain
 	if err := result.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	run := contract.SessionRun{ID: "product-run", ThreadID: b.ThreadID, TurnID: "product-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
+	run := contract.SessionRun{ID: structureID("test-run-", task.ID, "seal"), ThreadID: b.ThreadID, TurnID: "product-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		t.Fatal(err)

@@ -27,7 +27,7 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 	if err != nil {
 		return value, err
 	}
-	if !UsesProductChangeOutput(w, task) || w.Target() != task.Target() || w.DispatchPaused() || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || !k.clock().Before(w.Deadline) || task.Paused || (task.State != contract.TaskRunning && task.State != contract.TaskBlocked) {
+	if (!UsesProductChangeOutput(w, task) && !UsesProductVerificationOutput(w, task)) || w.Target() != task.Target() || w.DispatchPaused() || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || !k.clock().Before(w.Deadline) || task.Paused || (task.State != contract.TaskRunning && task.State != contract.TaskBlocked) {
 		return value, ErrProductSealHeld
 	}
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
@@ -97,7 +97,7 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 	if err := result.Validate(); err != nil {
 		return value, fmt.Errorf("%w: invalid product output contract", ErrTaskEvidence)
 	}
-	if result.SchemaVersion != 2 || result.Target != task.Target() || result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Outcome != "result" {
+	if (UsesProductChangeOutput(w, task) && result.SchemaVersion != 2 || UsesProductVerificationOutput(w, task) && result.SchemaVersion != 3) || result.Target != task.Target() || result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Outcome != "result" {
 		return value, fmt.Errorf("%w: output assignment mismatch", ErrTaskEvidence)
 	}
 	ready, err := k.productChangeReferenceTx(ctx, tx, b, w, task, result.ProductChanges[0])
@@ -172,5 +172,16 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 		return value, fmt.Errorf("%w: saved Task owner is not unique", ErrTaskEvidence)
 	}
 	value = ProductSealValue{TaskID: taskID, RunID: runID, Workspace: *saved, InputDigest: inputs, OutputDigest: bytesDigest([]byte(run.Final)), SnapshotID: snapshotID, SnapshotDigest: snapshot.Digest}
+	verificationInput, err := k.productVerificationSealInputTx(ctx, tx, w, task, *saved, result)
+	if err != nil {
+		return value, err
+	}
+	if verificationInput != nil {
+		expectedPolicy := publicProductVerificationPolicy(verificationInput.Policy)
+		if input.ProductSubject == nil || !reflect.DeepEqual(*input.ProductSubject, verificationInput.Subject) || input.ProductVerificationPolicy == nil || !reflect.DeepEqual(*input.ProductVerificationPolicy, expectedPolicy) {
+			return value, ErrTaskEvidence
+		}
+		value.Verification = verificationInput
+	}
 	return value, nil
 }

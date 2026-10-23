@@ -187,7 +187,7 @@ func CheckChanges(ctx context.Context, dir, base string, allowed []string) error
 	if err != nil {
 		return err
 	}
-	tracked, err := workspace.Git(ctx, dir, "diff", "--name-only", "-z", "--no-renames", sha, "--")
+	tracked, err := workspace.Git(ctx, dir, "--no-replace-objects", "diff", "--name-only", "-z", "--no-renames", sha, "--")
 	if err != nil {
 		return err
 	}
@@ -275,7 +275,7 @@ func (p Plan) ValidateCommit(ctx context.Context, repo, sha string) error {
 	if err != nil {
 		return err
 	}
-	tree, err := workspace.Git(ctx, repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+	tree, err := workspace.Git(ctx, repo, "--no-replace-objects", "ls-tree", "-r", "-z", "--full-tree", commit)
 	if err != nil {
 		return err
 	}

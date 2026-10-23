@@ -78,7 +78,7 @@ func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b
 // This checks a proposed output's input reference, never seals the filesystem or
 // treats the model declaration as a candidate, verification or approval.
 func (k *KernelStore) productChangeReferenceTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave, task domain.Task, ref contract.ProductChangeReference) (bool, error) {
-	if !UsesProductChangeOutput(w, task) || ref.WorkItemID != task.Spec.WorkItemIDs[0] || ref.WorkspaceID != productWorkspaceID(task.ID) {
+	if (!UsesProductChangeOutput(w, task) && !UsesProductVerificationOutput(w, task)) || ref.WorkItemID != task.Spec.WorkItemIDs[0] || ref.WorkspaceID != productWorkspaceID(task.ID) {
 		return false, fmt.Errorf("%w: outside the assigned Task workspace", ErrProductChangeReference)
 	}
 	saved, err := k.productWorkspaceTx(ctx, tx, productWorkspaceID(task.ID))
