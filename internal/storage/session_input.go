@@ -64,6 +64,7 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductWorkspace            *ProductWorkspaceInput                `json:"product_workspace,omitempty"`
 	ProductWorkItems            []ProductWorkItemRegistrationSnapshot `json:"product_work_items,omitempty"`
 	UnavailableProductWorkItems []UnavailableProductWorkItem          `json:"unavailable_product_work_items,omitempty"`
 	SchemaVersion               int                                   `json:"schema_version"`
@@ -209,6 +210,9 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		if err != nil {
 			return state, refs, err
 		}
+		if manifest.ProductWorkspace != nil {
+			state.Instructions += " For this product work/fix assignment use TaskResult schema_version=2. For outcome=result copy the product_workspace.reference from this saved manifest into product_changes. For waiting/blocked return an empty product_changes array. Keep work_item_refs empty and review/verification null. The controller owns Git commits, Candidate IDs/SHA and quality/approval gates after normal completion and physical stopping. Publish actual notes/evidence with artifact_publish when needed."
+		}
 		raw, err := encodeWakeJSON(manifest)
 		if err != nil {
 			return state, refs, err
@@ -312,6 +316,10 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 	}
 	m.Budget = WaveRunBudget{WaveID: w.ID, ObservedTokens: tokens, UnobservedRuns: unknown, Saturated: saturated, TokenLimit: w.Policy.Limits.Tokens, MainTurns: w.MainTurns, MainTurnLimit: w.Policy.Limits.MainTurns, Deadline: w.Deadline, DeadlineExceeded: !k.clock().Before(w.Deadline)}
 	m.ProductWorkItems, m.UnavailableProductWorkItems, err = k.productWorkItemInputsTx(ctx, tx, b, w)
+	if err != nil {
+		return m, err
+	}
+	m.ProductWorkspace, err = k.productWorkspaceInputTx(ctx, tx, b, w)
 	if err != nil {
 		return m, err
 	}

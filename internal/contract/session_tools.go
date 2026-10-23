@@ -213,25 +213,45 @@ type VerificationReference struct {
 	PlanID      string   `json:"plan_id"`
 	EvidenceIDs []string `json:"evidence_ids"`
 }
+type ProductChangeReference struct {
+	WorkItemID      string `json:"work_item_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	WorkspaceDigest string `json:"workspace_digest"`
+}
+
 type TaskResult struct {
-	SchemaVersion    int                    `json:"schema_version"`
-	Target           Target                 `json:"target"`
-	PhaseID          string                 `json:"phase_id"`
-	TaskID           string                 `json:"task_id"`
-	Outcome          string                 `json:"outcome"`
-	Artifacts        []string               `json:"artifacts"`
-	CriterionResults []CriterionResult      `json:"criterion_results"`
-	WorkItemRefs     []CandidateReference   `json:"work_item_refs"`
-	Remaining        []string               `json:"remaining"`
-	Blockers         []string               `json:"blockers"`
-	SubscriptionIDs  []string               `json:"subscription_ids"`
-	Review           *ReviewResult          `json:"review"`
-	Verification     *VerificationReference `json:"verification"`
+	SchemaVersion    int                      `json:"schema_version"`
+	Target           Target                   `json:"target"`
+	PhaseID          string                   `json:"phase_id"`
+	TaskID           string                   `json:"task_id"`
+	Outcome          string                   `json:"outcome"`
+	Artifacts        []string                 `json:"artifacts"`
+	CriterionResults []CriterionResult        `json:"criterion_results"`
+	WorkItemRefs     []CandidateReference     `json:"work_item_refs"`
+	ProductChanges   []ProductChangeReference `json:"product_changes,omitempty"`
+	Remaining        []string                 `json:"remaining"`
+	Blockers         []string                 `json:"blockers"`
+	SubscriptionIDs  []string                 `json:"subscription_ids"`
+	Review           *ReviewResult            `json:"review"`
+	Verification     *VerificationReference   `json:"verification"`
 }
 
 func (r TaskResult) Validate() error {
-	if r.SchemaVersion != 1 || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
+	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
 		return errors.New("result identity missing")
+	}
+	if r.SchemaVersion == 1 && r.ProductChanges != nil {
+		return errors.New("product change references require TaskResult schema 2")
+	}
+	if r.SchemaVersion == 2 {
+		if len(r.WorkItemRefs) != 0 || r.Review != nil || r.Verification != nil || len(r.ProductChanges) > 1 || (r.Outcome == "result" && len(r.ProductChanges) != 1) || (r.Outcome != "result" && len(r.ProductChanges) != 0) {
+			return errors.New("product work output requires its workspace change reference, with controller-owned candidate/quality facts")
+		}
+		for _, change := range r.ProductChanges {
+			if !inline(change.WorkItemID) || !inline(change.WorkspaceID) || strings.ContainsAny(change.WorkItemID+change.WorkspaceID, "\x00\r\n") || len(change.WorkspaceDigest) != 64 || strings.Trim(change.WorkspaceDigest, "0123456789abcdef") != "" {
+				return errors.New("invalid product workspace change reference")
+			}
+		}
 	}
 	if !validIDs(r.Artifacts) || !validIDs(r.SubscriptionIDs) {
 		return errors.New("invalid artifact/subscription references")
@@ -253,8 +273,8 @@ func (r TaskResult) Validate() error {
 			return errors.New("blocked result needs a reason")
 		}
 	case "result":
-		if len(r.Artifacts) == 0 && len(r.WorkItemRefs) == 0 {
-			return errors.New("result needs immutable artifacts or candidates")
+		if len(r.Artifacts) == 0 && len(r.WorkItemRefs) == 0 && len(r.ProductChanges) == 0 {
+			return errors.New("result needs output artifacts, candidates or product changes")
 		}
 	default:
 		return errors.New("unsupported task outcome")
@@ -454,11 +474,29 @@ func PlanSchema() map[string]any {
 func TaskResultSchema() map[string]any {
 	s := Schema(TaskResult{})
 	properties := s["properties"].(map[string]any)
+	delete(properties, "product_changes") // Keep the versioned K/review schema byte-for-byte unchanged.
 	properties["outcome"].(map[string]any)["enum"] = []string{"result", "waiting", "blocked"}
 	properties["criterion_results"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)["enum"] = []string{"claimed", "unverified"}
 	properties["review"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["verdict"].(map[string]any)["enum"] = []string{"clean", "findings", "inconclusive"}
 	return s
 }
+
+// ProductTaskResultSchema is selected only for trusted P work/fix assignments.
+// The model identifies a granted workspace; the controller seals its output.
+func ProductTaskResultSchema() map[string]any {
+	s := TaskResultSchema()
+	properties := s["properties"].(map[string]any)
+	properties["schema_version"].(map[string]any)["const"] = 2
+	change := Schema(ProductChangeReference{})
+	digest := change["properties"].(map[string]any)["workspace_digest"].(map[string]any)
+	digest["minLength"], digest["maxLength"], digest["pattern"] = 64, 64, "^[0-9a-f]{64}$"
+	properties["product_changes"] = map[string]any{"type": "array", "items": change, "minItems": 0, "maxItems": 1}
+	s["required"] = append(s["required"].([]string), "product_changes")
+	properties["work_item_refs"].(map[string]any)["maxItems"] = 0
+	properties["review"], properties["verification"] = map[string]any{"type": "null"}, map[string]any{"type": "null"}
+	return s
+}
+
 func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolReply, error) {
 	reject := func(reason string) (ToolReply, error) { return ToolReply{}, errors.New(reason) }
 	command := toolArgument(call.Name)

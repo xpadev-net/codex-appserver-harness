@@ -1,0 +1,79 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+)
+
+var ErrProductChangeReference = errors.New("product change reference is invalid")
+
+type ProductWorkspaceInput struct {
+	Reference contract.ProductChangeReference `json:"reference"`
+	BaseSHA   string                          `json:"base_sha"`
+	Branch    string                          `json:"branch"`
+}
+
+func productCodeTask(w domain.Wave, t domain.Task) bool {
+	return w.Policy.Stage == "P" && w.Policy.Product && (t.Spec.Kind == "work" || t.Spec.Kind == "fix") && len(t.Spec.WorkItemIDs) == 1
+}
+func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave) (*ProductWorkspaceInput, error) {
+	if b.Kind != "task" {
+		return nil, nil
+	}
+	task, err := loadTask(ctx, tx, b.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if !productCodeTask(w, task) {
+		return nil, nil
+	}
+	saved, err := k.productWorkspaceTx(ctx, tx, productWorkspaceID(task.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	registration, regErr := loadProductWorkItemRegistration(ctx, tx, task.Spec.WorkItemIDs[0])
+	if errors.Is(regErr, sql.ErrNoRows) || errors.Is(regErr, ErrTaskEvidence) {
+		return nil, nil
+	}
+	if regErr != nil {
+		return nil, regErr
+	}
+	if !productRegistrationScope(registration, w) || registration.Digest != saved.Value.RegistrationDigest {
+		return nil, nil
+	}
+	if saved.State != "ready" || saved.Value.SessionID != b.ID || saved.Value.Target != b.Target || saved.Value.Target != w.Target() || saved.Value.WorkItemID != task.Spec.WorkItemIDs[0] {
+		return nil, nil
+	}
+	return &ProductWorkspaceInput{Reference: contract.ProductChangeReference{WorkItemID: saved.Value.WorkItemID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest}, BaseSHA: saved.Value.Request.BaseSHA, Branch: saved.Value.Branch}, nil
+}
+
+// This checks a proposed output's input reference, never seals the filesystem or
+// treats the model declaration as a candidate, verification or approval.
+func (k *KernelStore) productChangeReferenceTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, w domain.Wave, task domain.Task, ref contract.ProductChangeReference) (bool, error) {
+	if !productCodeTask(w, task) || ref.WorkItemID != task.Spec.WorkItemIDs[0] || ref.WorkspaceID != productWorkspaceID(task.ID) {
+		return false, fmt.Errorf("%w: outside the assigned Task workspace", ErrProductChangeReference)
+	}
+	saved, err := k.productWorkspaceTx(ctx, tx, productWorkspaceID(task.ID))
+	if err != nil {
+		return false, err
+	}
+	registration, err := loadProductWorkItemRegistration(ctx, tx, task.Spec.WorkItemIDs[0])
+	if err != nil {
+		return false, err
+	}
+	if !productRegistrationScope(registration, w) || registration.Digest != saved.Value.RegistrationDigest {
+		return false, fmt.Errorf("%w: product workspace registration is unavailable", ErrTaskEvidence)
+	}
+	if saved.Value.SessionID != b.ID || saved.Value.Target != task.Target() || saved.Value.WorkItemID != ref.WorkItemID || saved.Digest != ref.WorkspaceDigest {
+		return false, fmt.Errorf("%w: does not match its saved workspace", ErrProductChangeReference)
+	}
+	return saved.State == "ready", nil
+}

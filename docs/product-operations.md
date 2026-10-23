@@ -319,3 +319,15 @@ Gitはcheckout前にbranch/gitdir条件付きfilter設定も検出するため�
 `wave product-workspace --root ROOT --id TASK_ID` は記録をread-onlyで確認する。失敗/unknownを同じTaskで自動再実行せず、停止確認と明示的な復旧または新Taskへ渡す。readyの完全一致再送も歴史的なreceiptを返すだけで、新しい実行許可ではない。CLIのownerは同期Gitと有界な停止証拠保存の終了までStoreを保持する。
 
 検証: `go test ./internal/storage ./internal/product ./internal/kernelcli ./internal/workspace -run 'TestProductWorkspace|TestStoppedGit' -count=1`。一度開始・並行claim・再open/unknown保持、SQL失敗rollback、未開始/停止/取消/入力変化の履歴、proof破損拒否、実temp Gitの固定/private checkout、条件付きfilter/hookの非実行、既存data保持、子group停止、private CLI/閲覧/再送とmodel/candidate非生成を確認する。自動準備workerの配置、P Task実行/readiness、runner・candidate結果登録と正式gateは引き続き後続であり、準備だけで`product_readiness_unavailable`を外さない。
+
+## 製品work/fix成果のschema v2
+
+Pのwork/fix TaskでWorkItemを扱う場合は、共通session driverへ`product-task-result-v2.json`を選ぶ。K・汎用Task・独立review/verificationは既存のtask-result-v1を使う。選択は保存済みTaskとWave policyからcontrollerが行い、modelがschema番号を変えてroleを取得することはできない。v1のJSON/schemaは維持する。
+
+v2の`product_changes`は、worktree準備後のTask専用manifestの`product_workspace.reference`（work_item_id・workspace_id・workspace_digest）をそのまま返す変更準備完了の申告である。固定base SHAとbranchも入力に保存する。parentやreview roleに実装Taskのworkspace参照を渡さず、外部messageで伝わった参照も別Taskの成果として受け付けない。元要求の登録が不明/破損なら新しい入力を作らない。
+
+outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする。work_item_refsは空、review/verificationはnullであり、modelは未知の新commit SHAやCandidate IDを申告しない。共通driverはraw finalを保持し、controllerが停止後に確定するCandidateへ書き換えない。criterionのclaimed/unverifiedと独立した品質・正式承認を区別する。
+
+保存側はP work/fix roleと単一WorkItem割当、現在の登録、Task固有のworkspace ID/digest・scope/sessionを再照合する。不正な参照はmodel成果の不正として扱い、SQL/cancelは運用エラーのまま返す。保存済み証拠の欠落・破損は保留にし、Codexの再実行や成功へ変換しない。
+
+この契約だけではmutableなworktreeをCandidateにせず、正常終了・物理停止後のsealing receiptが未接続の間は`product candidate sealing is not connected`として成果適用を保留する。model runの許可や製品readinessの禁止も外さない。検証はcontract/worker/storage/controlのversion/role境界、既存v1 schema一致、SHA/自己review拒否、共通driverのraw final保持、Task専用入力・peer参照拒否、Kの自己分類拒否を対象とし、製品Candidate/Cloud受入の証拠には数えない。
