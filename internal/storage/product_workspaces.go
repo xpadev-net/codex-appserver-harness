@@ -376,5 +376,10 @@ func (k *KernelStore) FinishProductWorkspace(ctx context.Context, taskID string,
 	if err := saveProductWorkspaceTx(ctx, tx, "product_workspace_history", saved); err != nil {
 		return saved, err
 	}
+	if saved.State == "ready" {
+		if err := k.materializeProductTaskInputTx(ctx, tx, saved); err != nil {
+			return saved, err
+		}
+	}
 	return saved, tx.Commit()
 }

@@ -627,6 +627,17 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 }
 func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec) (string, error) {
 	references := map[string]string{}
+	fixed, err := k.fixedProductWorkspaceInputTx(ctx, tx, wave, spec)
+	if err != nil {
+		return "", err
+	}
+	if fixed != nil {
+		digest, err := contentDigest(*fixed)
+		if err != nil {
+			return "", err
+		}
+		references["product_workspace:"+fixed.ID] = digest
+	}
 	sources, err := k.sourceResultDigestsTx(ctx, tx, wave, spec)
 	if err != nil {
 		return "", err
@@ -653,6 +664,9 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 			return "", fmt.Errorf("%w: WorkItem is outside the trusted Wave scope", ErrTaskEvidence)
 		}
 		references["work_item:"+id] = binding.CandidateID
+		if fixed != nil {
+			references["work_item:"+id] = fixed.Value.InputDigest
+		}
 		registration, registrationErr := loadProductWorkItemRegistration(ctx, tx, id)
 		if registrationErr != nil && !errors.Is(registrationErr, sql.ErrNoRows) {
 			return "", registrationErr

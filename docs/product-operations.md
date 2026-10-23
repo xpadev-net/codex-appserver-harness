@@ -331,3 +331,11 @@ outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする
 保存側はP work/fix roleと単一WorkItem割当、現在の登録、Task固有のworkspace ID/digest・scope/sessionを再照合する。不正な参照はmodel成果の不正として扱い、SQL/cancelは運用エラーのまま返す。保存済み証拠の欠落・破損は保留にし、Codexの再実行や成功へ変換しない。
 
 この契約だけではmutableなworktreeをCandidateにせず、正常終了・物理停止後のsealing receiptが未接続の間は`product candidate sealing is not connected`として成果適用を保留する。model runの許可や製品readinessの禁止も外さない。検証はcontract/worker/storage/controlのversion/role境界、既存v1 schema一致、SHA/自己review拒否、共通driverのraw final保持、Task専用入力・peer参照拒否、Kの自己分類拒否を対象とし、製品Candidate/Cloud受入の証拠には数えない。
+
+## 準備完了時のwork/fix入力固定
+
+単一WorkItemのP work/fixでは、workspaceのready証拠と不変historyを保存するtransaction内で、未開始Taskと現在plan bindingの入力digestを固定する。固定入力は準備開始時の元入力digest、workspaceの値・停止証拠・固定baseを含み、そのTaskが後で生成するCandidateのmutableなmembership更新には依存しない。準備中の入力変化は引き続きstaleにし、ready化しない。
+
+元要求の登録・Wave scope/policy・Task/sessionの所属を再検査し、ready記録またはhistoryの欠落/破損時は可変Candidateへのfallbackを許さない。source result、Artifactの実bytes、依存Taskの成果は引き続き現在の証拠を検証する。K、未準備Task、review/verificationの入力契約は維持する。使用済みsnapshot/runを書き換えず、完全一致の準備完了再送も元receiptを返すだけである。
+
+検証: `go test ./internal/storage -run 'TestFixedProductInput|TestProductWorkspace|TestProductChange' -count=1`。work/fixの入力・plan・manifest一致、Candidate更新と再open後の安定、reviewの従来挙動、scope/policy/登録/historyの拒否、Artifact/依存証拠の失効、plan更新失敗の全面rollbackを確認する。これは固定入力の保存接続であり、Candidate sealing、P実行readiness、品質/正式承認のgateは後続の接続範囲である。
