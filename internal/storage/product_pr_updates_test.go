@@ -187,7 +187,7 @@ func TestPRResourceScanRejectsInvalidUnboundedAndIncompleteInput(t *testing.T) {
 				e := PRResourceEntity{ID: "1", Data: json.RawMessage(`{}`)}
 				setResourceSection(&scan, "pr", e, e)
 			case "oversized":
-				setResourceSection(&scan, "pr", PRResourceEntity{ID: "1", Data: json.RawMessage(fmt.Sprintf("%q", strings.Repeat("x", 64<<10)))})
+				setResourceSection(&scan, "pr", PRResourceEntity{ID: "1", Data: json.RawMessage(fmt.Sprintf("%q", strings.Repeat("x", 512<<10)))})
 			case "availability":
 				scan.Sections[0].Availability = "partial"
 			case "unavailable_entities":

@@ -85,3 +85,13 @@ PR・issue comment・inline comment・reaction・review・check・status・histo
 通常更新は明示waitまでdeferredとし、閲覧/配送ACKで判断入力を消費しない。session_waitまたはmain/Taskの新しいwait集合で以前のPR待機を置き換え、外れた購読の未予約resource入力はdeferredへ戻す。mainのplan/acceptでも古いwaitを終了する。reportは既存契約どおり待機条件を変更しない。runに予約済みの入力は変更せず、共通の適用/再投入規則を使う。cancel/終端session/旧scopeはarchivedとし、通常の資源更新でmainを無条件に起動しない。
 
 production KernelSourceのready処理から有界batchを回収する。この処理でAPI/modelを呼ばない。検証は`go test ./internal/storage -run 'TestPRResource|TestPRCompletion|TestPRWait' -count=1`。待機の前後・ACK・tool/main wait置換、失敗rollbackと再open、元version参照、cancel/実方向修正、bad row公平性、再配送の重複排除を確認する。API収集/raw deliveryの登録境界回収と、新しい関連Taskへの自動購読展開は後続である。
+
+## 認証済みGitHub資源collector
+
+`ResourceCollector`はready走査の外で、bindingと前state digestを読み、認証済みghのGETだけでsnapshotを収集する。PR headerのrepository数値ID/branch/番号を照合し、collectionを全page取得する。issue/inline comment、PRと各commentのreaction、review、check run、commit status、issue event履歴を別種別へ正規化する。check runはhead全体APIの直近1000 suites制限を避け、全suiteとsuiteごとのfilter=all全pageを取得する。suite走査が予算内に完了しない場合はcheck全体をunavailableとし、過去checkを削除にしない。review/inline/checkの観測SHAを保持し、statusは問合せた固定headへ対応付ける。PRのdefault branchが後から変わっても過去資源の読取を妨げない。
+
+取得失敗・不完全なreaction親・不正/重複IDのcollectionは理由付きunavailableとなり、前snapshotの事実を消さない。取得中に主要PR headerが変わった場合とDBのCAS競合は保存せず再取得を要求する。GitHubの複数collectionは外部の原子的snapshotではなく、Webhook/継続再照合で補う。完了したscan IDの再送は保存receiptを返し、APIを再実行しない。
+
+各gh応答は4 MiB、collector全体は16 MiB/128 collection読取呼出し/30秒を上限とする。paginationのHTTP回数を128回と主張するものではない。限界時のreaction等は取得不能として明示し、黙って完全取得にしない。保存側は大きなPR本文とJSON metadata/escapingを収めるため1 entityを512 KiBまでとし、scan全体2 MiB/保持4 MiBと2048 entitiesの上限を維持する。`ResourceGET/ResourcePages`は書込guardを持たず、GET以外を実行するAPIを公開しない。
+
+検証: `go test ./internal/product ./internal/github -run TestResource -count=1`。全種別/親reaction/古いSHA、権限等のread失敗と保持、header変化/CAS競合、collection予算、全page/object collection、null/欠落collection拒否、subprocess出力上限と完了scan再送を確認する。daemonへの非同期配置、署名済みraw deliveryの登録境界回収と関連Task購読展開は後続である。
