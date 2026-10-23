@@ -103,7 +103,7 @@ func (k *KernelStore) taskResultInputTx(ctx context.Context, tx *sql.Tx, wave do
 		return out, fmt.Errorf("%w: source result differs from applied run output", ErrTaskEvidence)
 	}
 	out = TaskResultInput{ResultID: id, RunID: runID, TaskID: source.ID, PhaseID: source.PhaseID, Target: source.Target(), SourceSpec: source.Spec, Result: result, Digest: digest}
-	if result.SchemaVersion == 2 && result.Outcome == "result" {
+	if (result.SchemaVersion == 2 || result.SchemaVersion == 3) && result.Outcome == "result" {
 		candidate, err := loadProductTaskCandidate(ctx, tx, id)
 		if err != nil {
 			return out, err

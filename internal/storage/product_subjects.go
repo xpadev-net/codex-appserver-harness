@@ -281,7 +281,7 @@ func (k *KernelStore) productSubjectSourcesTx(ctx context.Context, tx *sql.Tx, w
 		if err != nil {
 			return nil, err
 		}
-		if result.SchemaVersion != 2 {
+		if result.SchemaVersion != 2 && result.SchemaVersion != 3 {
 			continue
 		}
 		source, err := loadProductTaskCandidate(ctx, tx, producer.ResultID)

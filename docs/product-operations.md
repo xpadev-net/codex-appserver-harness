@@ -438,3 +438,13 @@ verificationのready証拠からworkspace-write binding、Task/planの固定入�
 hostの停止証拠はsubject/policy/計画Artifactのdigestと実施した検査を含む。保存側は元入力を再照合し、新CandidateのBaseSHAに保存済みcomparison baseを使う。freshな場合だけ、元計画を最終Candidateに`verification.Rebind`した計画を別保存する。scopeはdigestで固定して再照合し、大きな元要求本文をsealing recordへ重複保存しない。途中で出所が変わった場合はstaleのcommit履歴にし、SQL/運用失敗はrollbackして照合用予約を保持する。元のArtifact bytesとraw finalは書き換えない。
 
 検証: `go test ./internal/storage ./internal/product ./internal/verification -run 'TestProductVerificationSeal|TestProductSeal|TestCandidateSealer|TestCheckChanges|TestPlan' -count=1`。元計画・comparison base・正常停止proof・final plan rebind・再送、対象/profile/coverage/blocker拒否、実temp Gitのテスト追加commitと製品コード/欠落参照のcommit前拒否を確認する。modelと停止factsはfixtureで、正式runnerの実行成功やP受入には数えない。local sealingだけではactive ProductTarget/Task成功へ採用せず、v3成果/計画の原子的採用・runner品質gateへの配置は後続である。
+
+## v3成果・Candidate・canonical planの原子的採用
+
+host専用`AdoptProductVerificationTaskResult(sessionID, runID, baseBranch)`は、schema v3とverification role、freshなsealed receipt、元計画Artifact/subject/policy、現在の入力と出所を検査し、追加テスト込みCandidate・canonical plan・元のTask結果を一transactionで採用する。通常の`ApplyTaskResult`はhost採用を要求して保留し、work/fix用のhost profileはv3を採用しない。
+
+canonical planは最終Candidateと元Artifact ID/digest、入力Candidate、policy/sealのID/digest、Task/run/result/targetに結び付け、head/historyへ原子保存する。`product_task_candidate` sidecarには小さなplan ID/digest参照を追加し、private実行argvは含めない。計画とsidecar、ProductTarget、不変Candidate、Task/result/application/planの完了参照は全部保存されるか全部rollbackする。WorkItemは引き続きVERIFYINGで、runner/独立review/正式承認の成功は生成しない。
+
+`ReadProductVerificationPlan`は元のsealed canonical planとhistoryを検証する。v3の完了成果とSourceResultInputもplan参照を照合し、計画の欠落・破損を成功のまま使わない。後続Taskの固定subject選択は、実装時のCandidateではなく、明示依存の検証担当が採用した最終Candidateを参照する。元のraw finalと計画Artifactは不変で、v2 sidecarの新optional fieldは出力しない。
+
+検証: `go test ./internal/storage ./internal/product -run 'TestProductVerificationAdoption|TestProductVerificationFinalCandidate|TestProductVerificationSealer' -count=1`。host境界、計画/Task/候補の一致、history/Task更新失敗rollback、完了証拠欠落、元結果維持、後続reviewの最終対象選択、実temp Gitからv3採用までを確認する。model/停止factsはfixtureで、runner実行・品質/正式承認やP受入には数えない。runner配置と品質gateへの接続は後続である。

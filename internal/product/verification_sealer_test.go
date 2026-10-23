@@ -169,6 +169,22 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *input.Candidate {
 				t.Fatal("local sealing bypassed host adoption", p, err)
 			}
+			receipt, err := s.Store.AdoptProductVerificationTaskResult(ctx, task.SessionID, verificationRun.ID, "trunk")
+			if err != nil || receipt.State != contract.TaskCompleted {
+				t.Fatal(receipt, err)
+			}
+			sidecar, err := s.Store.ReadProductTaskCandidate(ctx, receipt.ResultID)
+			if err != nil || sidecar.Value.Candidate != *sealed.Candidate || sidecar.Value.VerificationPlan == nil {
+				t.Fatal(sidecar, err)
+			}
+			canonical, err := s.Store.ReadProductVerificationPlan(ctx, sidecar.Value.VerificationPlan.ID)
+			if err != nil || canonical.Value.Candidate != *sealed.Candidate || canonical.Value.Plan.InputCandidateID != sealed.Candidate.ID {
+				t.Fatal(canonical, err)
+			}
+			p, err = s.Store.ReadProductTarget(ctx, task.Target(), ready.Value.WorkItemID)
+			if err != nil || p.Value.Candidate != *sealed.Candidate || p.Value.WorkItem.Phase != domain.Verifying {
+				t.Fatal("adoption invented runner pass", p, err)
+			}
 		})
 	}
 }

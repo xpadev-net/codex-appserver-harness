@@ -27,7 +27,7 @@ type ResultApplication struct {
 var ErrTaskResultReferences = errors.New("Task result references require reconciliation")
 
 func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID string) (ResultApplication, error) {
-	return k.applyTaskResult(ctx, sessionID, runID, nil)
+	return k.applyTaskResult(ctx, sessionID, runID, nil, 0)
 }
 
 // AdoptProductTaskResult is a host-only port. baseBranch comes from trusted
@@ -37,10 +37,20 @@ func (k *KernelStore) AdoptProductTaskResult(ctx context.Context, sessionID, run
 	if strings.TrimSpace(baseBranch) == "" || len(baseBranch) > contract.MaxInline || strings.ContainsAny(baseBranch, "\x00\r\n\t ") {
 		return ResultApplication{}, errors.New("trusted repository base branch required")
 	}
-	return k.applyTaskResult(ctx, sessionID, runID, &baseBranch)
+	return k.applyTaskResult(ctx, sessionID, runID, &baseBranch, 2)
 }
 
-func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID string, productBaseBranch *string) (ResultApplication, error) {
+// AdoptProductVerificationTaskResult atomically adopts a stopped verifier's
+// sealed code/tests, canonical plan and original structured result. No runner
+// pass or local/formal approval is implied.
+func (k *KernelStore) AdoptProductVerificationTaskResult(ctx context.Context, sessionID, runID, baseBranch string) (ResultApplication, error) {
+	if strings.TrimSpace(baseBranch) == "" || len(baseBranch) > contract.MaxInline || strings.ContainsAny(baseBranch, "\x00\r\n\t ") {
+		return ResultApplication{}, errors.New("trusted repository base branch required")
+	}
+	return k.applyTaskResult(ctx, sessionID, runID, &baseBranch, 3)
+}
+
+func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID string, productBaseBranch *string, adoptionSchema int) (ResultApplication, error) {
 	receipt := ResultApplication{RunID: runID}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
@@ -158,6 +168,10 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 		receipt.State, receipt.Reason = task.State, task.Reason
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 	}
+	var productSeal *ProductSeal
+	if productBaseBranch != nil && (result.SchemaVersion != adoptionSchema || result.Outcome != "result" || adoptionSchema == 2 && !UsesProductChangeOutput(wave, task) || adoptionSchema == 3 && !UsesProductVerificationOutput(wave, task)) {
+		return receipt, errors.New("product adoption requires its trusted successful output profile")
+	}
 	if result.SchemaVersion == 3 && result.Outcome == "result" {
 		if result.ProductVerification.SubjectID != productSubjectID(task.ID) || result.ProductChanges[0].WorkItemID != task.Spec.WorkItemIDs[0] || result.ProductChanges[0].WorkspaceID != productWorkspaceID(task.ID) {
 			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "verification output is outside its Task subject/workspace")
@@ -175,11 +189,20 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 		if subject.Digest != result.ProductVerification.SubjectDigest {
 			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "verification output does not match its saved subject")
 		}
-		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product verification sealing and plan adoption are not connected")
-	}
-	var productSeal *ProductSeal
-	if productBaseBranch != nil && (!UsesProductChangeOutput(wave, task) || result.SchemaVersion != 2 || result.Outcome != "result") {
-		return receipt, errors.New("product adoption requires successful P work/fix output")
+		if productBaseBranch == nil {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "verification candidate/plan adoption requires the trusted host")
+		}
+		sealed, err := k.productSealForAdoptionTx(ctx, tx, task.ID, runID)
+		if readinessHoldError(err) || errors.Is(err, ErrProductSealHeld) || errors.Is(err, ErrProductChangeReference) {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "verification sealing evidence is unavailable or stale")
+		}
+		if err != nil {
+			return receipt, err
+		}
+		if sealed.Value.Verification == nil || sealed.VerificationPlan == nil {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "canonical verification plan is unavailable")
+		}
+		productSeal = &sealed
 	}
 	if result.SchemaVersion == 2 && result.Outcome == "result" {
 		ready, err := k.productChangeReferenceTx(ctx, tx, b, wave, task, result.ProductChanges[0])
@@ -470,7 +493,7 @@ func (k *KernelStore) completedTaskResultTx(ctx context.Context, tx *sql.Tx, wav
 	if result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Target != task.Target() || result.Outcome != "result" {
 		return result, fmt.Errorf("%w: dependency result binding conflict", ErrTaskEvidence)
 	}
-	if result.SchemaVersion == 2 {
+	if result.SchemaVersion == 2 || result.SchemaVersion == 3 {
 		if _, err := loadProductTaskCandidate(ctx, tx, task.ResultID); err != nil {
 			return result, err
 		}
