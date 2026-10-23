@@ -39,9 +39,10 @@ type PreparedSession struct {
 	UsageBaseline   *int64
 }
 type SessionDriver struct {
-	RPC          RPC
-	Store        SessionPersistence
-	ProductTools bool // explicit trusted host opt-in, never model input
+	RPC                RPC
+	Store              SessionPersistence
+	ProductTools       bool   // explicit trusted host opt-in, never model input
+	ProductToolProfile string // empty preserves product_v1; product_v2 adds external context
 }
 
 type sessionToolProfiles interface {
@@ -84,8 +85,17 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 		return PreparedSession{}, err
 	}
 	profile := "kernel_v1"
+	if !d.ProductTools && d.ProductToolProfile != "" {
+		return PreparedSession{}, errors.New("product tool profile requires explicit product opt-in")
+	}
 	if d.ProductTools {
 		profile = "product_v1"
+		if d.ProductToolProfile != "" {
+			profile = d.ProductToolProfile
+		}
+		if profile != "product_v1" && profile != "product_v2" {
+			return PreparedSession{}, errors.New("known product tool profile required")
+		}
 	}
 	if profiles, ok := d.Store.(sessionToolProfiles); ok {
 		if err = profiles.PinSessionTools(ctx, b, profile); err != nil {
@@ -117,7 +127,7 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 	} else {
 		params["dynamicTools"] = contract.KernelTools(b.Kind)
 		if d.ProductTools {
-			params["dynamicTools"] = contract.ProductTools(b.Kind)
+			params["dynamicTools"] = contract.ProductToolsForProfile(b.Kind, profile)
 		}
 		// A lost thread/start response must hold the creation intent rather
 		// than silently allocate a second thread to this Task on retry.

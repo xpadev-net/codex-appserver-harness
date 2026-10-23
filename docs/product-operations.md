@@ -209,3 +209,13 @@ review gateはさらに最新のPRのrepo/branch/base/candidate SHA/open/non-dra
 gate自体はdomainの状態変更・publish/review/mergeを行わず、DB/APIの失敗は呼出元へ返す。実際の送信は既存adapterの直前gate再評価・kernel capacity/lease・一度だけのunknown guardを通る。このadapterは既存source journal用で、新K DBにlegacy tableを暗黙作成しない。新P sourceの作成/同期とdaemonへの書込配置はTask_11接続で扱う。
 
 検証: `go test ./internal/service -run TestProductCanonical -count=3`。既存のfake agent/runner workflowと実git worktreeでREVIEWINGまで到達したsourceから、公開資料の構成、外部書込ゼロ、projectionやsource/policy/Issue/validation/candidate/test参照/partial residual/PR番号の不一致拒否、capability取消と欠落reportの拒否を確認する。PR header変更とsymlink/FIFO/group・other書込/サイズ超過/別ユーザー所有も、有効な開始状態を確認してから拒否を検証する。foreign UIDのmappingまたは所有者変更を許されないtest環境では別所有者fixtureだけskipし、root環境の実file検証と区別する。fixtureのrequest capabilityは実Cloudの合格証拠にしない。
+
+### 通知で提示された外部本文の有界読取
+
+runtime JSONの既存項目へ `"product_tools": true` と `"product_tool_profile": "product_v2"` を指定すると、新規threadのcontext_read schemaにexternal sectionを公開する。profile省略時は従来のproduct_v1を使い、そのschemaとkernel_v1を変えない。既存のv1 threadはv1設定で再開できる。v2へ変更するときは保存profile照合と明示main rotation / 新Taskへの引き渡しを使い、既存threadのenumを変更した扱いにしない。unknown profileやbool opt-inを欠くprofile指定はRPC前に拒否する。
+
+Pの現在runへ実際に渡した `external_update` 通知のIDを `context_read` の `reference_id` とし、sectionをexternal、offsetを0、limitを1..2048にする。返るnext_offsetで続きを読み、同じdigest/bytesを確認する。共通gatewayと現在Wave境界、保存run inputのhash/通知binding、署名rawまたは不変snapshotを再照合する。delivery IDやscan IDを知っているだけでは読めず、peer sessionや別runのmessageへ中継された出所だけから新しい読取grantを作らない。
+
+Webhookは保存した正確なpayload bytesを返し、slice digestはpayload bytes自身のSHA-256になる。通知のdelivery digestはID/event/repository/payload全体のdigestなので別の値である。API観測はHead/Sectionsのcanonical JSONを返し、slice digestは通知のsnapshot digestと一致する。後続のscanで現在stateが更新されても、同じ通知は元の観測版を読む。本文は不信なJSONデータとして扱い、instructions/scope/policy/approvalへ変換しない。DB再open後も保存inputのgrantを照合し、破損したbacking dataを拒否する。SourceReadyでHTTPを待たず、読取自体も外部APIを呼ばない。
+
+検証: `go test ./internal/contract ./internal/worker ./internal/control ./internal/storage ./internal/kernelcli -run 'TestExternalContext|TestExternalMessage|TestExternalContextSchema|TestProductToolProfile|TestRuntimeProductTools|TestKernelCLIRun' -count=3`。UTF-8本文の有界page/全bytes/digest、共通gateway読取、後続scan・再open後の同一版、peer/ID推測/relay-only/破損sourceの拒否、既存schema不変とv2のnative公開・profile保存、private runtimeからの設定伝播をfixtureで確認する。実model/GitHubや製品Wave受入の合格とは分ける。

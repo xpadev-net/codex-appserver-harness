@@ -23,16 +23,17 @@ import (
 // or merge-capability prerequisite. IsolationVerified is a trusted operator
 // attestation about descendant containment; per-launch probes remain mandatory.
 type IsolatedConfig struct {
-	ProductTools      bool
-	PrivateRoot       string
-	SessionAuthFile   string // Optional access-token source owned by the authorized session.
-	Model             string
-	CodexBinary       string
-	WorkerCodexHome   string // Dedicated authentication/configuration template.
-	Launcher          []string
-	LauncherContract  string
-	IsolationVerified bool
-	GitDirectories    []string // Canonical approved metadata roots for linked worktrees.
+	ProductTools       bool
+	ProductToolProfile string
+	PrivateRoot        string
+	SessionAuthFile    string // Optional access-token source owned by the authorized session.
+	Model              string
+	CodexBinary        string
+	WorkerCodexHome    string // Dedicated authentication/configuration template.
+	Launcher           []string
+	LauncherContract   string
+	IsolationVerified  bool
+	GitDirectories     []string // Canonical approved metadata roots for linked worktrees.
 }
 
 type runtimeProbe func(context.Context, string, []string, []string, string) (string, error)
@@ -50,6 +51,9 @@ const isolatedPath = "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin
 // root and freezes launcher arguments. Per-session path/version/isolation checks
 // remain inside Open, after the managed launch reservation.
 func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runtime, error) {
+	if config.ProductToolProfile != "" && (!config.ProductTools || config.ProductToolProfile != "product_v1" && config.ProductToolProfile != "product_v2") {
+		return Runtime{}, errors.New("known product tool profile and explicit product opt-in required")
+	}
 	if store == nil {
 		return Runtime{}, errors.New("Kernel store required")
 	}
@@ -60,7 +64,7 @@ func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runt
 	config.PrivateRoot = root
 	config.Launcher = append([]string{}, config.Launcher...)
 	config.GitDirectories = append([]string{}, config.GitDirectories...)
-	return Runtime{Store: store, Factory: IsolatedFactory{Config: config, store: store}, ProductTools: config.ProductTools}, nil
+	return Runtime{Store: store, Factory: IsolatedFactory{Config: config, store: store}, ProductTools: config.ProductTools, ProductToolProfile: config.ProductToolProfile}, nil
 }
 
 func pathContains(root, path string) bool {

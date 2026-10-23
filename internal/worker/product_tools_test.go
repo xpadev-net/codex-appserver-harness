@@ -42,3 +42,18 @@ func TestProductToolsPublishByRoleAndRequirePersistenceBeforeRPC(t *testing.T) {
 		}
 	}
 }
+
+func TestProductToolProfileRejectsUnknownOrImplicitOptInBeforeReservation(t *testing.T) {
+	for _, mode := range []struct {
+		enabled bool
+		profile string
+	}{{false, "product_v2"}, {true, "unknown"}} {
+		d, store, rpc := newSessionDriverFixture("task")
+		d.ProductTools, d.ProductToolProfile = mode.enabled, mode.profile
+		profiles := &recordingToolProfiles{sessionStoreFixture: store}
+		d.Store = profiles
+		if _, err := d.Prepare(context.Background(), "session"); err == nil || store.creating || len(rpc.calls) != 0 || profiles.profile != "" {
+			t.Fatal("invalid host profile reserved a thread or called RPC", mode, err)
+		}
+	}
+}

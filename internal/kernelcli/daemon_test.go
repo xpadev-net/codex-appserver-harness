@@ -206,10 +206,10 @@ func TestKernelCLIRunUsesPrivateRuntimeConfigAndStopsCleanly(t *testing.T) {
 	if err = os.Chmod(auth, 0700); err != nil {
 		t.Fatal(err)
 	}
-	c := RuntimeConfig{SchemaVersion: 1, CodexBinary: binary, WorkerCodexHome: auth, Launcher: []string{binary}, LauncherContract: "argv_passthrough_v1", IsolationVerified: true, GitDirectories: []string{}, ProductTools: true}
+	c := RuntimeConfig{SchemaVersion: 1, CodexBinary: binary, WorkerCodexHome: auth, Launcher: []string{binary}, LauncherContract: "argv_passthrough_v1", IsolationVerified: true, GitDirectories: []string{}, ProductTools: true, ProductToolProfile: "product_v2"}
 	file := operatorFile(t, c)
 	loaded, err := loadRuntime(file, root, "configured")
-	if err != nil || !loaded.ProductTools {
+	if err != nil || !loaded.ProductTools || loaded.ProductToolProfile != "product_v2" {
 		t.Fatal("host product opt-in not loaded", err)
 	}
 	// Empty state runs the complete production constructor and daemon, without
