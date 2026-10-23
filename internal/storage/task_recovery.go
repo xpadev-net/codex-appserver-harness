@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,7 +30,7 @@ type taskRecoveryPermit struct {
 // classification, never a model tool. Bind it to the selected Task state, exact
 // future run and input; polling readiness alone grants no retry authority.
 func (k *KernelStore) AuthorizeTaskRecovery(ctx context.Context, expected domain.Task, runID string, snapshot contract.InputSnapshot, reason string) error {
-	if expected.State != contract.TaskBlocked || runID == "" || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) || !utf8.ValidString(reason) || strings.TrimSpace(reason) == "" || len(reason) > contract.MaxInline {
+	if expected.State != contract.TaskBlocked || (strings.TrimSpace(runID) == "" || len(runID) > 256 || !utf8.ValidString(runID)) || snapshot.ID == "" || snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) || !utf8.ValidString(reason) || strings.TrimSpace(reason) == "" || len(reason) > contract.MaxInline {
 		return ErrTaskRecoveryRequired
 	}
 	if err := contract.ValidateSessionInput(snapshot.Input); err != nil {
@@ -79,6 +80,9 @@ func (k *KernelStore) AuthorizeTaskRecovery(ctx context.Context, expected domain
 	if err = k.checkTaskDispatchTx(ctx, tx, current); err != nil {
 		return err
 	}
+	if err = saveInputSnapshotTx(ctx, tx, snapshot); err != nil {
+		return err
+	}
 	if err = kernelRecordTx(ctx, tx, "task_recovery_permit", runID, expected.ID, permit); err != nil {
 		return err
 	}
@@ -106,4 +110,52 @@ func consumeTaskRecoveryTx(ctx context.Context, tx *sql.Tx, task domain.Task, sn
 	}
 	permit.Consumed = true
 	return kernelRecordTx(ctx, tx, "task_recovery_permit", run.ID, task.ID, permit)
+}
+
+// TaskRecoverySelection is a durable operator-selected future attempt. Lookup
+// does not consume it; consumption and the Attempt increment occur atomically
+// when the common driver reserves the exact run and snapshot.
+type TaskRecoverySelection struct {
+	RunID          string `json:"run_id"`
+	SnapshotID     string `json:"snapshot_id"`
+	SnapshotDigest string `json:"snapshot_digest"`
+	Reason         string `json:"reason"`
+}
+
+func (k *KernelStore) PendingTaskRecovery(ctx context.Context, taskID string) (*TaskRecoverySelection, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	task, err := loadTask(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.State != contract.TaskBlocked {
+		return nil, nil
+	}
+	digest, err := contentDigest(task)
+	if err != nil {
+		return nil, err
+	}
+	// The latest distinct authorization is the operator's chosen retry. Replaying
+	// an older key does not reorder it or reactivate an earlier launch failure.
+	var id string
+	var raw []byte
+	err = tx.QueryRowContext(ctx, `SELECT id,payload FROM records WHERE kind='task_recovery_permit' AND work_item_id=? AND json_extract(payload,'$.task_digest')=? AND json_extract(payload,'$.consumed')=0 ORDER BY rowid DESC LIMIT 1`, task.ID, digest).Scan(&id, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var permit taskRecoveryPermit
+	if err = json.Unmarshal(raw, &permit); err != nil {
+		return nil, err
+	}
+	if permit.RunID != id || permit.SessionID != task.SessionID || permit.TaskDigest != digest || permit.Consumed {
+		return nil, errors.New("Task recovery permit identity conflict")
+	}
+	return &TaskRecoverySelection{permit.RunID, permit.SnapshotID, permit.SnapshotDigest, permit.Reason}, nil
 }

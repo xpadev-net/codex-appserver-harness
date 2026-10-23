@@ -179,7 +179,14 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 			return nil, false, e
 		}
 	}
-	if b.Closed || b.Kind == "task" && b.TaskState != contract.TaskReady && b.TaskState != contract.TaskWaiting {
+	var recovery *storage.TaskRecoverySelection
+	if b.Kind == "task" && b.TaskState == contract.TaskBlocked {
+		recovery, err = s.Store.PendingTaskRecovery(ctx, b.TaskID)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if b.Closed || b.Kind == "task" && b.TaskState != contract.TaskReady && b.TaskState != contract.TaskWaiting && recovery == nil {
 		return nil, false, nil
 	}
 	var hold sourceHold
@@ -187,7 +194,7 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 		if hold.SessionID != b.ID {
 			return nil, false, errors.New("source hold owner conflict")
 		}
-		if hold.PreparationID == b.PreparationID {
+		if hold.PreparationID == b.PreparationID && (recovery == nil || recovery.RunID == hold.RunID) {
 			var applied, stopped bool
 			e := s.Store.DB.QueryRowContext(ctx, "SELECT applied,process_stopped FROM kernel_run_bindings WHERE run_id=? AND session_id=?", hold.RunID, b.ID).Scan(&applied, &stopped)
 			if errors.Is(e, sql.ErrNoRows) {
@@ -205,6 +212,27 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, false, err
+	}
+	if recovery != nil {
+		if state.Wake != nil {
+			return nil, false, storage.ErrTaskRecoveryRequired
+		}
+		ready, e := s.Store.ReadyTasks(ctx, storage.ReadyRequest{Target: b.Target, RecoveryTaskIDs: []string{b.TaskID}})
+		if e != nil {
+			return nil, false, e
+		}
+		found := false
+		for _, candidate := range ready.Tasks {
+			found = found || candidate.Task.ID == b.TaskID
+		}
+		if !found {
+			return nil, false, nil
+		}
+		snapshot, e := s.Store.SavedInputSnapshot(ctx, recovery.SnapshotID, recovery.SnapshotDigest)
+		if e != nil {
+			return nil, false, e
+		}
+		return s.selected(ctx, ExecuteRequest{SessionID: b.ID, RunID: recovery.RunID, Snapshot: snapshot, OutputSchema: schema, Validate: validate})
 	}
 	wake := state.Wake
 	if wake != nil {
@@ -385,6 +413,18 @@ func (s *KernelSource) Complete(ctx context.Context, c Completion) error {
 			return selectionErr
 		}
 		retryable := gated || errors.Is(c.Err, context.Canceled) || errors.Is(c.Err, context.DeadlineExceeded) || errors.Is(c.Err, storage.ErrManagedProcessHeld) || errors.Is(c.Err, storage.ErrExecutionCapacity)
+		if state.Binding.Kind == "task" && state.Binding.TaskState == contract.TaskBlocked {
+			// A preparation permanently claims this future run ID even if no turn was
+			// reserved. Generic blocked-input gates must not make that ID auto-retryable.
+			var claim string
+			claimErr := s.Store.Record(ctx, "managed_run_claim", c.RunID, &claim)
+			if claimErr != nil && !errors.Is(claimErr, sql.ErrNoRows) {
+				return claimErr
+			}
+			if claimErr == nil && claim != "" {
+				retryable = false
+			}
+		}
 		if !retryable {
 			if err = s.hold(ctx, state, c.RunID, "execution did not reserve a run; explicit dispatch reconciliation required"); err != nil {
 				return err

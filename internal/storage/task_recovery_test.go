@@ -321,3 +321,28 @@ func TestTemplateEvidenceReaderPreservesOperationalErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPendingTaskRecoveryUsesLatestDistinctDecisionAndSavedInput(t *testing.T) {
+	ctx := context.Background()
+	k, task := blockedRecoveryFixture(t)
+	if pending, err := k.PendingTaskRecovery(ctx, task.ID); err != nil || pending != nil {
+		t.Fatal(pending, err)
+	}
+	snapshot := sessionSnapshot()
+	for _, id := range []string{"first-explicit", "next-explicit", "first-explicit"} {
+		if err := k.AuthorizeTaskRecovery(ctx, task, id, snapshot, "operator classified recovery"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := k.PendingTaskRecovery(ctx, task.ID)
+	if err != nil || pending == nil || pending.RunID != "next-explicit" {
+		t.Fatal("old replay reordered decisions", pending, err)
+	}
+	saved, err := k.SavedInputSnapshot(ctx, pending.SnapshotID, pending.SnapshotDigest)
+	if err != nil || string(saved.Input) != string(snapshot.Input) {
+		t.Fatal(saved, err)
+	}
+	if err = k.AuthorizeTaskRecovery(ctx, task, strings.Repeat("x", 257), snapshot, "bounded identity"); err == nil {
+		t.Fatal("unbounded retry ID accepted")
+	}
+}
