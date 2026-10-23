@@ -135,3 +135,13 @@ operation由来とassignment由来の購読は、それぞれ元operationまた�
 plan、登録、PR bindingの途中で購読保存が失敗すれば全体をrollbackする。元の購読時刻を保持して、binding前に届いた更新も回収する。Taskのwaitのstorage試験は認可済みwaitを模擬したもので、native P実行の合格にはしない。`product_readiness_unavailable`はTask_11のcanonical接続まで維持する。
 
 検証: `go test ./internal/storage -run '^TestTaskPRSubscriptions' -count=1`。planとの原子性、WorkItem所有登録後の遅延candidate projection、call非生成、binding前raw/後続snapshotとwait、再open/再送、binding rollback、兄弟/未割当/偽operation、既存PRと新plan・旧scope履歴を確認する。非同期P daemonと既存PR工程への接続は後続である。
+
+## 外部読取の独立worker
+
+`product.Observer`はcontroller lock下で使うread専用の独立loopで、KernelSourceのready処理へHTTPを持ち込まない。binding済み資源を有界cursorで読み、既定2・最大8 workerで異なるPRを並行収集する。同じ資源を重複実行せず、完了・失敗後は既定60秒の間隔を置く。一つの遅い読取や失敗で後続資源の枠を塞がない。API/collectorは共有cancelと30秒上限を尊重し、loopは全workerが戻るまでstore/controller ownerを保持する。
+
+変化が保存された場合だけ非blockingなOnMutation hintで通常の通知回収へつなぐ。再起動時は保存stateへ照合し、同じ内容の再取得を新しい変更にしない。Report/OnMutationは短い非blocking callbackを使う。これはread workerであり、publish/review/mergeやモデル起動を行わない。
+
+`PRObservationTargets`はbindingとprojectionを同じDB snapshotで検査し、観測対象のPR番号/branchを元資源へ固定する。pause/cancelや現在のbranch変更でも過去の外部事実を観測できるが、canonical projection自体を戻さず書込許可にも使わない。
+
+検証: `go test ./internal/product ./internal/storage -run 'TestPRObserver|TestPRObservation|TestResource|TestTaskPRSubscriptions' -count=1`。外部読取をblockしたまま別PR/DB読取が進むこと、失敗の非starvation、cancel終了、poll間隔、restart重複排除、資源cursorとcancel後のheaderを確認する。追加資源はobserver scheduling専用の保存fixtureで、PR mutation/正式承認の実接続合格にはしない。daemon設定/HTTP配置、書込dispatchとcanonical工程の接続は後続である。
