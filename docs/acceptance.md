@@ -27,7 +27,7 @@ AT-009の新fix Task/sessionはKのcomponentで追加・検証した。Pの旧ro
 | --- | --- | --- |
 | S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
 | K | 合格。新DB・汎用WaveのK適用ATを確認 | [K受入表と実行証拠](background-wave-acceptance.md)。P/Cloud/移行の完了と分ける |
-| P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
+| P | [Task_8 component](task8-github-acceptance.md)はfixture合格。製品Wave工程の接続と外部能力の成立は未確認 | Task_11/13、既存#20。正式承認・CI/rulesと製品パイプラインの証拠 |
 | M | fixture移行は未実装。依頼者確認で運用DBなし | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
 新しいAT-050〜059は[要件の受入表](../requirements.md#10-受入テスト)を原本とする。K/P/Mで適用/未実行/blocked/合格を別々に記録し、実装前の目標値を実測値として掲載しない。
