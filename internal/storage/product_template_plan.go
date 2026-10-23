@@ -15,8 +15,8 @@ func productRepairPhase(waveID, key, local string, task contract.TaskSpec) contr
 	return contract.PhaseSpec{ID: structureID("product-repair-phase-", waveID, key+":"+local), Tasks: []contract.TaskSpec{task}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{task.ID}}, FailurePolicy: "drain_and_block"}
 }
 
-func (k *KernelStore) buildProductTemplatePlanTx(ctx context.Context, tx *sql.Tx, w domain.Wave, current contract.PlanProposal, key string, sourceResults []string, reviews []domain.Task, reports map[string]ProductTaskReviewSnapshot, owners []productTemplateOwner, verifier domain.Task, binding *ProductTemplateBinding) (contract.PlanProposal, map[string]templateReviewLineage, error) {
-	plan := contract.PlanProposal{SchemaVersion: 1, Phases: append([]contract.PhaseSpec{}, current.Phases...), Templates: append([]contract.FixReviewTemplate{}, current.Templates...)}
+func (k *KernelStore) buildProductTemplatePlanTx(ctx context.Context, tx *sql.Tx, w domain.Wave, current contract.PlanProposal, position int, key string, sourceResults []string, reviews []domain.Task, reports map[string]ProductTaskReviewSnapshot, owners []productTemplateOwner, verifier domain.Task, binding *ProductTemplateBinding) (contract.PlanProposal, map[string]templateReviewLineage, error) {
+	plan := contract.PlanProposal{SchemaVersion: 1, Phases: append([]contract.PhaseSpec{}, current.Phases[:position+1]...), Templates: append([]contract.FixReviewTemplate{}, current.Templates...)}
 	lineages := map[string]templateReviewLineage{}
 	registration, err := loadProductWorkItemRegistration(ctx, tx, binding.WorkItemID)
 	if err != nil {
@@ -29,16 +29,7 @@ func (k *KernelStore) buildProductTemplatePlanTx(ctx context.Context, tx *sql.Tx
 	}
 	inputs := []string{}
 	inputSet := map[string]bool{}
-	reviewIDs := map[string]bool{}
 	for _, review := range reviews {
-		reviewIDs[review.LocalID] = true
-	}
-	for _, review := range reviews {
-		for _, dep := range review.Spec.DependsOn {
-			if reviewIDs[dep.TaskID] {
-				return plan, lineages, fmt.Errorf("%w: peer product review dependency needs parent remapping", ErrTemplateNeedsMain)
-			}
-		}
 		var result contract.TaskResult
 		if err := taskEvidenceRecord(ctx, tx, "task_result", review.ResultID, &result); err != nil {
 			return plan, lineages, err
@@ -127,6 +118,13 @@ func (k *KernelStore) buildProductTemplatePlanTx(ctx context.Context, tx *sql.Tx
 			binding.Replacements[review.ID] = append(binding.Replacements[review.ID], structureID("task-", w.ID, local))
 		}
 	}
-	plan.Phases = append(plan.Phases, phase)
+	groups, err := k.remapProductReviewPhasesTx(ctx, tx, w, current, key, binding, reviews, phase)
+	if err != nil {
+		return plan, lineages, err
+	}
+	plan.Phases = append(plan.Phases, groups...)
+	if err := k.appendProductFuturePhasesTx(ctx, tx, w, current, position, key, binding, reviews, &plan, lineages); err != nil {
+		return plan, lineages, err
+	}
 	return plan, lineages, nil
 }
