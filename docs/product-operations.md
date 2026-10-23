@@ -204,8 +204,8 @@ thread作成前に `PinSessionTools` が論理session / generationごとの kern
 
 `service.Controller.ProductPublicationGate` / `ProductReviewGate` を既存 `product.Publisher.Gate` / `ReviewRequester.Gate` に渡せる。これらはsourceの既存WorkItem journalを読み、kernelのprojectionそのものを検証証拠として扱わない。明示した信頼済みConfig、WorkItem全体/候補/PR番号の一致、保存policy snapshot、最新Issue本文/hold、検証計画のidentity/criterion coverageと固定commit内のtest参照、現在候補のrequired runner結果を確認する。部分範囲では残作業記録とcommitのclosing textも確認する。公開bodyは従来と同じ `publicationBody` から構成する。最後にWorkItemを読み直し、途中のpause等を拒否する。
 
-review gateはさらに最新のPRのrepo/branch/base/candidate SHA/open/non-draftを照合する。CapabilitiesPathがあれば、上限1MiB・他ユーザー書込不可の通常ファイルをsymlink/FIFOを避けて毎回読み、欠落したfieldを以前のverified値で埋めない。構成とrepositoryの一致、cloud_requestのverified evidenceとtrusted requester/triggerを要求する。cloud_native_approvalがunknownでも依頼capabilityとは分け、依頼可能という結果から正式承認を生成しない。
+review gateはさらに最新のPRのrepo/branch/base/candidate SHA/open/non-draftを照合する。CapabilitiesPathがあれば、上限1MiB・実行ユーザー所有・group/other書込不可の通常ファイルをsymlink/FIFOを避けて毎回読み、欠落したfieldを以前のverified値で埋めない。構成とrepositoryの一致、cloud_requestのverified evidenceとtrusted requester/triggerを要求する。cloud_native_approvalがunknownでも依頼capabilityとは分け、依頼可能という結果から正式承認を生成しない。
 
 gate自体はdomainの状態変更・publish/review/mergeを行わず、DB/APIの失敗は呼出元へ返す。実際の送信は既存adapterの直前gate再評価・kernel capacity/lease・一度だけのunknown guardを通る。このadapterは既存source journal用で、新K DBにlegacy tableを暗黙作成しない。新P sourceの作成/同期とdaemonへの書込配置はTask_11接続で扱う。
 
-検証: `go test ./internal/service -run TestProductCanonical -count=3`。既存のfake agent/runner workflowと実git worktreeでREVIEWINGまで到達したsourceから、公開資料の構成、外部書込ゼロ、projectionやsource/policy/Issue/validation/candidate/test参照/partial residual/PR番号の不一致拒否、capability取消と欠落reportの拒否を確認する。fixtureのrequest capabilityは実Cloudの合格証拠にしない。
+検証: `go test ./internal/service -run TestProductCanonical -count=3`。既存のfake agent/runner workflowと実git worktreeでREVIEWINGまで到達したsourceから、公開資料の構成、外部書込ゼロ、projectionやsource/policy/Issue/validation/candidate/test参照/partial residual/PR番号の不一致拒否、capability取消と欠落reportの拒否を確認する。PR header変更とsymlink/FIFO/group・other書込/サイズ超過/別ユーザー所有も、有効な開始状態を確認してから拒否を検証する。所有者変更を許されないtest環境では別所有者fixtureだけskipし、root環境の実file検証と区別する。fixtureのrequest capabilityは実Cloudの合格証拠にしない。

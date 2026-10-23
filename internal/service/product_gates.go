@@ -156,7 +156,8 @@ func (c *Controller) ProductReviewGate(ctx context.Context, saved storage.Produc
 		if err != nil {
 			return request, err
 		}
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Size() > 1<<20 {
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !info.Mode().IsRegular() || !ok || stat.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0022 != 0 || info.Size() > 1<<20 {
 			return request, errors.New("bounded trusted capability report required")
 		}
 		raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
@@ -171,9 +172,9 @@ func (c *Controller) ProductReviewGate(ctx context.Context, saved storage.Produc
 			return request, err
 		}
 	}
-	copy := *c
-	copy.Capabilities = report
-	if report.Version != 1 || report.ObservedAt.IsZero() || !strings.EqualFold(report.Repository, c.Config.Repository) || report.DefaultBranch != c.Config.BaseBranch || !copy.reviewPolicy().VerifiedRequest || c.Config.RequesterID < 1 || strings.TrimSpace(c.Config.ReviewTrigger) == "" {
+	reviewController := *c
+	reviewController.Capabilities = report
+	if report.Version != 1 || report.ObservedAt.IsZero() || !strings.EqualFold(report.Repository, c.Config.Repository) || report.DefaultBranch != c.Config.BaseBranch || !reviewController.reviewPolicy().VerifiedRequest || c.Config.RequesterID < 1 || strings.TrimSpace(c.Config.ReviewTrigger) == "" {
 		return request, errors.New("canonical Cloud review request route is unverified")
 	}
 	latest, err := c.Store.Get(ctx, p.WorkItem.ID)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -17,8 +18,12 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-func productGateSnapshot(p storage.ProductTarget) storage.ProductTargetSnapshot {
-	raw, _ := json.Marshal(p)
+func productGateSnapshot(t *testing.T, p storage.ProductTarget) storage.ProductTargetSnapshot {
+	t.Helper()
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return storage.ProductTargetSnapshot{Value: p, Digest: fmt.Sprintf("%x", sha256.Sum256(raw))}
 }
 func canonicalGateFixture(t *testing.T, reportFile bool) (*Controller, *fakeGH, storage.ProductTargetSnapshot) {
@@ -28,7 +33,10 @@ func canonicalGateFixture(t *testing.T, reportFile bool) (*Controller, *fakeGH, 
 	if reportFile {
 		// Host configuration is fixed before starting the fixture's workflow.
 		c.Config.CapabilitiesPath = filepath.Join(t.TempDir(), "capabilities.json")
-		raw, _ := json.Marshal(c.Capabilities)
+		raw, err := json.Marshal(c.Capabilities)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(c.Config.CapabilitiesPath, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -49,7 +57,7 @@ func canonicalGateFixture(t *testing.T, reportFile bool) (*Controller, *fakeGH, 
 			if gh.posts != 0 {
 				t.Fatal("gate fixture published before evaluation")
 			}
-			return c, gh, productGateSnapshot(storage.ProductTarget{Target: contract.Target{WaveID: "wave", ScopeRevision: 1, PlanRevision: 1, PolicyRevision: 1}, Repository: c.Config.Repository, BaseBranch: c.Config.BaseBranch, WorkItem: w, Candidate: candidate})
+			return c, gh, productGateSnapshot(t, storage.ProductTarget{Target: contract.Target{WaveID: "wave", ScopeRevision: 1, PlanRevision: 1, PolicyRevision: 1}, Repository: c.Config.Repository, BaseBranch: c.Config.BaseBranch, WorkItem: w, Candidate: candidate})
 		}
 		drive(t, c, 1)
 	}
@@ -90,7 +98,7 @@ func TestProductCanonicalPublicationGateRejectsProjectionClaimsAndChangedEvidenc
 					Name string `json:"name"`
 				}{Name: c.Config.HoldLabel})
 			case "validation_missing":
-				if _, err := c.Store.DB.Exec("DELETE FROM records WHERE kind='validation'"); err != nil {
+				if _, err := c.Store.DB.ExecContext(ctx, "DELETE FROM records WHERE kind='validation'"); err != nil {
 					t.Fatal(err)
 				}
 			case "validation_failed":
@@ -147,7 +155,7 @@ func TestProductCanonicalReviewGateReloadsRequestProofWithoutInventingApproval(t
 	c, gh, saved := canonicalGateFixture(t, true)
 	drive(t, c, 1) // Existing legacy publisher creates the fixture's canonical PR.
 	saved.Value.PRNumber = gh.pr.Number
-	saved = productGateSnapshot(saved.Value)
+	saved = productGateSnapshot(t, saved.Value)
 	report := c.Capabilities
 	report.Capabilities = map[string]contract.Capability{}
 	for key, value := range c.Capabilities.Capabilities {
@@ -155,7 +163,10 @@ func TestProductCanonicalReviewGateReloadsRequestProofWithoutInventingApproval(t
 	}
 	report.Capabilities["cloud_native_approval"] = contract.Capability{State: contract.Unknown, Reason: "not observed"}
 	save := func() {
-		raw, _ := json.Marshal(report)
+		raw, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(c.Config.CapabilitiesPath, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -178,5 +189,103 @@ func TestProductCanonicalReviewGateReloadsRequestProofWithoutInventingApproval(t
 	}
 	if _, err := c.ProductReviewGate(ctx, saved); err == nil {
 		t.Fatal("missing report fields inherited verified proof")
+	}
+}
+
+func TestProductCanonicalReviewGateRejectsChangedPRAndUnsafeReport(t *testing.T) {
+	ctx := context.Background()
+	c, gh, saved := canonicalGateFixture(t, true)
+	drive(t, c, 1)
+	saved.Value.PRNumber = gh.pr.Number
+	saved = productGateSnapshot(t, saved.Value)
+	if _, err := c.ProductReviewGate(ctx, saved); err != nil {
+		t.Fatal("valid baseline rejected before negative cases", err)
+	}
+	pr := gh.pr
+	raw, err := json.Marshal(c.Capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"head_repo", "base_repo", "head_branch", "base_branch", "head_sha", "base_sha", "closed", "draft", "merged", "symlink", "fifo", "group_write", "other_write", "oversized", "foreign_owner"} {
+		t.Run(mode, func(t *testing.T) {
+			gh.pr = pr
+			path := c.Config.CapabilitiesPath
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "head_repo":
+				gh.pr.Head.Repo.ID++
+			case "base_repo":
+				gh.pr.Base.Repo.ID++
+			case "head_branch":
+				gh.pr.Head.Ref = "another-branch"
+			case "base_branch":
+				gh.pr.Base.Ref = "another-base"
+			case "head_sha":
+				gh.pr.Head.SHA = strings.Repeat("e", 40)
+			case "base_sha":
+				gh.pr.Base.SHA = strings.Repeat("e", 40)
+			case "closed":
+				gh.pr.State = "closed"
+			case "draft":
+				gh.pr.Draft = true
+			case "merged":
+				gh.pr.Merged = true
+			case "symlink":
+				target := filepath.Join(t.TempDir(), "other-report")
+				if err := os.WriteFile(target, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			case "fifo":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := syscall.Mkfifo(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "group_write":
+				if err := os.Chmod(path, 0660); err != nil {
+					t.Fatal(err)
+				}
+			case "other_write":
+				if err := os.Chmod(path, 0602); err != nil {
+					t.Fatal(err)
+				}
+			case "oversized":
+				if err := os.WriteFile(path, []byte(strings.Repeat(" ", (1<<20)+1)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign_owner":
+				foreign := 65534
+				if os.Geteuid() == foreign {
+					foreign = 65533
+				}
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(path, foreign, -1); err != nil {
+					if os.IsPermission(err) {
+						t.Skip("fixture cannot change report ownership")
+					}
+					t.Fatal(err)
+				}
+			}
+			if _, err := c.ProductReviewGate(ctx, saved); err == nil {
+				t.Fatal("unsafe review source accepted", mode)
+			}
+			if gh.posts != 1 || gh.requests != 0 || gh.merges != 0 {
+				t.Fatal("gate performed a mutation")
+			}
+		})
 	}
 }
