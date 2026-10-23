@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
+	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
@@ -46,10 +47,29 @@ func (s CandidateSealer) Seal(ctx context.Context, taskID, runID string) (storag
 				return err
 			}
 		}
+		ctx = workspace.WithStoppedCommands(ctx)
+		if input := saved.Value.Verification; input != nil {
+			if err := verification.CheckChanges(ctx, v.CWD, input.Subject.Value.Candidate.SHA, input.Policy.Value.VerifierPaths); err != nil {
+				return err
+			}
+			if err := input.InputPlan.ValidateFiles(v.CWD); err != nil {
+				return err
+			}
+		}
 		pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: v.Request.BaseSHA}
 		frozen, err := workspace.FreezePinned(ctx, pinned, "Harness candidate "+saved.ID)
 		if err != nil {
 			return err
+		}
+		if input := saved.Value.Verification; input != nil {
+			if err := verification.CheckChanges(ctx, v.CWD, input.Subject.Value.Candidate.SHA, input.Policy.Value.VerifierPaths); err != nil {
+				return err
+			}
+			if err := input.InputPlan.ValidateCommit(ctx, v.CWD, frozen.SHA); err != nil {
+				return err
+			}
+			checked := input.CheckProof()
+			proof.Verification = &checked
 		}
 		proof.Outcome, proof.Reason, proof.Frozen = "sealed", "fixed checkout sealed; local Git owner and descendants stopped", &frozen
 		return nil

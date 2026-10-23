@@ -428,3 +428,13 @@ verificationのready証拠からworkspace-write binding、Task/planの固定入�
 許可パスはtrusted policyで固定してmodelへ指示する。製品コード変更の拒否、テスト変更の停止後sealing・計画検証/採用は後続の範囲検査に接続するため、このworkspace準備だけで製品readinessやmodel turnを許可しない。runner成功・品質/正式承認も生成しない。
 
 検証: `go test ./internal/storage ./internal/product -run 'TestProductVerificationWorkspace|TestProductVerificationPreparer' -count=1`。subject/policy/baseの固定、書込bindingとv3入力参照、policy不在/破損/別repository、証拠欠落後の拒否、実temp Gitの独立領域・固定HEAD・テストファイル追加と実装領域非変更を確認する。model factsとファイル書込はfixtureであり、実modelによる検証やP受入には数えない。
+
+## verificationの差分・計画を検査するlocal sealing
+
+`CandidateSealer`はschema v3の停止済みverification runにも対応する。通常のrun/snapshot/manifest/Task固有workspaceの照合に加え、固定subjectと現在Candidate、policyと変更許可パス、今回のTask/sessionが所有するcommittedな計画Artifactの実bytes/digestを検査する。計画は1 MiB以内で、元要求とWorkItemの全included criterion、入力Candidate、trusted policyのprofileに対して既存`verification.DecodePlan`を適用する。blocker/未検証criterion、未登録profileや対象不一致を残す成功申告は受け付けない。
+
+一度だけのGit claim後、strict stopped-command profileで入力Candidate SHAからの差分をtrusted許可パスと照合し、計画のテスト参照がCWD内のregular fileであることを確認してからFreezePinnedへ進む。commit後にも同じ差分を検査し、計画参照が固定commitのtracked regular fileであることを確認する。差分/tree検査ではreplace refを無効化する。製品コード変更や存在しないテスト参照は成功receiptにせず、元の作業領域と失敗履歴を残す。
+
+hostの停止証拠はsubject/policy/計画Artifactのdigestと実施した検査を含む。保存側は元入力を再照合し、新CandidateのBaseSHAに保存済みcomparison baseを使う。freshな場合だけ、元計画を最終Candidateに`verification.Rebind`した計画を別保存する。scopeはdigestで固定して再照合し、大きな元要求本文をsealing recordへ重複保存しない。途中で出所が変わった場合はstaleのcommit履歴にし、SQL/運用失敗はrollbackして照合用予約を保持する。元のArtifact bytesとraw finalは書き換えない。
+
+検証: `go test ./internal/storage ./internal/product ./internal/verification -run 'TestProductVerificationSeal|TestProductSeal|TestCandidateSealer|TestCheckChanges|TestPlan' -count=1`。元計画・comparison base・正常停止proof・final plan rebind・再送、対象/profile/coverage/blocker拒否、実temp Gitのテスト追加commitと製品コード/欠落参照のcommit前拒否を確認する。modelと停止factsはfixtureで、正式runnerの実行成功やP受入には数えない。local sealingだけではactive ProductTarget/Task成功へ採用せず、v3成果/計画の原子的採用・runner品質gateへの配置は後続である。
