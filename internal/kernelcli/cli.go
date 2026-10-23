@@ -40,6 +40,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	session := fs.String("session", "main", "logical session ID (init or session reads)")
 	model := fs.String("model", "", "configured model (init)")
 	runtimeFile := fs.String("runtime", "", "private runtime launch-policy JSON (run)")
+	observerFile := fs.String("pr-observer", "", "optional private PR read-observer JSON (run)")
 	file := fs.String("file", "", "direct request or versioned operator JSON")
 	id := fs.String("id", "", "stored Wave, Artifact, message, observation, or run ID")
 	after := fs.String("after", "", "last Wave/Task ID from a previous page")
@@ -91,6 +92,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["id"], allowed["after"], allowed["after-phase"], allowed["limit"] = true, true, true, true
 	case "run":
 		allowed["runtime"] = true
+		allowed["pr-observer"] = true
 	case "watch":
 		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
@@ -195,6 +197,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 		return encode(view)
 	case "run":
+		observer, err := loadPRObserver(*observerFile)
+		if err != nil {
+			return err
+		}
 		config, err := loadRuntime(*runtimeFile, *root, c.Model)
 		if err != nil {
 			return err
@@ -202,6 +208,9 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		runtime, err := control.NewIsolatedRuntime(k, config)
 		if err != nil {
 			return err
+		}
+		if observer != nil {
+			return runDaemon(ctx, k, runtime, errOut, observer)
 		}
 		return runDaemon(ctx, k, runtime, errOut)
 	case "watch":

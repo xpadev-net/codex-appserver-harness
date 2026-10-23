@@ -213,7 +213,10 @@ func TestKernelCLIRunUsesPrivateRuntimeConfigAndStopsCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, []string{"run", "--root", root, "--runtime", file}, io.Discard, io.Discard) }()
+	observer := operatorFile(t, PRObserverConfig{SchemaVersion: 1, Workers: 2, EverySeconds: 60})
+	go func() {
+		done <- Run(ctx, []string{"run", "--root", root, "--runtime", file, "--pr-observer", observer}, io.Discard, io.Discard)
+	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		if err = ipc.Notify(context.Background(), filepath.Join(root, ipc.SocketName), ""); err == nil {

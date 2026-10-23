@@ -145,3 +145,21 @@ plan、登録、PR bindingの途中で購読保存が失敗すれば全体をrol
 `PRObservationTargets`はbindingとprojectionを同じDB snapshotで検査し、観測対象のPR番号/branchを元資源へ固定する。pause/cancelや現在のbranch変更でも過去の外部事実を観測できるが、canonical projection自体を戻さず書込許可にも使わない。
 
 検証: `go test ./internal/product ./internal/storage -run 'TestPRObserver|TestPRObservation|TestResource|TestTaskPRSubscriptions' -count=1`。外部読取をblockしたまま別PR/DB読取が進むこと、失敗の非starvation、cancel終了、poll間隔、restart重複排除、資源cursorとcancel後のheaderを確認する。追加資源はobserver scheduling専用の保存fixtureで、PR mutation/正式承認の実接続合格にはしない。daemon設定/HTTP配置、書込dispatchとcanonical工程の接続は後続である。
+
+### daemon で観測を有効にする
+
+既存の K 起動設定とは別に、同一ユーザー所有・0600 の JSON を明示する。
+
+```json
+{"schema_version":1,"workers":2,"every_seconds":60}
+```
+
+```sh
+harness wave run --root /absolute/private/root --runtime /absolute/private/runtime.json --pr-observer /absolute/private/pr-observer.json
+```
+
+実際の CLI バイナリ名に合わせて実行する。workers は 1..8、every_seconds は 1..3600 で、いずれも省略せず指定する。設定を渡さない起動では観測 worker は動かない。読取には controller 側の `gh` 認証を使い、worker Codex home へ認証を追加しない。binding 済み資源だけを DB から選ぶため、新規の K DB に GitHub repository を必須にしない。
+
+daemon は IPC、model dispatch、観測を別 goroutine で動かし、いずれかが異常終了したら共通 cancel で停止する。観測の失敗は個別資源の Report と次回 poll へ進む。daemon 終了時は全 worker の終了まで controller lock / store を保持する。Webhook HTTP 配置と外部書込 dispatch はこの設定に含まれず後続である。
+
+検証: daemon worker 待機中の IPC 応答、cancel 中の lock 保持と join 後の解放、異常終了と予期しない正常 return の伝播、private/schema/上限の拒否、実 CLI の opt-in constructor 起動・停止を `go test ./internal/kernelcli -run 'TestPRObserver|TestKernelDaemon|TestKernelCLIRun' -count=3` で確認する。実 GitHub/model 接続はこの fixture の合格に含めない。
