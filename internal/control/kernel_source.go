@@ -84,7 +84,7 @@ func (s *KernelSource) bindingContract(ctx context.Context, b contract.SessionBi
 		if err != nil {
 			return nil, nil, err
 		}
-		if wave.Policy.Stage == "P" && wave.Policy.Product && (task.Spec.Kind == "work" || task.Spec.Kind == "fix") && len(task.Spec.WorkItemIDs) > 0 {
+		if storage.UsesProductChangeOutput(wave, task) {
 			return contract.StrictOutputSchema(contract.ProductTaskResultSchema()), worker.ValidateProductTaskOutput, nil
 		}
 	}
