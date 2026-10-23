@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -56,18 +57,22 @@ func observedRequest(ctx context.Context, api ReviewAPI, claim storage.PRDispatc
 	if err != nil {
 		return o, err
 	}
+	var found *github.Comment
+	marker := "<!-- harness-review:" + packet.RoundID + " -->"
 	for _, c := range comments {
-		if c.User.ID != packet.RequesterID || c.Body != packet.Body() {
+		if c.User.ID != packet.RequesterID || !strings.Contains(c.Body, marker) {
 			continue
 		}
-		if c.ID <= 0 || o.CommentID != 0 {
+		if c.ID <= 0 || found != nil {
 			return o, errors.New("ambiguous review request comments")
 		}
-		o = storage.PRReviewRequestObservation{ProofID: packet.OperationID + ":comment", RepositoryID: claim.Product.Value.WorkItem.RepositoryID, PRNumber: claim.Product.Value.PRNumber, RoundID: packet.RoundID, CommentID: c.ID, RequesterID: c.User.ID, Body: c.Body, ObservedAt: time.Now().UTC()}
+		copy := c
+		found = &copy
 	}
-	if o.CommentID == 0 || (expectedID != 0 && o.CommentID != expectedID) {
+	if found == nil || found.Body != packet.Body() || (expectedID != 0 && found.ID != expectedID) {
 		return o, storage.ErrPRReconciliationRequired
 	}
+	o = storage.PRReviewRequestObservation{ProofID: packet.OperationID + ":comment", RepositoryID: claim.Product.Value.WorkItem.RepositoryID, PRNumber: claim.Product.Value.PRNumber, RoundID: packet.RoundID, CommentID: found.ID, RequesterID: found.User.ID, Body: found.Body, ObservedAt: time.Now().UTC()}
 	return o, nil
 }
 func (r ReviewRequester) Request(ctx context.Context, id, owner string) (storage.PRCompletionReceipt, error) {

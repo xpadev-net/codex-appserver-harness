@@ -194,7 +194,7 @@ func TestLostReviewRequestRecoversReadOnlyAfterPauseWithoutCurrentGate(t *testin
 	}
 }
 func TestReviewRequestRecoveryRejectsAbsentEditedForeignAndDuplicateComments(t *testing.T) {
-	for _, mode := range []string{"absent", "body", "author", "duplicate", "owner"} {
+	for _, mode := range []string{"absent", "body", "author", "duplicate", "edited_duplicate", "owner"} {
 		t.Run(mode, func(t *testing.T) {
 			r, api, _, id := requestFixture(t)
 			ctx := context.Background()
@@ -212,11 +212,32 @@ func TestReviewRequestRecoveryRejectsAbsentEditedForeignAndDuplicateComments(t *
 				api.comments[0].User.ID++
 			case "duplicate":
 				api.comments = append(api.comments, api.comments[0])
+			case "edited_duplicate":
+				duplicate := api.comments[0]
+				duplicate.ID++
+				duplicate.Body += "edited"
+				api.comments = append(api.comments, duplicate)
 			case "owner":
 				proof.OwnerID = "other"
 			}
 			if _, err := r.Reconcile(ctx, id, proof); err == nil || api.requestWrites != 1 {
 				t.Fatal("ambiguous recovery settled or resent", err)
+			}
+		})
+	}
+}
+
+func TestReviewRequestRejectsMixedEditedDuplicateBeforeSending(t *testing.T) {
+	for _, reversed := range []bool{false, true} {
+		t.Run(fmt.Sprint(reversed), func(t *testing.T) {
+			r, api, _, id := requestFixture(t)
+			packet := storage.PRReviewRequestPayload{RoundID: id, Trigger: "@review please review"}
+			api.comments = []github.Comment{{ID: 81, User: github.User{ID: 71}, Body: packet.Body()}, {ID: 82, User: github.User{ID: 71}, Body: packet.Body() + "edited"}}
+			if reversed {
+				api.comments[0], api.comments[1] = api.comments[1], api.comments[0]
+			}
+			if _, err := r.Request(context.Background(), id, "owner"); err == nil || api.requestWrites != 0 {
+				t.Fatal("ambiguous round accepted", api.requestWrites, err)
 			}
 		})
 	}
