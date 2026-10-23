@@ -502,6 +502,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_11: PRパイプラインとWaveの統合（P）
 
+- split: 候補作成前のtrusted WorkItem所属・criterion割当・scope/policy CASと履歴を保存し、親/割当Taskの入力へsource digestを結び付けた。初回Wave・全所属・通知・receiptを原子的に保存する共通source portと、private operator入力による`wave create-product`を接続した。Kの`wave create`と上限/権限を分離し、Issue pool取得・worktree・製品結果/候補・readinessとdaemon書込の接続は継続する。P全体の受入は未完了。
 - type: impl
 - owns:
   - internal/service/cli.go

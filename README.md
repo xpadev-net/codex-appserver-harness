@@ -4,7 +4,7 @@ Go製のIssue実装ハーネスです。SQLiteで進行状態と外部操作を�
 
 設計の改訂案（v0.4）は、大きな依頼をWave→Phase→Taskへ分解し、各Taskに独立した使い捨てsessionを割り当て、実行中は親子メッセージとイベント通知で再開する構成です。Taskは親と同じruntimeを使い、Wave呼び出しを禁止します。[改訂要件](requirements.md)、[現行との差分](docs/background-wave-gap-analysis.md)、[実装設計](implementation-plan.md)、[実行計画](docs/coding-agent/plans/active/background-wave-plan.md)を参照してください。
 実接続の先行確認（S）、PRなしのWave基盤（K）、GitHub接続（P）、旧作業の移行（M）を分けて受け入れる計画です。Phase条件・失敗/反復・汎用成果・上限・親thread復旧は実装設計へ記録しています。
-Waveの新DB、共通runtime、main/Task tools、並行scheduler、独立review/fixと検証済み完了のcomponent実装を追加しています。K用CLIの初期操作は以下を参照してください。実modelによるK全体受入、Pへの接続、Mのfixture移行は追跡中です。
+Waveの新DB、共通runtime、main/Task tools、並行scheduler、独立review/fixと検証済み完了のcomponent実装を追加しています。K用CLIの初期操作は以下を参照してください。実modelを含むK単独受入は[受入表](docs/background-wave-acceptance.md)に記録しています。Pへの接続、Mのfixture移行は追跡中です。
 
 必要環境: Linux、Go 1.26とCコンパイラ、Git、認証済み`gh`、Codex CLI **0.163.0**、Bubblewrap (`bwrap`)。
 
@@ -35,7 +35,7 @@ JSON
 
 これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
-request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。mainの監査付き復旧は下記コマンドで操作できます。実K受入は後続工程です。
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。mainの監査付き復旧は下記コマンドで操作できます。K単独受入の証拠は[受入表](docs/background-wave-acceptance.md)を参照してください。
 
 ### Cursor付きwatch
 
@@ -61,7 +61,7 @@ chmod 600 runtime.json
 
 `codex_binary`はnative 0.163.0、launcherは子孫を含めた隔離を確認済みのものを指定します。`isolation_verified`はoperatorの確認を記録する値で、起動ごとの隔離/version probeも必須です。`worker_codex_home`はcontrollerのCODEX_HOMEとは別のprivate templateで、現在のsession認証を使う場合は空のdirectoryを用意し、`session_auth_file`で元sessionの認証fileを参照します。tokenをJSONへコピーせず、更新は元sessionが所有します。runtime設定・実行file・認証templateはkernel rootとworker workspaceの外に置きます。
 
-daemonはroot単位で排他し、起動時に保存済み依頼/未適用結果を再照合します。保存後hintと定期再照合から共通scheduler/runtimeへ接続し、Task用のprivate固定workspaceを起動予約後に作成します。SIGINT/SIGTERMでは停止確認と保存を待ち、停止未確認の枠を解放しません。KではGitHub設定やPRを要求しません。native K workflow全体の受入は別途記録します。
+daemonはroot単位で排他し、起動時に保存済み依頼/未適用結果を再照合します。保存後hintと定期再照合から共通scheduler/runtimeへ接続し、Task用のprivate固定workspaceを起動予約後に作成します。SIGINT/SIGTERMでは停止確認と保存を待ち、停止未確認の枠を解放しません。KではGitHub設定やPRを要求しません。native K workflow全体の受入は[受入表](docs/background-wave-acceptance.md)に記録しています。
 
 ### Wave / Task の優先操作
 
@@ -148,6 +148,25 @@ private rootを持つoperatorは過去scopeの保存成果も確認できます�
 `runs`はsessionごとのrunを保存順にページングし、元のthread/turn、snapshot・target・使用量の台帳、active/停止/処理状態を返します。観測のないtoken数を確定使用量へ変換せず、欠けたbindingやbudgetは明示します。Task結果の処理記録には`result_id`があり、Wave inspectの成果参照と照合できます。一覧はモデル出力本文をコピーしません。
 
 `output`は保存済み本文の最大16 KiBのbyte抜粋を返し、artifactと同じ`next_offset`/`done`/`encoding`で続きを読めます。unknownやarchivedを成功に変更しません。`disposed`はrunの処理記録があることを表し、独立reviewやWaveの成果受入を表しません。処理理由は有界previewと元のbyte数・省略の有無を示します。これらの閲覧は保存内容・通知・budget・実行状態を変更しません。
+
+## direct 製品依頼の受付（P）
+
+同じkernel rootへ、WorkItemを伴う製品依頼を明示的に保存できます。operatorがrepository名・数値ID・criterion割当を確認したprivate fileを用意します。例のrepositoryとIDは実際の対象へ置き換えてください。
+
+```sh
+umask 077
+cat > product-request.json <<'JSON'
+{"schema_version":1,"request_id":"product-001","request":"製品の動作を変更する","criteria":[{"id":"AC","requirement":"固定候補の検証が通る"}],"work_items":[{"id":"product-work-001","repository":"OWNER/REPOSITORY","repository_id":12345,"criteria":["AC"]}]}
+JSON
+chmod 600 product-request.json
+./harness wave create-product --root /absolute/private/kernel --file product-request.json
+```
+
+入力は同じuser所有・単一hardlinkの通常fileに限定し、公開permissionやsymlinkを拒否します。Waveと全WorkItemのsource所属・初回通知を一transactionで保存し、同時再送は同じ受付へ収束します。既存の`wave create`はK用です。同じrequest IDをKとPの依頼で共用せず、内容の変更には明示的な方向修正を使います。
+
+Pのstage/product flagと初期policy版はコマンドが指定し、実行上限・main sessionは保存した`kernel.json`から決めます。入力からpolicy、session、candidateを設定できません。JSONは12 MiB、元要求は8 MiB、request IDは4096 bytes、WorkItemは1〜128件/各定義64 KiBまでです。コマンド自体はmodelやGitHubを呼び出さず、commit後にdaemonへbest-effort hintを送ります。
+
+これはPのsource受付です。Issue poolのkernel入口、製品worktree/readiness・停止後候補・daemonの書込worker配置は接続途中であり、製品Taskは`product_readiness_unavailable`で保留されます。公開gateや正式なCloud承認、P Waveの完了を省略しません。[保存契約](docs/product-operations.md)を参照してください。
 
 ## 設定と起動
 
