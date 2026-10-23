@@ -26,7 +26,7 @@ AT-009の新fix Task/sessionはKのcomponentで追加・検証した。Pの旧ro
 | 段階 | 現在の状態 | 次の証拠 |
 | --- | --- | --- |
 | S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
-| K | runtime/DB/controller/main・Task/独立review・検証済みWave完了とCLIを接続。nativeのfindings→新fix/review→reportを観測。K全体未成立 | Task_9〜10。実model完了経路を追加。K適用ATの統合判定 |
+| K | 合格。新DB・汎用WaveのK適用ATを確認 | [K受入表と実行証拠](background-wave-acceptance.md)。P/Cloud/移行の完了と分ける |
 | P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
 | M | fixture移行は未実装。依頼者確認で運用DBなし | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
@@ -85,7 +85,7 @@ HARNESS_LIVE_KERNEL_EVIDENCE=/absolute/path/to/sanitized-evidence.json \
 go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -count=1 -v
 ```
 
-この経路の成功はKの実model pipeline証拠であり、K適用AT全体・P/Cloud正式承認・M移行の総合判定は別途行う。
+この経路の成功はKの実model pipeline証拠であり、K適用AT全体の判定は [K受入表](background-wave-acceptance.md) に記録する。P/Cloud正式承認・M移行の総合判定は別途行う。
 
 ## production KernelSource の通知遅延参照負荷
 
