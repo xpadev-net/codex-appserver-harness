@@ -86,3 +86,11 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 ```
 
 この経路の成功はKの実model pipeline証拠であり、K適用AT全体・P/Cloud正式承認・M移行の総合判定は別途行う。
+
+## production KernelSource の通知遅延参照負荷
+
+`TestKernelSourceNotificationReservationReferenceLoad` は本番 `KernelSource`/Loop/SQLite/IPCで独立Task 2件を初回起動して待機させ、親から子への通知を各50件、合計100件保存する。sourceの選択・保存入力の構築・受付・結果適用・wake確定は実装本体を通り、process/model/外部I/Oだけをstubにする。各通知を別の再開intentへ対応させ、全100件の適用、同じ未完了threadの継続、main起動0、各組の物理停止と枠解放を検査する。
+
+[測定結果](../evidence/background-wave/kernel/notification-latency.json): 100 samples、p95 64.032 ms、max 79.840 ms、測定区間合計7.952秒で、NFR-012のSHOULD目標1秒以内を満たした。通知保存呼出し直前から、永続wakeを選択した有界Source.Readyの終了後までの保守的な上限を測る。モデル応答時間・実プロセスcold startは含めず、[native起動/停止/RSS](../evidence/background-wave/runtime/parallel-native.json)と[隔離launcher](../evidence/background-wave/runtime/isolated-launcher.json)へ分ける。hostとGo/OS/CPU、上限、全sampleはJSONに保存する。この参照負荷単独をK全体合格とはしない。
+
+再現: `HARNESS_KERNEL_LATENCY_EVIDENCE=/absolute/path/to/evidence.json go test ./internal/control -run '^TestKernelSourceNotificationReservationReferenceLoad$' -count=1 -v`。runtime policyは試験rootだけTaskAttempts=51へ明示設定し、製品既定値を変更しない。従来の試験用WorkSourceによる[component測定](../evidence/background-wave/runtime/notification-latency-race.json)とは別の証拠である。
