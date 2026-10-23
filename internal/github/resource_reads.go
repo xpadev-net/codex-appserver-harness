@@ -92,7 +92,17 @@ func (c Client) resourceRead(ctx context.Context, endpoint string, paginated boo
 		args = append(args, "--paginate", "--slurp")
 	}
 	args = append(args, path)
+	return c.resourceReadCommand(ctx, args, nil)
+}
+
+func (c Client) resourceReadCommand(ctx context.Context, args []string, input []byte) ([]byte, error) {
+	if err := c.valid(); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, "gh", args...)
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	budget, _ := ctx.Value(resourceBudgetKey{}).(*resourceReadBudget)
 	if budget != nil && !budget.available() {
 		return nil, errors.New("shared resource read budget exhausted")

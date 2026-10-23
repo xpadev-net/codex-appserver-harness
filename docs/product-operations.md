@@ -252,10 +252,14 @@ GET専用ResourceAPIでrepositoryの数値ID/full_nameとIssueの番号/open/rea
 
 ## 初回Issue poolのbackground worker
 
-`product.IssuePool`はready走査の外で完全なIssue collectionを有界に読み、open/ready/hold/PRの除外とpriority/番号順を適用する。1走査1〜32試行、collection 2048件、API data 16 MiB/128読取呼出し/45秒を上限とし、個々のfresh取得と依存は`IssueAdmitter`を通す。ghの各応答は4 MiBの上限である。走査全体のtransport budgetを各Issue取得の親として共有し、応答上限/JSON decodeの失敗で呼出し側へbytesが返らなくても消費分を計上する。親の予算が尽きた後は新しいghを起動しない。取得不能・重複/不正ID・過大なcollectionを空集合の成功にせず、途中の候補が保留でも他の候補へ進む。
+`product.IssuePool`はready走査の外で番号・状態・labelだけを32件ずつ取得する。`github.Client.IssuePoolMetadata`は固定の読取専用GraphQL queryを持ち、POSTはqueryのtransportとしてだけ使用する。任意queryやmutationを受け付けず、本文は選択した候補のbounded GETだけで取得する。大きな本文を含む全ページを`--paginate --slurp`で一応答へまとめない。
 
-source policy/priority digest付きcursorをrepository単位で保存し、次回/再起動は最後の処理の続きからsorted orderを循環する。走査全体のbyte/call予算が尽きたら停止し、まだIssueを取得していない候補をholdと判断してcursorを進めない。部分結果と予算切れの診断を返し、次回は未取得候補から再開する。走査自身のdeadlineが取得中に切れた場合は、読取終了後、元のdaemon contextに従う1秒の保存用contextで取得開始済み候補のcursorを保存する。daemon自身のcancel/deadlineを迂回した保存は行わない。既存source Waveは初回受付から除外し、新規受付のcommit後にだけhintを送る。cursorの失敗や重複scanで初回eventを再発行せず、holdをcandidateやmodel runに変換しない。既存Issueの方向修正・hold/close同期はこのworkerで行わない。
+priority labelごとのgroup、最後の優先度なしgroupの順に、作成順のmetadataページを読む。各ページはIssue番号で整列し、repository ID/name、完全なpageInfo、非空の前進cursor、番号/labelの重複や上限を検証する。既知のhold/PR/closedを除外し、partialなlabel情報から不在を推測しない。受付時は全labelから現在のpriority groupを再確認し、本文・依存・source確認を共通`IssueAdmitter`へ渡す。
 
-`wave run --issue-pool private.json`はschema1・private same-userの設定をruntime構築前に検査し、同じmain/上限/Storeを持つworkerをcontroller-owned lifecycleへ配置する。IPC/dispatchやPR observer/WebhookのloopでHTTPを待たず、shutdownはworkerの読取終了までjoinする。
+repositoryごとにsource policy/priority/collection版digest、group、ページcursor、ページ内の最後の処理番号を保存する。部分ページ・試行数上限・budget・再openを跨いで未取得候補へ戻れる。古い内部cursor形式や選択policyの変更は非権限の進行位置だけを先頭へ戻し、既存Wave/WorkItemの履歴を変更しない。APIページ自体は外部のatomic snapshotではなく、全group完了後の再走査と受付直前のfresh確認で補う。
 
-検証: `go test ./internal/product ./internal/kernelcli -run '^TestIssuePool' -count=1`。priority/件数上限、同じpoolの再走査/再openと初回event非重複、hold後のcursor進行、collection失敗/破損/他repo/cancel join、private opt-in設定/誤用拒否、実ghと同じGET argvのconfigured-worker fixtureでcommit-before-hintを確認する。既存daemon worker lifecycleの回帰も実行する。32候補の過大応答fixtureでtransport読取が4件で止まること、予算切れ後の正常な5件目が再open後に受付されること、repository確認中のcall上限でも未取得Issueのcursorを維持すること、走査timeout後の再openで正常な次候補へ進みdaemon cancelは保存をdetachしないこと、子の小さい予算に失敗した分も親へ計上し、兄弟の取得でresetできないことを追加確認する。実GitHub/実modelを含むP全体の受入ではない。
+1走査1〜32試行、metadata 2048件、API data/transport output 16 MiB、128読取呼出し、45秒、gh各応答4 MiBを上限とする。失敗した過大応答やdecode失敗も親のbudgetへ計上する。予算切れは途中結果と診断を返し、未取得Issueのcursorを進めない。走査自身のdeadlineは読取終了後に、daemon contextに従う1秒の保存用contextで処理済み位置を保存する。daemonのcancel/deadlineを迂回した保存は行わない。
+
+`wave run --issue-pool private.json`はschema1・private same-user設定をruntime構築前に検査し、同じmain/上限/Storeのworkerをcontroller-owned lifecycleへ配置する。既存source Waveの再open・初回event再発行は行わず、commit後のhintだけを送る。shutdownは読取の終了までjoinする。既存Issueの方向修正・hold/close同期と製品Task/候補/公開は別の接続として残る。
+
+検証: `go test ./internal/product ./internal/github ./internal/kernelcli -run 'TestIssuePool|TestIssueMetadata' -count=1`。32件ページとページ内位置の再open、4 MiBを超える旧形式collectionでもmetadataから高priorityの後方Issueを先に受付できること、選択した本文だけのGET、fresh labelのpriority再確認、完全/不完全なページ境界を確認する。既存の容量/rollback、過大応答の累積budget、未取得5件目の再開、deadline/cancel、private設定とdaemon lifecycleの回帰も維持する。fixtureと実GitHub/実modelを含むP全体の受入は区別する。
