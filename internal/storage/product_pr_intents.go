@@ -87,6 +87,18 @@ func (k *KernelStore) SetProductTarget(ctx context.Context, expected string, p P
 		return saved, err
 	}
 	defer tx.Rollback()
+	saved, err = k.setProductTargetTx(ctx, tx, expected, p)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) setProductTargetTx(ctx context.Context, tx *sql.Tx, expected string, p ProductTarget) (ProductTargetSnapshot, error) {
+	var saved ProductTargetSnapshot
+	if err := p.validate(); err != nil {
+		return saved, err
+	}
 	w, err := loadWave(ctx, tx, p.Target.WaveID)
 	if err != nil {
 		return saved, err
@@ -161,7 +173,7 @@ func (k *KernelStore) SetProductTarget(ctx context.Context, expected string, p P
 	if err = k.refreshAssignedPRSubscriptionsTx(ctx, tx, w); err != nil {
 		return saved, err
 	}
-	return saved, tx.Commit()
+	return saved, nil
 }
 
 type PRSubscriptionIntent struct {

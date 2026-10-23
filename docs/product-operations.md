@@ -330,7 +330,7 @@ outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする
 
 保存側はP work/fix roleと単一WorkItem割当、現在の登録、Task固有のworkspace ID/digest・scope/sessionを再照合する。不正な参照はmodel成果の不正として扱い、SQL/cancelは運用エラーのまま返す。保存済み証拠の欠落・破損は保留にし、Codexの再実行や成功へ変換しない。
 
-この契約だけではmutableなworktreeをCandidateにせず、正常終了・物理停止後のsealing receiptが未接続の間は`product candidate sealing is not connected`として成果適用を保留する。model runの許可や製品readinessの禁止も外さない。検証はcontract/worker/storage/controlのversion/role境界、既存v1 schema一致、SHA/自己review拒否、共通driverのraw final保持、Task専用入力・peer参照拒否、Kの自己分類拒否を対象とし、製品Candidate/Cloud受入の証拠には数えない。
+この契約だけではmutableなworktreeをCandidateにせず、通常の`ApplyTaskResult`は`product candidate adoption requires the trusted host`として成果適用を保留する。停止後のsealingとhostによる採用は後述のportで行う。model runの許可や製品readinessの禁止も外さない。検証はcontract/worker/storage/controlのversion/role境界、既存v1 schema一致、SHA/自己review拒否、共通driverのraw final保持、Task専用入力・peer参照拒否、Kの自己分類拒否を対象とし、製品Candidate/Cloud受入の証拠には数えない。
 
 ## 準備完了時のwork/fix入力固定
 
@@ -338,7 +338,7 @@ outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする
 
 元要求の登録・Wave scope/policy・Task/sessionの所属を再検査し、ready記録またはhistoryの欠落/破損時は可変Candidateへのfallbackを許さない。source result、Artifactの実bytes、依存Taskの成果は引き続き現在の証拠を検証する。K、未準備Task、review/verificationの入力契約は維持する。使用済みsnapshot/runを書き換えず、完全一致の準備完了再送も元receiptを返すだけである。
 
-検証: `go test ./internal/storage -run 'TestFixedProductInput|TestProductWorkspace|TestProductChange' -count=1`。work/fixの入力・plan・manifest一致、Candidate更新と再open後の安定、reviewの従来挙動、scope/policy/登録/historyの拒否、Artifact/依存証拠の失効、plan更新失敗の全面rollbackを確認する。これは固定入力の保存接続であり、Candidate sealing、P実行readiness、品質/正式承認のgateは後続の接続範囲である。
+検証: `go test ./internal/storage -run 'TestFixedProductInput|TestProductWorkspace|TestProductChange' -count=1`。work/fixの入力・plan・manifest一致、Candidate更新と再open後の安定、reviewの従来挙動、scope/policy/登録/historyの拒否、Artifact/依存証拠の失効、plan更新失敗の全面rollbackを確認する。これは固定入力の保存接続であり、この保存自体はCandidate sealing、P実行readiness、品質/正式承認を許可しない。sealingと採用のhost portは後述する。
 
 ## 固定checkoutのcommit確定処理
 
@@ -346,7 +346,7 @@ outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする
 
 すべてのdirectoryが保存時のcanonical pathであること、元repositoryとcheckoutのcommon-dir、正確なgit-dir、branch、HEADが固定baseの子孫であることを、staging前に検査する。common-dirとbranchだけを模倣した`.git`の差し替えは拒否する。strict stopped-command profileで変更をstage/commitし、host指定identityと署名無効化、既存のhook/filter等の無効化を適用する。replace refを無効化し、legacy graftsは拒否して、実commitの親子関係を検査する。commit後も同じ所属・base ancestry・clean状態を再確認する。停止不明・取消・検査失敗には成功receiptを返さず、callerがintent/予約を保持して照合する。
 
-検証: `go test ./internal/workspace -run 'TestFreezePinned|TestStoppedGit' -count=1`。実temp Gitの不変commitとclean再送、hook/filter/signing非実行、common-dir/branchを模倣した別git-dir、branch/path差し替え、無関係なbase、取消時のstage/commit非実行を確認する。製品Taskの停止済みrunとのDB照合、sealing intent/履歴、Candidate projectionは後続であり、この関数の成功をP全体の受入には数えない。
+検証: `go test ./internal/workspace -run 'TestFreezePinned|TestStoppedGit' -count=1`。実temp Gitの不変commitとclean再送、hook/filter/signing非実行、common-dir/branchを模倣した別git-dir、branch/path差し替え、無関係なbase、取消時のstage/commit非実行を確認する。製品Taskの停止済みrunとのDB照合とsealing intent/履歴、Candidate採用のhost portは後述する。この関数の成功をP全体の受入には数えない。
 
 ## 停止済みTaskからのlocal Candidate sealing
 
@@ -360,4 +360,17 @@ raw finalのschema v2とTask固有workspace参照、保存済みsnapshotの実by
 
 検証: `go test ./internal/storage ./internal/product -run 'TestProductSeal|TestCandidateSealer' -count=1`。正常/非baseline/物理停止/snapshot・manifest・元入力の境界、並行claim、再open、未開始/失敗、SQL rollback、stale history、実Git commit・raw final保持と保存失敗後の二重実行拒否を確認する。SQLite fixtureのmodel停止factsを使用しており、実model dispatchの受入には数えない。
 
-このportはlocal commitの確定までで、active ProductTargetへの採用、Task成果適用、製品readiness、runner/独立review/正式承認への配置は引き続き後続である。`sealed`の歴史的receiptを、現在の実行・品質・公開の許可として使わない。
+このportはlocal commitの確定までである。active ProductTargetへの採用とTask成果適用は次節のhost portで行い、製品readiness、runner/独立review/正式承認への配置は引き続き後続である。`sealed`の歴史的receiptを、現在の実行・品質・公開の許可として使わない。
+
+
+## sealed CandidateとTask成果の原子的な採用
+
+`KernelStore.AdoptProductTaskResult(ctx, sessionID, runID, baseBranch)` はhost専用の採用portで、baseBranchはtrusted repository設定から渡す。model、Issue本文、dynamic toolからbaseを指定しない。通常の`ApplyTaskResult`は製品Candidateを自動採用せず保留する。
+
+sealed receiptのchecksum・不変history・Git停止/予約解放・固定Candidateとcheckout証拠を再検査し、現在のTask/run/snapshot/元入力にも照合する。既存のcriterion割当・Artifact実bytes/許可等の成果検査を通ってから、ProductTargetと不変Candidate、controllerの`product_task_candidate` sidecar、Task/result/application、planの完了参照を同じtransactionで保存する。modelのraw finalとschema v2は書き換えない。SQL失敗はprojectionを含む全体をrollbackし、新しいmodel attemptを消費せず同じ停止済み成果から再試行できる。
+
+新CandidateはWorkItemの`VERIFYING`へ置き、独立品質評価・正式承認・PR公開を生成しない。既存WorkItemの公開branch、PR番号、試行/修正回数、merge holdを維持し、古いcompletion/verdictの投影を引き継がない。WorkItemのpause/終端/scope不一致はworkspace準備・sealing・採用を禁止する。merge holdはmerge専用として保持し、local作業を妨げない。終端WorkItemを新scopeの作業へ再解釈することも許さない。
+
+sidecarは元Task/run/result、入力・raw final digest、sealing参照と固定Candidateを結び付ける。完了成果の再利用と`TaskResultInput.product_candidate`は、sidecar・歴史的receipt/history・不変Candidate・正常適用済みrun・raw finalと保存済み構造化成果の一致を要求する。現在のmutableなCandidateへ古い成果を付け替えず、証拠欠落/破損時は完了成果として使わない。K/v1のJSONはoptional field未出力で維持する。
+
+検証: `go test ./internal/storage ./internal/product -run 'TestProductCandidate|TestProductWorkItemPause|TestCandidateSealer' -count=1`。原子的な採用と再open/再送、base変更再送の拒否、sidecar/plan更新失敗rollback、history/元入力/出所保留、criterion/Artifact不正による非採用、証拠欠落と保存成果改変の拒否、既存PR/branch/merge hold/予算回数の保持、実temp Gitから固定SHAの採用を確認する。model停止factsはfixtureで、Pの実model dispatch・runner/独立review・Cloud/mergeの受入には数えない。製品実行readinessと品質/正式gateの配置は後続である。

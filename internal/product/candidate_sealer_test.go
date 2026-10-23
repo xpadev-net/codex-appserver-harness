@@ -124,6 +124,17 @@ func TestCandidateSealerConnectsStoppedRunToFixedCommitWithoutApplyingQuality(t 
 	if err := s.Store.DB.QueryRow("SELECT count(*) FROM records WHERE kind IN ('product_target','product_candidate','task_result_application')").Scan(&projections); err != nil || projections != 0 {
 		t.Fatal("local seal became acceptance", projections, err)
 	}
+	receipt, err := s.Store.AdoptProductTaskResult(ctx, task.SessionID, run.ID, "trunk")
+	if err != nil || receipt.State != contract.TaskCompleted {
+		t.Fatal(receipt, err)
+	}
+	p, err := s.Store.ReadProductTarget(ctx, task.Target(), ready.Value.WorkItemID)
+	if err != nil || p.Value.Candidate.SHA != head || p.Value.WorkItem.Phase != domain.Verifying || p.Value.WorkItem.Issue != 42 || p.Value.PRNumber != 0 {
+		t.Fatal("local adoption supplied quality or lost source", p, err)
+	}
+	if err := s.Store.Record(ctx, "agent_run", run.ID, &observed); err != nil || observed.Final != run.Final {
+		t.Fatal("adoption rewrote raw final", err)
+	}
 }
 
 func TestCandidateSealerDoesNotRetryUnknownOrFailedPersistence(t *testing.T) {

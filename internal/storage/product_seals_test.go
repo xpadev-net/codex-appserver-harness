@@ -30,6 +30,12 @@ func productSealFixture(t *testing.T, configure ...func(*contract.PlanProposal))
 	if err != nil {
 		t.Fatal(err)
 	}
+	return seedProductSealRun(t, k, w, task, saved)
+}
+
+func seedProductSealRun(t *testing.T, k *KernelStore, w domain.Wave, task domain.Task, saved ProductWorkspace) (*KernelStore, domain.Wave, domain.Task, contract.SessionRun) {
+	t.Helper()
+	ctx := context.Background()
 	b, err := k.SessionBinding(ctx, task.SessionID)
 	if err != nil {
 		t.Fatal(err)
