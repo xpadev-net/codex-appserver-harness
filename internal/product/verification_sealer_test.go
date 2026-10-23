@@ -79,7 +79,7 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 }
 
 func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "product_change", "missing_test"} {
+	for _, mode := range []string{"success", "runner_cancel", "product_change", "missing_test"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) { plan.Phases[1].Tasks[0].Kind = "verification" })
@@ -104,7 +104,11 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.Store.RegisterProductVerificationPolicy(ctx, task.Target(), storage.ProductVerificationPolicy{WaveID: task.WaveID, PolicyRevision: task.PolicyRevision, RepositoryID: implementation.Value.Request.RepositoryID, Repository: implementation.Value.Request.Repository, VerifierPaths: []string{"tests/"}, Verification: policy.Verification{Revision: task.PolicyRevision, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"trusted-runner"}, TimeoutSeconds: 30, SuccessPattern: "PASS"}}}}); err != nil {
+			profileScript := "grep -qx 'implemented behavior' implementation.txt && test -f tests/behavior_test.go && printf PASS"
+			if mode == "runner_cancel" {
+				profileScript = "sleep 30; printf PASS"
+			}
+			if _, err := s.Store.RegisterProductVerificationPolicy(ctx, task.Target(), storage.ProductVerificationPolicy{WaveID: task.WaveID, PolicyRevision: task.PolicyRevision, RepositoryID: implementation.Value.Request.RepositoryID, Repository: implementation.Value.Request.Repository, VerifierPaths: []string{"tests/"}, Verification: policy.Verification{Revision: task.PolicyRevision, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"sh", "-c", profileScript}, TimeoutSeconds: 30, SuccessPattern: "PASS"}}}}); err != nil {
 				t.Fatal(err)
 			}
 			ready, err := (WorkspacePreparer{Store: s.Store}).Prepare(ctx, storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: implementation.Value.Request.RepositoryID, Repository: implementation.Value.Request.Repository, BaseSHA: input.Candidate.SHA})
@@ -141,7 +145,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			result := contract.TaskResult{SchemaVersion: 3, Target: task.Target(), TaskID: task.ID, PhaseID: task.PhaseID, Outcome: "result", Artifacts: []string{a.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "unverified", Basis: "ready for formal runner", EvidenceIDs: []string{}}}, WorkItemRefs: []contract.CandidateReference{}, ProductChanges: []contract.ProductChangeReference{{WorkItemID: ready.Value.WorkItemID, WorkspaceID: ready.ID, WorkspaceDigest: ready.Digest}}, ProductVerification: &contract.ProductVerificationReference{SubjectID: subject.ID, SubjectDigest: subject.Digest, PlanArtifactID: a.ID}, Remaining: []string{}, Blockers: []string{}, SubscriptionIDs: []string{}}
 			verificationRun := seedVerificationCompletedRun(t, s.Store, task, result)
 			sealed, err := s.Seal(ctx, task.ID, verificationRun.ID)
-			if mode != "success" {
+			if mode == "product_change" || mode == "missing_test" {
 				if err == nil || sealed.State != "failed" || sealed.Candidate != nil {
 					t.Fatal("invalid verification changes sealed", mode, sealed, err)
 				}
@@ -185,6 +189,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *sealed.Candidate || p.Value.WorkItem.Phase != domain.Verifying {
 				t.Fatal("adoption invented runner pass", p, err)
 			}
+			checkProductRunnerExecution(t, s.Store, canonical, mode == "runner_cancel")
 		})
 	}
 }

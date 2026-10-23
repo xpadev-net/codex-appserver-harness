@@ -39,12 +39,14 @@ type ProductRunnerJobValue struct {
 // A launching intent survives restart and cannot be claimed a second time.
 // Absence of a result is not proof that launching did not start a process.
 type ProductRunnerJob struct {
-	ID        string                `json:"id"`
-	Value     ProductRunnerJobValue `json:"value"`
-	Digest    string                `json:"digest"`
-	State     string                `json:"state"`
-	CreatedAt time.Time             `json:"created_at"`
-	ClaimedAt time.Time             `json:"claimed_at"`
+	Completion *runner.Completion    `json:"completion,omitempty"`
+	FinishedAt *time.Time            `json:"finished_at,omitempty"`
+	ID         string                `json:"id"`
+	Value      ProductRunnerJobValue `json:"value"`
+	Digest     string                `json:"digest"`
+	State      string                `json:"state"`
+	CreatedAt  time.Time             `json:"created_at"`
+	ClaimedAt  time.Time             `json:"claimed_at"`
 }
 
 type ProductRunnerClaim struct {
@@ -90,7 +92,28 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 	if err != nil {
 		return job, err
 	}
-	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || id != productRunnerJobID(job.Value.PlanID, job.Value.Spec.ProfileID) || job.CreatedAt.IsZero() || job.Value.Spec.JobID != id || job.Value.Spec.Validate() != nil || job.State != "prepared" && job.State != "launching" || (job.State == "prepared") != job.ClaimedAt.IsZero() {
+	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || id != productRunnerJobID(job.Value.PlanID, job.Value.Spec.ProfileID) || job.CreatedAt.IsZero() || job.Value.Spec.JobID != id || job.Value.Spec.Validate() != nil || job.State != "prepared" && job.State != "launching" && job.State != "completed" || (job.State == "prepared") != job.ClaimedAt.IsZero() {
+		return job, ErrTaskEvidence
+	}
+	if job.State == "completed" {
+		if job.Completion == nil || job.FinishedAt == nil || job.FinishedAt.IsZero() || job.Completion.Validate(job.Value.Spec) != nil || job.Completion.Result.Started.Before(job.ClaimedAt) {
+			return job, ErrTaskEvidence
+		}
+		var terminal ProductRunnerJob
+		if err := taskEvidenceRecord(ctx, q, "product_runner_job_terminal", id, &terminal); err != nil {
+			return job, err
+		}
+		if !reflect.DeepEqual(terminal, job) {
+			return job, ErrTaskEvidence
+		}
+		r, err := loadOperationReservationTx(ctx, q, id)
+		if err != nil {
+			return job, err
+		}
+		if r.State != "released" || r.Proof == nil || *r.Proof != productRunnerReleaseProof(job) {
+			return job, ErrTaskEvidence
+		}
+	} else if job.Completion != nil || job.FinishedAt != nil {
 		return job, ErrTaskEvidence
 	}
 	var history ProductRunnerJobValue
@@ -112,12 +135,19 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 	if err != nil {
 		return job, err
 	}
-	profiles, err := policy.Value.Verification.ExecutionSet(plan.Value.Plan.RequestedProfiles)
+	profiles, err := plan.Value.Plan.Profiles(policy.Value.Verification)
 	if err != nil {
 		return job, err
 	}
 	s := job.Value.Spec
-	if job.Value.PlanDigest != plan.Digest || job.Value.PolicyID != plan.Value.PolicyID || job.Value.PolicyDigest != plan.Value.PolicyDigest || policy.ID != job.Value.PolicyID || policy.Digest != job.Value.PolicyDigest || s.Candidate != plan.Value.Candidate || s.Repository != policy.Value.Repository || !slices.Contains(profiles, s.ProfileID) || !reflect.DeepEqual(s.Profile, policy.Value.Verification.Profiles[s.ProfileID]) {
+	if job.Value.SessionID != sealed.Value.Workspace.Value.ParentSessionID || job.Value.PlanDigest != plan.Digest || job.Value.PolicyID != plan.Value.PolicyID || job.Value.PolicyDigest != plan.Value.PolicyDigest || policy.ID != job.Value.PolicyID || policy.Digest != job.Value.PolicyDigest || s.Candidate != plan.Value.Candidate || s.Repository != policy.Value.Repository || !slices.Contains(profiles, s.ProfileID) || !reflect.DeepEqual(s.Profile, policy.Value.Verification.Profiles[s.ProfileID]) {
+		return job, ErrTaskEvidence
+	}
+	r, err := loadOperationReservationTx(ctx, q, id)
+	if err != nil {
+		return job, err
+	}
+	if r.Kind != "runner" || r.SessionID != job.Value.SessionID || r.Request.Target != plan.Value.Target || r.Request.Worktree != filepath.Join(s.Root, id) || job.State != "completed" && r.State != "held" {
 		return job, ErrTaskEvidence
 	}
 	return job, nil
@@ -229,7 +259,7 @@ func (k *KernelStore) ReserveProductRunnerJob(ctx context.Context, planID, profi
 		return job, err
 	}
 	p := sealed.Value.Verification.Policy
-	profiles, err := p.Value.Verification.ExecutionSet(plan.Value.Plan.RequestedProfiles)
+	profiles, err := plan.Value.Plan.Profiles(p.Value.Verification)
 	if err != nil || !slices.Contains(profiles, profileID) {
 		return job, ErrProductRunnerHeld
 	}

@@ -447,12 +447,24 @@ canonical planは最終Candidateと元Artifact ID/digest、入力Candidate、pol
 
 `ReadProductVerificationPlan`は元のsealed canonical planとhistoryを検証する。v3の完了成果とSourceResultInputもplan参照を照合し、計画の欠落・破損を成功のまま使わない。後続Taskの固定subject選択は、実装時のCandidateではなく、明示依存の検証担当が採用した最終Candidateを参照する。元のraw finalと計画Artifactは不変で、v2 sidecarの新optional fieldは出力しない。
 
+検証: host境界、計画/Task/候補の一致、history/Task更新失敗rollback、完了証拠欠落、元結果維持、後続reviewの最終対象選択、実temp Gitからv3採用までを確認する。model/停止factsはfixtureで、品質/正式承認やP受入には数えない。
+
 ### 固定検証計画からの runner 起動 intent
 
-host専用`ReserveProductRunnerJob(planID, profileID, runtime)`は、採用済みcanonical planと固定policyから最終Candidate・profile argv/revisionを導出する。modelやcallerから検証対象SHA・profile command・成功結果を受け取らない。計画の実行集合は必須profileと追加要求の和集合で、集合外profileを拒否する。runtimeのroot、隔離launcher、private path検査はhost設定であり、model manifestには公開しない。
+host専用`ReserveProductRunnerJob(planID, profileID, runtime)`は、採用済みcanonical planと固定policyから最終Candidate・profile argv/revisionを導出する。modelやcallerから検証対象SHA・profile command・成功結果を受け取らない。計画の実行集合は必須profile・追加要求・criterion mappingに登場するprofileの和集合で、集合外profileを拒否する。runtimeのroot、隔離launcher、private path検査はhost設定であり、model manifestには公開しない。
 
 job IDはplan/profileから一意に決まり、immutable value/historyとrunner枠・Wave validation予算・独立jobディレクトリの排他を同じtransactionで保存する。完了済み検証Taskの閉じたsessionではなく、そのWaveの親sessionがrunnerを所有する。正確な予約再送は予算を重複消費しない。欠落・破損したjob/history/policy/planは再作成せず保留する。
 
-`ClaimProductRunnerJob`は現在Wave/親session、出所Taskと採用済み結果、scope、WorkItem停止状態、active Candidate、canonical rootと予約を再検査し、起動前に`launching`をcommitする。再送・再open後のclaimは`Start=false`で、結果fileがないことを未起動の証拠にしない。結果不明では枠と排他を保持する。これは永続起動intentの入口であり、実プロセス起動・結果取込・retry・品質判定・controller自動dispatchは後続接続まで保留する。P全体のreadiness保留を解除しない。
+`ClaimProductRunnerJob`は現在Wave/親session、出所Taskと採用済み結果、scope、WorkItem停止状態、active Candidate、canonical rootと予約を再検査し、起動前に`launching`をcommitする。再送・再open後のclaimは`Start=false`で、結果fileがないことを未起動の証拠にしない。結果不明では枠と排他を保持する。retry・品質判定・controller自動dispatchは後続接続まで保留し、P全体のreadiness保留を解除しない。
 
-検証: `go test ./internal/storage ./internal/product -run 'TestProductVerificationAdoption|TestProductVerificationFinalCandidate|TestProductVerificationSealer' -count=1`。host境界、計画/Task/候補の一致、history/Task更新失敗rollback、完了証拠欠落、元結果維持、後続reviewの最終対象選択、実temp Gitからv3採用までを確認する。model/停止factsはfixtureで、runner実行・品質/正式承認やP受入には数えない。runner配置と品質gateへの接続は後続である。
+
+
+### runner の実プロセスと結果照合
+
+`product.Runner.Start`は保存済みintentの一度だけのclaim後、privateなspec fileを作り、既存`_runner`を独立processとして起動する。launcher失敗を含む起動errorは、未起動の証拠として予約を解放しない。model turnを呼ばず、job fileと最小完了hintだけを介してcontrollerから独立して動く。`RequestStop`は既存cancel markerを使い、停止要求だけでは枠を解放しない。
+
+`Reconcile`は`runner.ReadStoppedResult`でwrapper/profileの実process identityとgroup停止、元specの完全一致、job/Candidate/対象SHA/profile revision、開始終了・環境・終了code・実ログを照合する。result fileとlogの実bytes/digestを保存し、passedでは非空のログとtrusted成功patternも再検査する。unknown、ログ欠落、停止未確認、operatorによるsynthetic解決を実行成功へ変換しない。Git準備も停止確認付きcommandを使い、Git停止不明ならterminal fileを公開しない。
+
+host専用`FinishProductRunnerJob`は実測completion・terminal history・自身の予約解放を一transactionで保存する。再送/reopenは元結果を返し、証拠欠落や異なる結果で再保存しない。保存失敗では枠を保持する。これは履歴上の実行事実であり、現行Candidateへの品質認定は別途fresh検査を要する。WorkItemはVERIFYINGを維持し、独立review、品質gate、retry、daemon dispatchとP受入はまだ接続しない。
+
+検証は実temp Gitの実装・テスト追加Candidateから独立checkout、detached wrapperによるtrusted smoke profile、cancel、実結果のDB保存とreopenを含む。native modelやproduction隔離launcher/Cloudの合格証拠ではない。runner単体ではpass/fail/empty/timeout/cancel/環境障害、spec/SHA/profile/log改変、生存中wrapperと欠落identityの拒否も確認する。

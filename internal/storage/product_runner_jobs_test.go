@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
 func productRunnerFixture(t *testing.T) (*KernelStore, domain.Wave, ProductVerificationPlanSnapshot, ProductRunnerRuntime) {
@@ -29,6 +30,47 @@ func productRunnerFixture(t *testing.T) (*KernelStore, domain.Wave, ProductVerif
 		t.Fatal(err)
 	}
 	return k, w, plan, ProductRunnerRuntime{Root: filepath.Join(t.TempDir(), "runner"), LauncherContract: "argv_passthrough_v1", Launcher: []string{"/bin/true"}, ForbiddenPaths: []string{"/private/controller"}}
+}
+
+func TestProductRunnerIntentIncludesMappingProfilesAndRejectsUnusedProfiles(t *testing.T) {
+	ctx := context.Background()
+	k, _, task, run, _, _ := verificationSealFixtureWithPolicy(t, func(p *ProductVerificationPolicy) {
+		p.Verification.Profiles["mapped"] = p.Verification.Profiles["unit"]
+		p.Verification.Profiles["unused"] = p.Verification.Profiles["unit"]
+	}, func(plan *verification.Plan) { plan.CriteriaTests[0].ProfileID = "mapped" })
+	seal, err := k.ReserveProductSeal(ctx, task.ID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ClaimProductSeal(ctx, task.ID, run.ID, seal.Digest); err != nil {
+		t.Fatal(err)
+	}
+	proof := sealProofFixture(seal)
+	proof.Frozen.SHA = strings.Repeat("d", 40)
+	checked := seal.Value.Verification.CheckProof()
+	proof.Verification = &checked
+	if _, err := k.FinishProductSeal(ctx, task.ID, run.ID, proof); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := k.AdoptProductVerificationTaskResult(ctx, task.SessionID, run.ID, "master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := k.ReadProductTaskCandidate(ctx, receipt.ResultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := ProductRunnerRuntime{Root: filepath.Join(t.TempDir(), "runner"), LauncherContract: "argv_passthrough_v1", Launcher: []string{"/bin/true"}}
+	if _, err := k.ReserveProductRunnerJob(ctx, source.Value.VerificationPlan.ID, "unused", runtime); err == nil {
+		t.Fatal("unreferenced optional profile admitted")
+	}
+	job, err := k.ReserveProductRunnerJob(ctx, source.Value.VerificationPlan.ID, "mapped", runtime)
+	if err != nil || job.Value.Spec.ProfileID != "mapped" {
+		t.Fatal("mapping profile omitted", job, err)
+	}
+	if claim, err := k.ClaimProductRunnerJob(ctx, job.ID, job.Digest); err != nil || !claim.Start {
+		t.Fatal(claim, err)
+	}
 }
 
 func TestProductRunnerIntentPinsFinalPlanPolicyAndClaimsOnce(t *testing.T) {
