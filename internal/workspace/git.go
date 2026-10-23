@@ -3,19 +3,25 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 )
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 
 func Git(ctx context.Context, dir string, args ...string) (string, error) {
-	safe := []string{"-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"}
-	keys, _ := exec.CommandContext(ctx, "git", "-C", dir, "config", "--null", "--name-only", "--get-regexp", `^(filter\..*\.(clean|smudge|process|required)|merge\..*\.driver)$`).Output()
+	safe := []string{"-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "submodule.recurse=false"}
+	keys, probeErr := gitOutput(ctx, []string{"-C", dir, "config", "--null", "--name-only", "--get-regexp", `^(filter\..*\.(clean|smudge|process|required)|merge\..*\.driver)$`})
+	if stoppedCommands(ctx) && probeErr != nil {
+		var exit *exec.ExitError
+		if errors.Is(probeErr, ErrGitStopUnconfirmed) || !errors.As(probeErr, &exit) || exit.ExitCode() != 1 {
+			return "", fmt.Errorf("git config probe failed: %w", probeErr)
+		}
+	}
 	for _, key := range strings.Split(string(keys), "\x00") {
 		if key == "" {
 			continue
@@ -29,10 +35,7 @@ func Git(ctx context.Context, dir string, args ...string) (string, error) {
 		}
 		safe = append(safe, "-c", key+"="+value)
 	}
-	cmd := exec.CommandContext(ctx, "git", append(safe, args...)...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	b, err := cmd.Output()
+	b, err := gitOutput(ctx, append(safe, args...))
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w", args[0], err)
 	}
@@ -54,7 +57,19 @@ func Create(ctx context.Context, repo, path, branch, base string) error {
 	if err != nil {
 		return err
 	}
-	_, err = Git(ctx, repo, "worktree", "add", "-b", branch, "--", path, sha)
+	args := []string{"worktree", "add"}
+	if stoppedCommands(ctx) {
+		args = append(args, "--no-checkout")
+	}
+	args = append(args, "-b", branch, "--", path, sha)
+	if _, err = Git(ctx, repo, args...); err != nil {
+		return err
+	}
+	if stoppedCommands(ctx) {
+		// Discover conditional branch/gitdir filter settings in the NEW worktree
+		// before its first checkout. Source-repository config alone is insufficient.
+		_, err = Git(ctx, path, "reset", "--hard", sha)
+	}
 	return err
 }
 func Freeze(ctx context.Context, path, message string) (string, error) {

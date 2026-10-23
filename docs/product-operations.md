@@ -303,3 +303,19 @@ source保留、manual pause、pending directionは独立で、手動resumeはsou
 準備を予約する側も、作成先と重なる既存のlive session・runner・Git操作を検査する。共通Git資源・作成先・旧worktreeの予約は一transactionで保存し、失敗はrollbackする。unknown/期限切れだけで解放せず、trusted ownerの`process_stopped`または確実な`not_started`の証拠が必要である。独立したworkspaceやrepositoryは引き続き利用できる。
 
 検証: `go test ./internal/storage -run 'TestWorkspacePreparation|TestGitCapacity|TestRunnerCapacity|TestProcessCapacity' -count=1`。実temp Gitで作成前/作成後の識別変更、alias/child/包含directory、再open、unknown保持、停止証拠後の解放、既存利用者、別repoによる同じ作成先の並行予約、保存失敗rollbackを確認する。製品worktreeの作成worker・固定候補の登録・P Taskのreadinessは後続の接続であり、この予約だけで未接続の製品Taskを実行しない。
+
+## 製品Taskの固定worktree準備
+
+`wave prepare-product-task --root ROOT --file private.json` は、hostが作成したschema 1の`request`（`task_id`、`repository_id`、canonicalなlocal `repository`、固定40桁`base_sha`）から一つの製品work/fix Taskのworktreeを準備する。ファイルはprivate same-userを要求する。数値repository IDとlocal repositoryの対応はhost設定の責任で、Issue本文やmodel toolからこの要求を作らない。移動するbranch名をbaseとして受け付けず、remote fetch/pushやPR公開を行わない。
+
+対象は現在scope/policy/planに属する未開始のP work/fix Task、一件の登録済みWorkItem、そのcriterionの範囲だけである。現在のcanonical入力digest・登録digest・親session・固定Task CWDを照合し、準備要求とGit/作成先の予約を同じtransactionで保存する。review/verification、K、旧scope、既存thread/run、pauseや出所不一致を新規準備に使わない。
+
+保存したintentの`prepared -> launching`を一度だけ消費してから、`ROOT/workspaces/SESSION_ID`へ`harness/SESSION_ID`のcheckoutを作る。再送/再openがlaunchingを見ても二重開始しない。作成先が既に存在する場合は上書き/削除/暗黙採用せず失敗履歴を残す。親と作成先はprivateなsame-user directoryとして検査する。
+
+Gitはcheckout前にbranch/gitdir条件付きfilter設定も検出するため、まず`--no-checkout`で作成し、新worktreeの設定を取得してから固定SHAへresetする。hook/filter/merge driver/fsmonitor、自動maintenance/GC、submodule再帰を無効化する。準備用profileではconfig probeを含む各Git commandのleaderをunreapedのまま保持し、所有groupの子を停止してabsenceを確認してからWaitする。停止未確認はlaunching/予約を保持し、通常の失敗と同じ停止証拠に変換しない。
+
+固定HEAD、branch、clean状態、同じcommon Git directoryと実git-dirを検証したhostの停止証拠から、readyのworkspace記録・work/fixの`workspace-write` binding・予約解放・不変historyを原子的に保存する。記録全体のchecksumでmutableな状態/証拠の破損も拒否する。scopeやcanonical入力が途中で変わればstale履歴だけを残し、writable bindingを作らず、確認済み停止の資源を解放する。未開始のcancelと開始済みの停止を別の証拠にし、model run/Task attempt/candidate/正式承認を作らない。
+
+`wave product-workspace --root ROOT --id TASK_ID` は記録をread-onlyで確認する。失敗/unknownを同じTaskで自動再実行せず、停止確認と明示的な復旧または新Taskへ渡す。readyの完全一致再送も歴史的なreceiptを返すだけで、新しい実行許可ではない。CLIのownerは同期Gitと有界な停止証拠保存の終了までStoreを保持する。
+
+検証: `go test ./internal/storage ./internal/product ./internal/kernelcli ./internal/workspace -run 'TestProductWorkspace|TestStoppedGit' -count=1`。一度開始・並行claim・再open/unknown保持、SQL失敗rollback、未開始/停止/取消/入力変化の履歴、proof破損拒否、実temp Gitの固定/private checkout、条件付きfilter/hookの非実行、既存data保持、子group停止、private CLI/閲覧/再送とmodel/candidate非生成を確認する。自動準備workerの配置、P Task実行/readiness、runner・candidate結果登録と正式gateは引き続き後続であり、準備だけで`product_readiness_unavailable`を外さない。

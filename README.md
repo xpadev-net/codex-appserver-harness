@@ -221,6 +221,22 @@ chmod 600 issue-source-observer.json
 
 これは初回受付のworkerです。既存Waveを再取得/再openせず、既存Issueのhold/close/編集を禁止へ反映するには`--issue-source-observer`を併用します。版付き要求の採用は後続です。製品Taskのreadiness保留・正式承認・公開gateは維持します。PR observer/Webhookとは別workerで、必要なら同時にopt-inできます。
 
+### 製品Taskのworktree準備
+
+host設定でlocal repositoryと数値repository IDを対応付け、未開始のP work/fix Taskを一件ずつ準備できます。privateな要求ファイルを渡します。
+
+```json
+{"schema_version":1,"request":{"task_id":"TASK_ID","repository_id":12345,"repository":"/absolute/local/repository","base_sha":"0123456789abcdef0123456789abcdef01234567"}}
+```
+
+```sh
+chmod 600 product-workspace.json
+./harness wave prepare-product-task --root /absolute/private/kernel --file product-workspace.json
+./harness wave product-workspace --root /absolute/private/kernel --id TASK_ID
+```
+
+固定SHAのprivate checkoutと停止証拠を保存します。既存の作業ディレクトリを上書きせず、開始途中の要求を自動で二重実行しません。modelを起動するコマンドではなく、製品候補・runner・正式gateの接続まではTaskの実行保留を維持します。[準備の契約と制限](docs/product-operations.md#製品taskの固定worktree準備)を参照してください。
+
 ## 設定と起動
 
 ```sh
