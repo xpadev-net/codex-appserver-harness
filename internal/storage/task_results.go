@@ -27,6 +27,20 @@ type ResultApplication struct {
 var ErrTaskResultReferences = errors.New("Task result references require reconciliation")
 
 func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID string) (ResultApplication, error) {
+	return k.applyTaskResult(ctx, sessionID, runID, nil)
+}
+
+// AdoptProductTaskResult is a host-only port. baseBranch comes from trusted
+// repository configuration, never model output, Issue prose or a dynamic tool.
+// Candidate adoption and normal Task result application commit together.
+func (k *KernelStore) AdoptProductTaskResult(ctx context.Context, sessionID, runID, baseBranch string) (ResultApplication, error) {
+	if strings.TrimSpace(baseBranch) == "" || len(baseBranch) > contract.MaxInline || strings.ContainsAny(baseBranch, "\x00\r\n\t ") {
+		return ResultApplication{}, errors.New("trusted repository base branch required")
+	}
+	return k.applyTaskResult(ctx, sessionID, runID, &baseBranch)
+}
+
+func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID string, productBaseBranch *string) (ResultApplication, error) {
 	receipt := ResultApplication{RunID: runID}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
@@ -60,6 +74,15 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		}
 		if prior.TaskID != task.ID || prior.Target != task.Target() {
 			return receipt, errors.New("Task result replay conflict")
+		}
+		if productBaseBranch != nil && prior.ResultID != "" && !prior.Archived {
+			adopted, err := loadProductTaskCandidate(ctx, tx, prior.ResultID)
+			if err != nil {
+				return receipt, err
+			}
+			if adopted.Value.BaseBranch != *productBaseBranch {
+				return receipt, errors.New("product adoption base branch replay conflict")
+			}
 		}
 		return prior, nil
 	}
@@ -132,6 +155,10 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		receipt.State, receipt.Reason = task.State, task.Reason
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 	}
+	var productSeal *ProductSeal
+	if productBaseBranch != nil && (!UsesProductChangeOutput(wave, task) || result.SchemaVersion != 2 || result.Outcome != "result") {
+		return receipt, errors.New("product adoption requires successful P work/fix output")
+	}
 	if result.SchemaVersion == 2 && result.Outcome == "result" {
 		ready, err := k.productChangeReferenceTx(ctx, tx, b, wave, task, result.ProductChanges[0])
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) {
@@ -146,11 +173,21 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		if !ready {
 			return k.pendingTaskResultTx(ctx, tx, task, receipt, "product change workspace is not ready")
 		}
-		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product candidate sealing is not connected")
+		if productBaseBranch == nil {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "product candidate adoption requires the trusted host")
+		}
+		sealed, err := k.productSealForAdoptionTx(ctx, tx, task.ID, runID)
+		if readinessHoldError(err) || errors.Is(err, ErrProductSealHeld) || errors.Is(err, ErrProductChangeReference) {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "product candidate sealing evidence is unavailable or stale")
+		}
+		if err != nil {
+			return receipt, err
+		}
+		productSeal = &sealed
 	}
 	// P Candidate/evidence authorization is supplied by Task_8. Until connected,
 	// fail closed rather than turning generic artifacts into product acceptance.
-	if len(result.WorkItemRefs) > 0 || (result.Outcome == "result" && len(task.Spec.WorkItemIDs) > 0) {
+	if len(result.WorkItemRefs) > 0 || (result.Outcome == "result" && len(task.Spec.WorkItemIDs) > 0 && productSeal == nil) {
 		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product result validation is not connected")
 	}
 	pendingReason := ""
@@ -286,6 +323,11 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		task.State, task.Reason, task.CompletedAt = contract.TaskCompleted, "", k.clock()
 	}
 	receipt.ResultID = structureID("result-", task.ID, runID)
+	if productSeal != nil {
+		if err := k.adoptProductCandidateTx(ctx, tx, task, receipt.ResultID, *productSeal, *productBaseBranch); err != nil {
+			return receipt, err
+		}
+	}
 	if task.State == contract.TaskCompleted {
 		task.ResultID = receipt.ResultID
 	}
@@ -405,6 +447,11 @@ func (k *KernelStore) completedTaskResultTx(ctx context.Context, tx *sql.Tx, wav
 	}
 	if result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Target != task.Target() || result.Outcome != "result" {
 		return result, fmt.Errorf("%w: dependency result binding conflict", ErrTaskEvidence)
+	}
+	if result.SchemaVersion == 2 {
+		if _, err := loadProductTaskCandidate(ctx, tx, task.ResultID); err != nil {
+			return result, err
+		}
 	}
 	for _, id := range resultArtifactReferences(result) {
 		if _, err := k.currentArtifactTx(ctx, tx, wave, id); err != nil {

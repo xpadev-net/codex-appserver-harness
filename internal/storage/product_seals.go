@@ -104,7 +104,7 @@ func (k *KernelStore) ProductSeal(ctx context.Context, taskID, runID string) (Pr
 	return loadProductSeal(ctx, k.DB, productSealID(taskID, runID))
 }
 
-// ReserveProductSeal admits no subprocess. It saves the immutable run input and
+// ReserveProductSeal starts no sealing mutation. It saves the immutable run input and
 // output binding atomically with Git/destination leases. The normal Task result
 // remains unapplied until a later controller candidate adoption step.
 func (k *KernelStore) ReserveProductSeal(ctx context.Context, taskID, runID string) (ProductSeal, error) {

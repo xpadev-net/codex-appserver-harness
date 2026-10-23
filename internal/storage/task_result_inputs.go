@@ -15,14 +15,15 @@ import (
 // SourceSpec/Target are immutable; later cancellation of an omitted source Task
 // must not change the new Task's saved input digest.
 type TaskResultInput struct {
-	ResultID   string              `json:"result_id"`
-	RunID      string              `json:"run_id"`
-	TaskID     string              `json:"task_id"`
-	PhaseID    string              `json:"phase_id"`
-	Target     contract.Target     `json:"target"`
-	SourceSpec contract.TaskSpec   `json:"source_spec"`
-	Result     contract.TaskResult `json:"result"`
-	Digest     string              `json:"digest"`
+	ProductCandidate *ProductTaskCandidateSnapshot `json:"product_candidate,omitempty"`
+	ResultID         string                        `json:"result_id"`
+	RunID            string                        `json:"run_id"`
+	TaskID           string                        `json:"task_id"`
+	PhaseID          string                        `json:"phase_id"`
+	Target           contract.Target               `json:"target"`
+	SourceSpec       contract.TaskSpec             `json:"source_spec"`
+	Result           contract.TaskResult           `json:"result"`
+	Digest           string                        `json:"digest"`
 }
 
 func (k *KernelStore) taskResultInputTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, id string) (TaskResultInput, error) {
@@ -102,6 +103,13 @@ func (k *KernelStore) taskResultInputTx(ctx context.Context, tx *sql.Tx, wave do
 		return out, fmt.Errorf("%w: source result differs from applied run output", ErrTaskEvidence)
 	}
 	out = TaskResultInput{ResultID: id, RunID: runID, TaskID: source.ID, PhaseID: source.PhaseID, Target: source.Target(), SourceSpec: source.Spec, Result: result, Digest: digest}
+	if result.SchemaVersion == 2 && result.Outcome == "result" {
+		candidate, err := loadProductTaskCandidate(ctx, tx, id)
+		if err != nil {
+			return out, err
+		}
+		out.ProductCandidate = &candidate
+	}
 	return out, nil
 }
 

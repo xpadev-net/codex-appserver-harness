@@ -33,6 +33,13 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
 		return value, err
 	}
+	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	if err != nil {
+		return value, err
+	}
+	if held {
+		return value, ErrProductSealHeld
+	}
 	b, err := sessionBindingTx(ctx, tx, task.SessionID)
 	if err != nil {
 		return value, err

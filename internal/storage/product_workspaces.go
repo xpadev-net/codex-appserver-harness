@@ -144,6 +144,13 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
 		return w, task, b, err
 	}
+	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	if err != nil {
+		return w, task, b, err
+	}
+	if held {
+		return w, task, b, ErrProductWorkspaceHeld
+	}
 	inputs, err := k.taskInputDigestTx(ctx, tx, w, task.Spec)
 	if err != nil {
 		return w, task, b, err
