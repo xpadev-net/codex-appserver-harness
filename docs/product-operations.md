@@ -67,3 +67,13 @@ POST直前にrepository/default branch、固定candidateのPR header/open/draft�
 `BindObservedPRReviewRequest`は既存PR所有binding・自動購読・operation結果・完了outbox・書込lease解放を一transactionで確定する。`review_requested`は依頼受付であり、正式承認やreview終了ではない。PR存続枠とCloud実行枠を保持し、後続の正のreview終了観測までCloud枠を解放しない。通知はpublicationと同じ明示wait/旧scope archiveの処理を使う。pause/cancelやpolicy変更後も、既に送った依頼の正の事実を回収できる。
 
 検証: `go test ./internal/product ./internal/storage -run 'TestReviewRequest|TestLostReview|TestObservedReview' -count=1`。送信直前のunknown・gate/remote/優先操作の変化、誤ったmutation、既存comment/必須guard、保存rollback、再open/cancel後の回収、Cloud枠保持、通常通知のdeferredを確認する。これはlibrary接続であり、既存canonical gate/Cloud結果終了の接続、継続資源更新、daemon/P tool公開は後続である。
+
+## 継続資源のsnapshotと差分保存
+
+`RecordPRResourceScan`は、binding済みPRに対するcontroller専用の読取観測portである。認証済みAPIの新しいsnapshotをcallerが取得し、前state digestをCASへ使う。競合時には旧snapshotへ新しいdigestを付け直さず、取得からやり直す。開始時刻が古いscan、同じscan IDの異なる再送、別repository/PRを拒否する。Webhookの順序で最新状態を上書きするportではない。
+
+PR・issue comment・inline comment・reaction・review・check・status・historyの8種別について、全件取得の`complete`または理由付き`unavailable`を明示する。完全な種別だけ欠落entityを削除と判断する。取得不能なら既存entityを保持し、権限不足や取得不能履歴を空集合の成功にしない。JSONのkey順/空白を正規化し、安定ID・候補SHAと内容digestで追加/編集/削除/availability/head変更を区別する。古いSHAやAPPROVED/DISMISSED/reactionの文字列は保存事実であり、承認・scope・policy・tool指示を生成しない。
+
+最新state、不変の過去snapshot、scanの一意receiptとpending差分outboxを一transactionで保存する。scan再送は同じreceiptを返し、内容不変の再取得では新しい通知要求を作らない。入力は2048 entities/2 MiB、保持stateも2048 entities/4 MiBを上限とし、取得不能による保持分も数える。過大なscanは全体を保留し、黙って切り捨てない。
+
+検証: `go test ./internal/storage -run '^TestPRResource' -count=1`。編集・削除・review取消・好意的reaction、JSON順序差、履歴保持、取得不能と復帰、CAS/逆順/replay、失敗rollback、再openと容量を確認する。この分割は保存portであり、実API収集・署名済みraw deliveryとの回収・差分outboxの関連Task通知とdaemon配置は後続である。
