@@ -234,7 +234,7 @@ func TestProductQualityRejectsStaleCandidateOrLostEvidence(t *testing.T) {
 }
 
 func TestProductQualityPreservesConfirmedFindingsAfterReviewerRetirement(t *testing.T) {
-	for _, mode := range []string{"retired", "missing_head", "missing_receipts", "missing_raw"} {
+	for _, mode := range []string{"retired", "new_identity", "changed_sha", "other_work_item", "missing_head", "missing_receipts", "missing_raw"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			k, w, plan, _, review, run := productQualityFixture(t)
@@ -295,8 +295,25 @@ func TestProductQualityPreservesConfirmedFindingsAfterReviewerRetirement(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			findingErr := k.productCandidateFindingsTx(ctx, tx, w, plan.Value.Candidate)
+			candidate := plan.Value.Candidate
+			workID := "work"
+			if mode == "new_identity" {
+				candidate.ID = "resealed-same-SHA"
+			}
+			if mode == "changed_sha" {
+				candidate.SHA = strings.Repeat("e", 40)
+			}
+			if mode == "other_work_item" {
+				workID = "another-work-item"
+			}
+			findingErr := k.productCandidateFindingsTx(ctx, tx, w, workID, candidate)
 			tx.Rollback()
+			if mode == "changed_sha" || mode == "other_work_item" {
+				if findingErr != nil {
+					t.Fatal("unrelated bytes/WorkItem blocked", findingErr)
+				}
+				return
+			}
 			if findingErr == nil {
 				t.Fatal("retirement/evidence loss erased findings", mode)
 			}

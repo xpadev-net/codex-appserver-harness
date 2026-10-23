@@ -225,7 +225,7 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 			return proof, productQualityHeld("every included original criterion needs independent evaluation")
 		}
 	}
-	if err := k.productCandidateFindingsTx(ctx, tx, w, value.Candidate); err != nil {
+	if err := k.productCandidateFindingsTx(ctx, tx, w, workID, value.Candidate); err != nil {
 		return proof, err
 	}
 	digest, err = contentDigest(value)
@@ -235,23 +235,27 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 	return ProductQualityProof{Value: value, Digest: digest}, nil
 }
 
-func (k *KernelStore) productCandidateFindingsTx(ctx context.Context, tx *sql.Tx, w domain.Wave, candidate runner.Candidate) error {
-	candidateDigest, err := contentDigest(candidate)
-	if err != nil {
-		return err
-	}
-	// Keep confirmed findings even when the parent drops the old reviewer. The
-	// raw result plus history queries also detect deleted head/history evidence.
-	findings, err := inputIDsTx(ctx, tx, `SELECT r.id FROM records r JOIN kernel_tasks t ON t.id=r.work_item_id WHERE r.kind='task_result' AND json_extract(r.payload,'$.outcome')='result' AND t.wave_id=? AND json_extract(t.payload,'$.scope_revision')=? AND json_extract(t.payload,'$.policy_revision')=? AND json_extract(r.payload,'$.review.target_digest')=? AND json_extract(r.payload,'$.review.verdict')='findings'
-UNION SELECT id FROM records WHERE kind IN ('product_task_review','product_task_review_history') AND json_extract(payload,'$.value.target.wave_id')=? AND json_extract(payload,'$.value.target.scope_revision')=? AND json_extract(payload,'$.value.target.policy_revision')=? AND json_extract(payload,'$.value.review.target_digest')=? AND json_extract(payload,'$.value.review.verdict')='findings' ORDER BY 1`, w.ID, w.ScopeRevision, w.Policy.Revision, candidateDigest, w.ID, w.ScopeRevision, w.Policy.Revision, candidateDigest)
+func (k *KernelStore) productCandidateFindingsTx(ctx context.Context, tx *sql.Tx, w domain.Wave, workID string, candidate runner.Candidate) error {
+	// Candidate IDs change on resealing even when Git bytes do not. Retain all
+	// product findings in this scope/policy and compare their authenticated SHA
+	// and WorkItem, rather than allowing a fresh ID to erase unchanged defects.
+	findings, err := inputIDsTx(ctx, tx, `SELECT r.id FROM records r JOIN kernel_tasks t ON t.id=r.work_item_id WHERE r.kind='task_result' AND t.wave_id=? AND json_extract(t.payload,'$.scope_revision')=? AND json_extract(t.payload,'$.policy_revision')=? AND json_array_length(json_extract(t.payload,'$.spec.work_item_ids'))>0 AND json_extract(r.payload,'$.outcome')='result' AND json_extract(r.payload,'$.review.verdict')='findings'
+UNION SELECT id FROM records WHERE kind IN ('product_task_review','product_task_review_history') AND json_extract(payload,'$.value.target.wave_id')=? AND json_extract(payload,'$.value.target.scope_revision')=? AND json_extract(payload,'$.value.target.policy_revision')=? AND json_extract(payload,'$.value.review.verdict')='findings' ORDER BY 1`, w.ID, w.ScopeRevision, w.Policy.Revision, w.ID, w.ScopeRevision, w.Policy.Revision)
 	if err != nil {
 		return err
 	}
 	for _, id := range findings {
-		if _, err := k.productTaskReviewTx(ctx, tx, id); err != nil {
+		review, err := k.productTaskReviewTx(ctx, tx, id)
+		if err != nil {
 			return err
 		}
-		return productQualityHeld("final Candidate has confirmed findings; a reviewed replacement is required")
+		subject, err := loadProductSubject(ctx, tx, review.Value.TaskID)
+		if err != nil {
+			return err
+		}
+		if subject.Value.WorkItemID == workID && review.Value.Candidate.SHA == candidate.SHA {
+			return productQualityHeld("final Candidate bytes have confirmed findings; a reviewed replacement is required")
+		}
 	}
 	return nil
 }
