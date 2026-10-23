@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -107,69 +106,12 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 	if !ready {
 		return value, ErrProductSealHeld
 	}
-	snapshot := contract.InputSnapshot{ID: snapshotID}
-	if err := tx.QueryRowContext(ctx, "SELECT digest,data FROM kernel_snapshots WHERE id=?", snapshotID).Scan(&snapshot.Digest, &snapshot.Input); err != nil {
+	snapshot, input, err := k.productRunInputTx(ctx, tx, b, w, task, runID, snapshotID, thread)
+	if err != nil {
 		return value, err
 	}
-	if err := contract.ValidateSessionInput(snapshot.Input); err != nil {
-		return value, fmt.Errorf("%w: invalid input snapshot", ErrTaskEvidence)
-	}
-	if bytesDigest(snapshot.Input) != snapshot.Digest {
-		return value, fmt.Errorf("%w: input snapshot checksum mismatch", ErrTaskEvidence)
-	}
-	var budget RunBudgetBinding
-	if err := taskEvidenceRecord(ctx, tx, "run_budget", runID, &budget); err != nil {
-		return value, err
-	}
-	if budget.RunID != runID || budget.SessionID != b.ID || budget.TaskID != task.ID || budget.ThreadID != thread || budget.SnapshotID != snapshotID || budget.SnapshotDigest != snapshot.Digest || !slices.Equal(budget.Targets, []contract.Target{w.Target()}) {
-		return value, fmt.Errorf("%w: run budget binding mismatch", ErrTaskEvidence)
-	}
-	var envelope struct {
-		SchemaVersion int               `json:"schema_version"`
-		SessionID     string            `json:"session_id"`
-		Targets       []contract.Target `json:"targets"`
-		Context       SessionContext    `json:"context"`
-	}
-	if err := json.Unmarshal(snapshot.Input, &envelope); err != nil {
-		return value, fmt.Errorf("%w: invalid input envelope", ErrTaskEvidence)
-	}
-	if envelope.SchemaVersion != 1 || envelope.SessionID != b.ID || !slices.Equal(envelope.Targets, []contract.Target{w.Target()}) || len(envelope.Context.Waves) != 1 || envelope.Context.Waves[0].Target != w.Target() {
-		return value, fmt.Errorf("%w: snapshot session or target mismatch", ErrTaskEvidence)
-	}
-	ref := envelope.Context.Waves[0].Manifest
-	var grant inputReferenceGrant
-	if err := taskEvidenceRecord(ctx, tx, "session_input_references", snapshotID, &grant); err != nil {
-		return value, err
-	}
-	if grant.SessionID != b.ID || !slices.Contains(grant.References, ref) || ref.Target != w.Target() || ref.Section != "manifest" {
-		return value, fmt.Errorf("%w: manifest grant mismatch", ErrTaskEvidence)
-	}
-	var manifest savedInputManifest
-	if err := taskEvidenceRecord(ctx, tx, "session_input_manifest", ref.ID, &manifest); err != nil {
-		return value, err
-	}
-	if manifest.SessionID != b.ID || manifest.Reference != ref || int64(len(manifest.Data)) != ref.Bytes || bytesDigest(manifest.Data) != ref.Digest {
-		return value, fmt.Errorf("%w: manifest checksum mismatch", ErrTaskEvidence)
-	}
-	var input sessionManifest
-	if err := json.Unmarshal(manifest.Data, &input); err != nil {
-		return value, fmt.Errorf("%w: invalid saved manifest", ErrTaskEvidence)
-	}
-	if input.SessionID != b.ID || input.Kind != "task" || input.Wave.Target() != w.Target() || input.ProductWorkspace == nil || input.ProductWorkspace.Reference != result.ProductChanges[0] {
+	if input.ProductWorkspace == nil || input.ProductWorkspace.Reference != result.ProductChanges[0] {
 		return value, fmt.Errorf("%w: workspace manifest assignment mismatch", ErrTaskEvidence)
-	}
-	owners := 0
-	for _, assigned := range input.Tasks {
-		if assigned.ID != task.ID {
-			continue
-		}
-		owners++
-		if assigned.Target() != task.Target() || assigned.InputDigest != task.InputDigest || !reflect.DeepEqual(assigned.Spec, task.Spec) {
-			return value, fmt.Errorf("%w: saved Task assignment mismatch", ErrTaskEvidence)
-		}
-	}
-	if owners != 1 {
-		return value, fmt.Errorf("%w: saved Task owner is not unique", ErrTaskEvidence)
 	}
 	value = ProductSealValue{TaskID: taskID, RunID: runID, Workspace: *saved, InputDigest: inputs, OutputDigest: bytesDigest([]byte(run.Final)), SnapshotID: snapshotID, SnapshotDigest: snapshot.Digest}
 	verificationInput, err := k.productVerificationSealInputTx(ctx, tx, w, task, *saved, result)

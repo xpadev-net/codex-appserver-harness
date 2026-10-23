@@ -94,6 +94,17 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 				return receipt, errors.New("product adoption base branch replay conflict")
 			}
 		}
+		if prior.State == contract.TaskCompleted && !prior.Archived && task.Spec.Kind == "review" && len(task.Spec.WorkItemIDs) > 0 {
+			w, err := loadWave(ctx, tx, task.WaveID)
+			if err != nil {
+				return receipt, err
+			}
+			if UsesProductReviewOutput(w, task) {
+				if _, err := k.productTaskReviewTx(ctx, tx, prior.ResultID); err != nil {
+					return receipt, err
+				}
+			}
+		}
 		return prior, nil
 	}
 	if err = tx.QueryRowContext(ctx, "SELECT active_run_id FROM kernel_sessions WHERE id=?", b.ID).Scan(&active); err != nil {
@@ -169,6 +180,7 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
 	}
 	var productSeal *ProductSeal
+	var productReview *ProductTaskReviewSnapshot
 	if productBaseBranch != nil && (result.SchemaVersion != adoptionSchema || result.Outcome != "result" || adoptionSchema == 2 && !UsesProductChangeOutput(wave, task) || adoptionSchema == 3 && !UsesProductVerificationOutput(wave, task)) {
 		return receipt, errors.New("product adoption requires its trusted successful output profile")
 	}
@@ -230,9 +242,22 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 		}
 		productSeal = &sealed
 	}
+	if result.Outcome == "result" && UsesProductReviewOutput(wave, task) {
+		review, err := k.productReviewEvidenceTx(ctx, tx, wave, b, task, runID, result)
+		if errors.Is(err, ErrProductChangeReference) {
+			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "review target is not its fixed Candidate digest")
+		}
+		if readinessHoldError(err) || errors.Is(err, ErrProductSubjectHeld) {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "independent product review evidence is unavailable or stale")
+		}
+		if err != nil {
+			return receipt, err
+		}
+		productReview = &review
+	}
 	// P Candidate/evidence authorization is supplied by Task_8. Until connected,
 	// fail closed rather than turning generic artifacts into product acceptance.
-	if len(result.WorkItemRefs) > 0 || (result.Outcome == "result" && len(task.Spec.WorkItemIDs) > 0 && productSeal == nil) {
+	if len(result.WorkItemRefs) > 0 || (result.Outcome == "result" && len(task.Spec.WorkItemIDs) > 0 && productSeal == nil && productReview == nil) {
 		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product result validation is not connected")
 	}
 	pendingReason := ""
@@ -264,7 +289,7 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 			pendingReason = "referenced Artifact content requires reconciliation"
 		}
 	}
-	if result.Review != nil {
+	if result.Review != nil && productReview == nil {
 		if task.Spec.Kind == "review" {
 			var expected templateReviewTarget
 			err := completionRecord(ctx, tx, "template_review_target", task.ID, &expected)
@@ -371,6 +396,13 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 	if productSeal != nil {
 		if err := k.adoptProductCandidateTx(ctx, tx, task, receipt.ResultID, *productSeal, *productBaseBranch); err != nil {
 			return receipt, err
+		}
+	}
+	if productReview != nil {
+		for _, kind := range []string{"product_task_review", "product_task_review_history"} {
+			if err := kernelRecordTx(ctx, tx, kind, receipt.ResultID, task.ID, *productReview); err != nil {
+				return receipt, err
+			}
 		}
 	}
 	if task.State == contract.TaskCompleted {
@@ -495,6 +527,11 @@ func (k *KernelStore) completedTaskResultTx(ctx context.Context, tx *sql.Tx, wav
 	}
 	if result.SchemaVersion == 2 || result.SchemaVersion == 3 {
 		if _, err := loadProductTaskCandidate(ctx, tx, task.ResultID); err != nil {
+			return result, err
+		}
+	}
+	if UsesProductReviewOutput(wave, task) {
+		if _, err := k.productTaskReviewTx(ctx, tx, task.ResultID); err != nil {
 			return result, err
 		}
 	}
