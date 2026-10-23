@@ -35,7 +35,7 @@ JSON
 
 これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
-request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。監査付き復旧CLIと実K受入は後続工程です。
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。mainの監査付き復旧は下記コマンドで操作できます。Task再試行等の残りの復旧CLIと実K受入は後続工程です。
 
 ### Cursor付きwatch
 
@@ -82,6 +82,27 @@ daemonはroot単位で排他し、起動時に保存済み依頼/未適用結果
 `wave steer --file direction.json`は`{key,target,instruction,criteria?}`を保存し、旧runの停止・結果照合後にcontrollerが新scopeへ適用します。任意の新criterionを指定する場合もoperatorの明示入力として記録します。保存だけで実行中turnへsteer/interruptを送りません。
 
 `wave interrupt --file interrupt.json`は`{key,target,session_id,run_id,preparation_id,reason}`で、inspectに表示された正しい実行世代を指定します。CLIは停止intentを保存し、共通runtimeがprocess停止を確認するまで枠を保持します。結果不明のrunを成功/失敗へ書き換えず、自動再実行も許可しません。
+
+### 履歴の確認と監査付き main 復旧
+
+```sh
+./harness wave session --root /absolute/private/kernel --session main --limit 64
+./harness wave history --root /absolute/private/kernel --id OBSERVATION_ID --limit 64
+./harness wave history --root /absolute/private/kernel --id OBSERVATION_ID --after LAST_TURN_ID --limit 64
+```
+
+`session`は現在のbinding/停止状態/最後のrunと予算、および保存済みread-only履歴観測のheaderを返します。観測は`next_after`→`--after`でページングします。`history`は一つの観測のturn headerとcandidate/baselineを同じ方法でページングします。モデル本文は表示せず、観測のresponse/error digestを残します。これらの閲覧はmodel・wake・ACKを起動しません。
+
+既知の停止済みmain runをoperatorが棄却する場合は、`wave reject-main --file rejection.json`を使います。fileは`{key,expected,run_id,snapshot:{id,digest},reason}`です。`expected`には直前の`session.binding`全体を渡し、snapshotは保存済みの入力参照を指定します。現在のtargetから入力を準備するには、`{"targets":[CURRENT_TARGET]}`をfileへ保存し、次を実行します。
+
+```sh
+./harness wave recovery-input --root /absolute/private/kernel --session main --file targets.json
+./harness wave reject-main --root /absolute/private/kernel --file rejection.json
+```
+
+`recovery-input`は現在のscopeに基づく入力を保存してID/digestを返し、実行を開始しません。棄却はrunの物理的結果・使用量を保持し、理由付きで旧入力を処理して次のmain threadへのrotationを記録します。unknown・未停止・未照合の外部操作がある場合は拒否します。
+
+曖昧なunknown開始について、保存された観測からrunに属するturnをoperatorが特定できた場合は、`wave associate-turn --file association.json`を使います。fileは`{key,expected,run_id,observation_id,turn_id,reason}`です。観測したrecovery ownerも停止済みでなければ拒否します。対応付けは選択したturn IDのみを保存し、unknownを成功へ変換しません。結果はdaemonが通常のread-only照合で確定します。同じkey/内容の再送は元receiptを返し、変更した再送は拒否します。Taskの明示再試行・未確定thread作成の復旧CLIは後続工程です。
 
 ## 設定と起動
 

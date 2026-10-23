@@ -42,6 +42,31 @@ func applyControlFile(ctx context.Context, k *storage.KernelStore, command, file
 			result, err = k.RequestWaveDirection(ctx, request)
 			return err
 		}
+	case "reject-main":
+		var request storage.MainRunRejectionRequest
+		if err = contract.DecodeStrict(raw, &request); err != nil {
+			return nil, err
+		}
+		snapshot, loadErr := k.SavedInputSnapshot(ctx, request.Snapshot.ID, request.Snapshot.Digest)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		request.Snapshot = snapshot
+		apply = func(ctx context.Context) error {
+			var err error
+			result, err = k.RejectStoppedMainRun(ctx, request)
+			return err
+		}
+	case "associate-turn":
+		var request storage.TurnAssociationRequest
+		if err = contract.DecodeStrict(raw, &request); err != nil {
+			return nil, err
+		}
+		apply = func(ctx context.Context) error {
+			var err error
+			result, err = k.AssociateObservedTurn(ctx, request)
+			return err
+		}
 	case "interrupt":
 		var request storage.SessionInterruptRequest
 		if err = contract.DecodeStrict(raw, &request); err != nil {
