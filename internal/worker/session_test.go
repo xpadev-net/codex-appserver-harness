@@ -268,3 +268,51 @@ func TestMainAndTaskShareDriverWithAuditedMainRebinding(t *testing.T) {
 		t.Fatal("Task changed its thread")
 	}
 }
+
+func TestCommonDriverProductOutputUsesDedicatedVersionAndPreservesRawChanges(t *testing.T) {
+	ctx := context.Background()
+	driver, store, rpc := newSessionDriverFixture("task")
+	output := contract.TaskResult{SchemaVersion: 2, Target: store.binding.Target, TaskID: store.binding.TaskID, PhaseID: store.binding.PhaseID, Outcome: "result", Artifacts: []string{}, CriterionResults: []contract.CriterionResult{}, WorkItemRefs: []contract.CandidateReference{}, ProductChanges: []contract.ProductChangeReference{{WorkItemID: "work", WorkspaceID: "workspace", WorkspaceDigest: strings.Repeat("a", 64)}}, Remaining: []string{}, Blockers: []string{}, SubscriptionIDs: []string{}}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpc.output = string(raw)
+	if err := ValidateTaskOutput(raw, store.binding); err == nil {
+		t.Fatal("generic output profile accepted product schema")
+	}
+	if err := ValidateProductTaskOutput(raw, store.binding); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := driver.Prepare(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := driver.Execute(ctx, prepared, "product-change", snapshotFixture(), contract.StrictOutputSchema(contract.ProductTaskResultSchema()), ValidateProductTaskOutput)
+	if err != nil || run.State != "completed" || run.Final != string(raw) {
+		t.Fatal("common driver rewrote proposed changes into candidate facts", run, err)
+	}
+	old := output
+	old.SchemaVersion = 1
+	old.ProductChanges = nil
+	old.Artifacts = []string{"artifact"}
+	legacy, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateProductTaskOutput(legacy, store.binding); err == nil {
+		t.Fatal("product output profile accepted legacy final")
+	}
+	var injected map[string]any
+	if err := json.Unmarshal(raw, &injected); err != nil {
+		t.Fatal(err)
+	}
+	injected["product_changes"].([]any)[0].(map[string]any)["sha"] = strings.Repeat("b", 40)
+	fake, err := json.Marshal(injected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateProductTaskOutput(fake, store.binding); err == nil {
+		t.Fatal("model supplied candidate SHA in workspace output")
+	}
+}

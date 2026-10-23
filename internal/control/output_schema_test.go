@@ -1,7 +1,11 @@
 package control
 
 import (
+	"context"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
+	"path/filepath"
 	"testing"
 )
 
@@ -31,5 +35,56 @@ func TestKernelSourceUsesProviderOutputSchemas(t *testing.T) {
 	// The provider form must not alter the versioned generic contract.
 	if contract.MainResultSchema() == nil {
 		t.Fatal("generic main schema unavailable")
+	}
+}
+
+func TestKernelSourceSelectsProductOutputVersionFromTrustedTaskRole(t *testing.T) {
+	ctx := context.Background()
+	k, err := storage.OpenKernel(filepath.Join(t.TempDir(), "controller", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if _, err := k.CreateOrchestrator(ctx, "main", "configured", t.TempDir(), "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	w, err := k.CreateProductWave(ctx, storage.ProductWaveRequest{Wave: storage.WaveRequest{OrchestratorSessionID: "main", Source: "direct", SourceID: "product-output", OriginalRequest: "implement behavior", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "preserve behavior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: domain.DefaultKernelLimits()}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "work", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := contract.TaskSpec{ID: "implementation", Kind: "work", Instruction: "implement behavior", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{"work"}}
+	review := work
+	review.ID, review.Kind, review.Instruction = "independent-review", "review", "independently review behavior"
+	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "implementation", Tasks: []contract.TaskSpec{work, review}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID, review.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	receipt, err := k.AdoptPlan(ctx, w.Target(), "product-output-role", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := NewKernelSource(k)
+	for _, id := range receipt.CreatedTaskIDs {
+		task, err := k.Task(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := k.SessionBinding(ctx, task.SessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schema, validate, err := source.bindingContract(ctx, b)
+		if err != nil || validate == nil {
+			t.Fatal(err)
+		}
+		props := schema.(map[string]any)["properties"].(map[string]any)
+		expected := 1
+		if task.Spec.Kind == "work" {
+			expected = 2
+		}
+		if props["schema_version"].(map[string]any)["const"] != expected {
+			t.Fatal(task.Spec.Kind, props["schema_version"])
+		}
+		_, hasChanges := props["product_changes"]
+		if hasChanges != (expected == 2) {
+			t.Fatal("product profile leaked across trusted roles", task.Spec.Kind, props)
+		}
 	}
 }

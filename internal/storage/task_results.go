@@ -121,6 +121,9 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 	if validationErr == nil && wave.Policy.Stage == "K" && len(result.WorkItemRefs) > 0 {
 		validationErr = errors.New("K Task cannot claim product Candidate results")
 	}
+	if validationErr == nil && result.SchemaVersion == 2 && !productCodeTask(wave, task) {
+		validationErr = errors.New("TaskResult schema 2 requires a trusted P work/fix assignment")
+	}
 	if validationErr == nil && task.Spec.Kind == "review" && result.Outcome == "result" && result.Review == nil {
 		validationErr = errors.New("review Task requires a structured review verdict")
 	}
@@ -128,6 +131,22 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		task.State, task.Reason, task.CompletedAt = contract.TaskFailed, "invalid Task result: "+validationErr.Error(), k.clock()
 		receipt.State, receipt.Reason = task.State, task.Reason
 		return receipt, k.finishTaskResultTx(ctx, tx, b, task, receipt, nil)
+	}
+	if result.SchemaVersion == 2 && result.Outcome == "result" {
+		ready, err := k.productChangeReferenceTx(ctx, tx, b, wave, task, result.ProductChanges[0])
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "product change workspace evidence is unavailable")
+		}
+		if errors.Is(err, ErrProductChangeReference) {
+			return k.invalidTaskResultTx(ctx, tx, b, task, receipt, err.Error())
+		}
+		if err != nil {
+			return receipt, err
+		}
+		if !ready {
+			return k.pendingTaskResultTx(ctx, tx, task, receipt, "product change workspace is not ready")
+		}
+		return k.pendingTaskResultTx(ctx, tx, task, receipt, "product candidate sealing is not connected")
 	}
 	// P Candidate/evidence authorization is supplied by Task_8. Until connected,
 	// fail closed rather than turning generic artifacts into product acceptance.

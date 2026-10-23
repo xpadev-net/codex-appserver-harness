@@ -74,6 +74,23 @@ func sourceContract(kind string) (any, worker.OutputValidator, error) {
 		return nil
 	}, nil
 }
+func (s *KernelSource) bindingContract(ctx context.Context, b contract.SessionBinding) (any, worker.OutputValidator, error) {
+	if b.Kind == "task" {
+		task, err := s.Store.Task(ctx, b.TaskID)
+		if err != nil {
+			return nil, nil, err
+		}
+		wave, err := s.Store.Wave(ctx, task.WaveID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if wave.Policy.Stage == "P" && wave.Policy.Product && (task.Spec.Kind == "work" || task.Spec.Kind == "fix") && len(task.Spec.WorkItemIDs) > 0 {
+			return contract.StrictOutputSchema(contract.ProductTaskResultSchema()), worker.ValidateProductTaskOutput, nil
+		}
+	}
+	return sourceContract(b.Kind)
+}
+
 func (s *KernelSource) Ready(ctx context.Context, after string, limit int) (WorkPage, error) {
 	out := WorkPage{Work: []SessionWork{}}
 	if s.Store == nil || limit < 1 || limit > 128 {
@@ -142,7 +159,7 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 	if state.Creating || !state.ProcessStopped {
 		return nil, false, nil
 	}
-	schema, validate, err := sourceContract(b.Kind)
+	schema, validate, err := s.bindingContract(ctx, b)
 	if err != nil {
 		return nil, false, err
 	}

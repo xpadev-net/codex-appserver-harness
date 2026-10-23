@@ -280,6 +280,12 @@ func (d SessionDriver) RebindMain(ctx context.Context, id, newThread, snapshotID
 	return d.Store.RebindMainThread(ctx, b, newThread, snapshotID, reason)
 }
 func ValidateTaskOutput(data []byte, b SessionBinding) error {
+	return validateTaskOutputVersion(data, b, 1)
+}
+func ValidateProductTaskOutput(data []byte, b SessionBinding) error {
+	return validateTaskOutputVersion(data, b, 2)
+}
+func validateTaskOutputVersion(data []byte, b SessionBinding, version int) error {
 	if b.Kind != "task" {
 		return errors.New("Task output requires a Task binding")
 	}
@@ -289,6 +295,9 @@ func ValidateTaskOutput(data []byte, b SessionBinding) error {
 	}
 	if err := result.Validate(); err != nil {
 		return err
+	}
+	if result.SchemaVersion != version {
+		return errors.New("Task output schema does not match its trusted role profile")
 	}
 	if result.TaskID != b.TaskID || result.PhaseID != b.PhaseID || result.Target != b.Target {
 		return errors.New("result belongs to another Task/scope")
