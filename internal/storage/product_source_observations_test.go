@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"strings"
@@ -18,7 +19,7 @@ func productSourceFixture(t *testing.T) (*KernelStore, domain.Wave, ProductSourc
 	k, request := waveStoreFixture(t)
 	request.Source, request.SourceID = "github", "r17-i42"
 	request.Policy.Stage, request.Policy.Product = "P", true
-	w, err := k.CreateProductWave(context.Background(), ProductWaveRequest{Wave: request, WorkItems: []ProductWorkItemDefinition{{ID: request.SourceID, Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
+	w, err := k.CreateProductWave(context.Background(), ProductWaveRequest{Wave: request, SourcePolicyDigest: strings.Repeat("e", 64), WorkItems: []ProductWorkItemDefinition{{ID: request.SourceID, Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,5 +351,231 @@ func TestProductSourceObservationWatchFailureRollsBackControlProjection(t *testi
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM records WHERE kind IN ('product_source_observation','product_source_observation_history')").Scan(&count); err != nil || count != 0 {
 		t.Fatal("watch failure leaked source history", count, err)
+	}
+}
+
+func TestProductSourceObservationScopeRefreshPreservesProhibition(t *testing.T) {
+	ctx := context.Background()
+	k, w, facts := productSourceFixture(t)
+	registered, err := k.ReadProductWorkItemRegistration(ctx, w.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direction, err := k.RequestWaveDirection(ctx, directionRequest(w))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyWaveDirection(ctx, direction.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := k.ObserveProductSource(ctx, w.Target(), "", facts)
+	if err != nil || held.Hold == nil || held.Hold.Reason != "scope_unconfirmed" {
+		t.Fatal(held, err)
+	}
+	definition := registered.Value.Definition
+	newDefinition := definition
+	newDefinition.ID = "additional-work"
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), "", newDefinition); err == nil {
+		t.Fatal("new ownership admitted while source held")
+	}
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), "stale", definition); err == nil {
+		t.Fatal("held refresh skipped CAS")
+	}
+	mustControl(t, k, operatorRequest(w, "pause-refresh", "pause", ""))
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), registered.Digest, definition); err == nil {
+		t.Fatal("source refresh bypassed manual pause")
+	}
+	mustControl(t, k, operatorRequest(w, "resume-refresh", "resume", ""))
+	updated, err := k.RegisterProductWorkItem(ctx, w.Target(), registered.Digest, definition)
+	if err != nil || updated.Value.ScopeRevision != w.ScopeRevision {
+		t.Fatal(updated, err)
+	}
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil || current.SourceHold == nil || !current.DispatchPaused() {
+		t.Fatal("metadata refresh removed source hold", current, err)
+	}
+	ready, err := k.ObserveProductSource(ctx, w.Target(), held.Snapshot.Digest, facts)
+	if err != nil || ready.Hold != nil || !ready.Changed {
+		t.Fatal("refreshed registration could not recover source", ready, err)
+	}
+}
+
+func TestProductSourceObservationPolicyCannotChangeWithinEpoch(t *testing.T) {
+	ctx := context.Background()
+	k, w, facts := productSourceFixture(t)
+	// The initial admission pin protects even the very first observation.
+	changed := facts
+	changed.PolicyDigest = strings.Repeat("f", 64)
+	first, err := k.ObserveProductSource(ctx, w.Target(), "", changed)
+	if err != nil || first.Hold == nil || first.Hold.Reason != "policy_changed" {
+		t.Fatal(first, err)
+	}
+	restored, err := k.ObserveProductSource(ctx, w.Target(), first.Snapshot.Digest, facts)
+	if err != nil || restored.Hold != nil {
+		t.Fatal(restored, err)
+	}
+	facts.Hold = true
+	held, err := k.ObserveProductSource(ctx, w.Target(), restored.Snapshot.Digest, facts)
+	if err != nil || held.Hold == nil {
+		t.Fatal(held, err)
+	}
+	changedRead, err := k.ObserveProductSource(ctx, w.Target(), held.Snapshot.Digest, changed)
+	if err != nil || changedRead.Hold == nil || changedRead.Hold.Reason != "policy_changed" {
+		t.Fatal(changedRead, err)
+	}
+	repeated, err := k.ObserveProductSource(ctx, w.Target(), changedRead.Snapshot.Digest, changed)
+	if err != nil || repeated.Changed || repeated.Hold == nil {
+		t.Fatal("changed observation became authoritative pin", repeated, err)
+	}
+	direction, err := k.RequestWaveDirection(ctx, directionRequest(w))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyWaveDirection(ctx, direction.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterScope, err := k.ObserveProductSource(ctx, w.Target(), repeated.Snapshot.Digest, changed)
+	if err != nil || afterScope.Hold == nil || afterScope.Hold.Reason != "policy_changed" {
+		t.Fatal("scope change adopted new source policy", afterScope, err)
+	}
+	// A trusted controller's explicit policy revision permits a new policy pin.
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Policy.Revision++
+	if err := saveWave(ctx, tx, w); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	registration, err := k.ReadProductWorkItemRegistration(ctx, w.SourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), registration.Digest, registration.Value.Definition); err != nil {
+		t.Fatal(err)
+	}
+	afterPolicy, err := k.ObserveProductSource(ctx, w.Target(), afterScope.Snapshot.Digest, changed)
+	if err != nil || afterPolicy.Hold != nil || afterPolicy.Snapshot.Value.PolicyRevision != w.Policy.Revision {
+		t.Fatal("explicit policy revision did not permit new policy", afterPolicy, err)
+	}
+}
+
+func TestProductSourceObservationPolicyPinLossOrCorruptionPreservesEvidence(t *testing.T) {
+	for _, mode := range []string{"missing", "corrupt"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, w, facts := productSourceFixture(t)
+			id := productSourcePolicyID(w)
+			if mode == "missing" {
+				if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_source_policy' AND id=?", id); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := k.DB.Exec("UPDATE records SET payload='broken pin' WHERE kind='product_source_policy' AND id=?", id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observed, err := k.ObserveProductSource(ctx, w.Target(), "", facts)
+			if !errors.Is(err, ErrTaskEvidence) || observed.Hold == nil || observed.Hold.Reason != "state_invalid" {
+				t.Fatal(observed, err)
+			}
+			var count int
+			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_source_observation'").Scan(&count); err != nil || count != 0 {
+				t.Fatal("invalid pin admitted observation", count, err)
+			}
+			var payload string
+			err = k.DB.QueryRow("SELECT payload FROM records WHERE kind='product_source_policy' AND id=?", id).Scan(&payload)
+			if mode == "missing" && !errors.Is(err, sql.ErrNoRows) {
+				t.Fatal("missing pin rebuilt", payload, err)
+			}
+			if mode == "corrupt" && (err != nil || payload != "broken pin") {
+				t.Fatal("corrupt pin overwritten", payload, err)
+			}
+		})
+	}
+}
+
+func TestProductSourceObservationFirstPinRollsBackWithObservation(t *testing.T) {
+	ctx := context.Background()
+	k, request := waveStoreFixture(t)
+	request.Source, request.SourceID = "github", "r17-i42"
+	request.Policy.Stage, request.Policy.Product = "P", true
+	w, err := k.CreateProductWave(ctx, ProductWaveRequest{Wave: request, WorkItems: []ProductWorkItemDefinition{{ID: request.SourceID, Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := ProductSourceFacts{RepositoryID: 17, IssueNumber: 42, PolicyDigest: strings.Repeat("e", 64), Available: true, IssueState: "open", Ready: true, RequestDigest: ProductSourceRequestDigest(w.OriginalRequest), UpdatedAt: k.clock()}
+	if _, err := k.DB.Exec("CREATE TRIGGER fail_source_pin_observation BEFORE INSERT ON records WHEN NEW.kind='product_source_observation' BEGIN SELECT RAISE(FAIL,'rollback pin'); END"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ObserveProductSource(ctx, w.Target(), "", facts); err == nil {
+		t.Fatal("failed observation accepted")
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind IN ('product_source_policy','product_source_policy_history')").Scan(&count); err != nil || count != 0 {
+		t.Fatal("pin survived failed observation", count, err)
+	}
+}
+
+func TestProductSourceObservationCannotCompleteThroughGenericAcceptance(t *testing.T) {
+	ctx := context.Background()
+	k, w, b, run, _ := waveCompletionFixture(t)
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Policy.Stage, w.Policy.Product = "P", true
+	w.Source, w.SourceID = "github", "r17-i42"
+	w.SourceHold = &domain.WaveSourceHold{Reason: "hold", Digest: strings.Repeat("e", 64), ObservedAt: k.clock()}
+	if err := saveWave(ctx, tx, w); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyMainResult(ctx, b.ID, run.ID); err == nil {
+		t.Fatal("P Wave completed through K artifact acceptance")
+	}
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil || current.State == domain.WaveCompleted || current.SourceHold == nil {
+		t.Fatal("rejected acceptance changed product hold", current, err)
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='wave_completion'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("product completion proof fabricated", count, err)
+	}
+}
+
+func TestProductSourceObservationMissingPolicyCannotBeRepinnedFromCurrentObservation(t *testing.T) {
+	ctx := context.Background()
+	k, w, facts := productSourceFixture(t)
+	first, err := k.ObserveProductSource(ctx, w.Target(), "", facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind IN ('product_source_policy','product_source_policy_history','product_source_observation_history')"); err != nil {
+		t.Fatal(err)
+	}
+	facts.PolicyDigest = strings.Repeat("f", 64)
+	observed, err := k.ObserveProductSource(ctx, w.Target(), first.Snapshot.Digest, facts)
+	if !errors.Is(err, ErrTaskEvidence) || observed.Hold == nil || observed.Hold.Reason != "state_invalid" {
+		t.Fatal(observed, err)
+	}
+	current, err := k.ReadProductSourceObservation(ctx, w.ID)
+	if err != nil || current.Digest != first.Snapshot.Digest {
+		t.Fatal("current evidence replaced after pin loss", current, err)
 	}
 }

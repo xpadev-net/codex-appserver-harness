@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,10 +76,66 @@ func (f ProductSourceFacts) validate() error {
 
 func validSourceStatus(status string) bool {
 	switch status {
-	case "ready", "unavailable", "closed", "hold", "not_ready", "request_changed", "scope_unconfirmed":
+	case "ready", "unavailable", "closed", "hold", "not_ready", "request_changed", "scope_unconfirmed", "policy_changed":
 		return true
 	}
 	return false
+}
+
+// Immutable per policy revision, independent of scope and plan changes. The
+// second record is retained as evidence if the authoritative pin is lost.
+type productSourcePolicy struct {
+	WaveID         string `json:"wave_id"`
+	SourceID       string `json:"source_id"`
+	PolicyRevision int    `json:"policy_revision"`
+	PolicyDigest   string `json:"policy_digest"`
+}
+type productSourcePolicyRecord struct {
+	Value  productSourcePolicy `json:"value"`
+	Digest string              `json:"digest"`
+}
+
+func productSourcePolicyID(w domain.Wave) string {
+	return structureID("product-source-policy-", w.ID, strconv.Itoa(w.Policy.Revision))
+}
+func saveProductSourcePolicyTx(ctx context.Context, tx *sql.Tx, w domain.Wave, digest string) error {
+	value := productSourcePolicy{WaveID: w.ID, SourceID: w.SourceID, PolicyRevision: w.Policy.Revision, PolicyDigest: digest}
+	checksum, err := contentDigest(value)
+	if err != nil {
+		return err
+	}
+	record := productSourcePolicyRecord{Value: value, Digest: checksum}
+	for _, kind := range []string{"product_source_policy", "product_source_policy_history"} {
+		if err := kernelRecordTx(ctx, tx, kind, productSourcePolicyID(w), w.ID, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func productSourcePolicyTx(ctx context.Context, tx *sql.Tx, w domain.Wave) (string, error) {
+	var record productSourcePolicyRecord
+	err := taskEvidenceRecord(ctx, tx, "product_source_policy", productSourcePolicyID(w), &record)
+	if errors.Is(err, sql.ErrNoRows) {
+		var count int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM records WHERE (kind='product_source_policy_history' AND id=?) OR (kind IN ('product_source_observation','product_source_observation_history') AND work_item_id=? AND json_extract(payload,'$.value.policy_revision')=?)", productSourcePolicyID(w), w.ID, w.Policy.Revision).Scan(&count); err != nil {
+			return "", err
+		}
+		if count != 0 {
+			return "", fmt.Errorf("%w: source policy pin missing", ErrTaskEvidence)
+		}
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	digest, err := contentDigest(record.Value)
+	if err != nil {
+		return "", err
+	}
+	if record.Digest != digest || record.Value.WaveID != w.ID || record.Value.SourceID != w.SourceID || record.Value.PolicyRevision != w.Policy.Revision || !validSourceDigest(record.Value.PolicyDigest) {
+		return "", fmt.Errorf("%w: source policy pin integrity conflict", ErrTaskEvidence)
+	}
+	return record.Value.PolicyDigest, nil
 }
 
 func loadProductSourceSnapshot(ctx context.Context, q queryer, waveID string) (ProductSourceSnapshot, error) {
@@ -175,6 +232,16 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 	if err != nil {
 		return result, err
 	}
+	pinnedPolicy, err := productSourcePolicyTx(ctx, tx, w)
+	if errors.Is(err, ErrTaskEvidence) {
+		return k.prohibitInvalidSourceTx(ctx, tx, w, err)
+	}
+	if err != nil {
+		return result, err
+	}
+	if pinnedPolicy != "" && pinnedPolicy != facts.PolicyDigest {
+		status = "policy_changed"
+	}
 	value := ProductSourceObservation{WaveID: w.ID, SourceID: w.SourceID, ScopeRevision: w.ScopeRevision, PolicyRevision: w.Policy.Revision, Status: status, Facts: facts}
 	digest, err := contentDigest(value)
 	if err != nil {
@@ -189,6 +256,11 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 	}
 	if (priorErr == nil && expected != prior.Digest) || (priorErr != nil && expected != "") {
 		return result, errors.New("product source observation CAS conflict")
+	}
+	if pinnedPolicy == "" {
+		if err := saveProductSourcePolicyTx(ctx, tx, w, facts.PolicyDigest); err != nil {
+			return result, err
+		}
 	}
 	saved := prior
 	if priorErr != nil || prior.Digest != digest {

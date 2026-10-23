@@ -185,7 +185,11 @@ func (k *KernelStore) registerProductWorkItemTx(ctx context.Context, tx *sql.Tx,
 			return saved, errors.New("product WorkItem registration limit reached")
 		}
 	}
-	if w.DispatchPaused() || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+	// Source verification may be waiting for this exact versioned metadata
+	// refresh. Permit only the CAS-protected existing definition to catch up;
+	// retain the source prohibition and all manual/direction/terminal barriers.
+	sourceRefresh := priorErr == nil && expected == prior.Digest && (prior.Value.ScopeRevision != w.ScopeRevision || prior.Value.PolicyRevision != w.Policy.Revision)
+	if w.Paused || w.PendingDirectionID != "" || (w.SourceHold != nil && !sourceRefresh) || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
 		return saved, errors.New("product source registration is held")
 	}
 	if memberErr != nil || membership.Target.ScopeRevision != w.ScopeRevision || membership.Target.PolicyRevision != w.Policy.Revision {

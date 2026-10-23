@@ -268,7 +268,11 @@ repositoryごとにsource policy/priority/collection版digest、group、ペー�
 
 `KernelStore.ObserveProductSource`はtrusted controller専用の保存portである。canonicalなGitHub source ID、repository数値ID/Issue番号、source policy digest、GETで確認したopen/closed・ready/hold・元要求digest・更新時刻、または理由付き取得不能を受け付ける。current snapshot digestによるCASは外部読取の前に取得する。Sourceのscope/policyは照合し、同じsource内のplan変更は上書きしない。
 
-観測は`ready / unavailable / closed / hold / not_ready / request_changed / scope_unconfirmed`を区別する。未確認・closed/hold・ready条件不成立・要求編集・WorkItem所属の旧版は`Wave.source_hold`として後続dispatchを保留する。`ready`は必要なsource条件を満たしたことだけを表し、検証・正式承認やWaveの成功を意味しない。編集を新scopeへ自動採用せず、版付き同期/後続工程へ残す。
+観測は`ready / unavailable / closed / hold / not_ready / request_changed / scope_unconfirmed / policy_changed`を区別する。未確認・closed/hold・ready条件不成立・要求編集・WorkItem所属の旧版は`Wave.source_hold`として後続dispatchを保留する。`ready`は必要なsource条件を満たしたことだけを表し、検証・正式承認やWaveの成功を意味しない。編集を新scopeへ自動採用せず、版付き同期/後続工程へ残す。
+
+source policy digestはWaveのpolicy revisionごとに固定する。Issue受付時に選択policyのdigestを同じtransactionで保存し、未登録の既存sourceは最初の観測で固定する。同じpolicy版でルールが変わった観測は`policy_changed`として保留し、scope/plan変更だけでは新ルールを採用しない。明示的なpolicy版更新が必要で、pinの欠落・破損は`state_invalid`にする。
+
+source保留中でも、既存WorkItemを現在scope/policyへ更新するCAS付き登録は可能とし、保留そのものは次のready観測まで維持する。新所属の追加、manual pause、pending direction、終端の制限は維持する。
 
 source保留、manual pause、pending directionは独立で、手動resumeはsource保留を解除しない。Sourceがreadyに戻ってもmanual pause/directionを消さない。Waveと小さいtool authority projectionを同じtransactionで保存し、既存のscheduler/共通gateway/PR送信直前guardへ反映する。cancelは終端の親向け観測を阻害しないよう実行用保留を外し、source観測だけで終端Waveを再open/再holdしない。
 
