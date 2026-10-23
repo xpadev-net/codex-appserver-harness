@@ -406,3 +406,15 @@ outcome=resultは、Task固有のworkspace変更参照一件と`product_verifica
 共通driverはv3を独立して検証し、raw finalの計画参照を保持する。controllerは固定Task/subject/workspaceとtrusted P verification roleを再照合し、他Taskの参照を拒否する。テスト書込範囲、正常終了・停止後のsealing、計画Artifactの内容/許可と最終Candidateへのrebindは後続の接続であり、この契約だけでは成果を適用しない。元の計画Artifact/raw finalを書き換えず、hostが既存の計画検証・rebindを使って正規化した証拠を別保存する。
 
 検証: contract/worker/control/storageのv1/v2/v3境界、既存schema一致、subject/plan必須、SHA/自己review/runner evidence拒否、共通driverのraw final保持、trusted role選択、Kの自己分類拒否を確認する。verificationの実行・書込・sealing/plan採用が未接続の間は成果を保留し、製品readinessを外さない。
+
+## host verification policyの固定
+
+`RegisterProductVerificationPolicy(target, value)`は、Wave policy版と登録済みrepositoryごとに、canonical local repository、変更許可パス、`policy.Verification`の必須/登録profileを固定するhost専用portである。model toolや候補内configから登録しない。verification policyの版はWave policy版と一致させる。
+
+許可パスはcanonicalな相対exact pathまたは末尾`/`のdirectory prefixとし、親参照・root・glob・Git metadata・重複を拒否する。profileは既存の必須集合/実行証拠検査に加え、最大64件、argv最大128要素、各文字列の上限、timeout最大24時間、policy全体1 MiBに制限する。pathは最大128件。正規化はcallerのmap/sliceを共有しない。
+
+current headと不変historyを同じtransactionで保存し、完全一致の再送はread-onlyにする。同じpolicy版への異なる設定はconflictとし、head/historyの欠落・破損を新規pinとして上書きしない。scope/plan変更でpolicy版の内容を暗黙変更しない。保存失敗は両方rollbackする。
+
+verification Taskのmanifestにはoptional `product_verification_policy`としてID/digest・許可パス・必須/利用可能profile名だけを渡す。完全な実行argvやprofile内部設定をmodel入力へ出さない。K、work/fix、review、parentにはこのTask用fieldを出力しない。
+
+検証: `go test ./internal/storage -run '^TestProductVerificationPolicy' -count=1`。immutable pin/再open/再送、異なる設定・scope外repository・不正path/profile/版の拒否、callerからの分離、argv非公開、証拠欠落とhistory保存失敗rollbackを確認する。この設定は書込/実行/runner成功の許可ではなく、検証workspace・sealing/plan採用への接続は後続である。
