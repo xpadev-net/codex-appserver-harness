@@ -189,3 +189,13 @@ HTTP は header/body/idle timeout と同時 handler 上限32を持ち、過負�
 準備済み・未送信の再試行はoperation IDから導く同じownerを使う。これで再起動後も prepared を照合できるが、物理停止の証拠にはしない。旧executorが残っていても送信直前の `MarkPRMayHaveSent` はtransactionで一度しか成功せず、成功後のunknownを再度送らない。異なるownerの既存claimを奪わない。結果不明のread-only回収には従来どおり別途停止証拠を要求する。
 
 検証: `go test ./internal/product ./internal/storage -run 'TestPRDispatcher|TestPRDispatchOperations' -count=3`。共通gatewayで実際に受付した操作から、PR公開/reviewの既存guard付きadapter、preparedのDB再open後再開、応答欠落unknownの非再送、別PR/DBの並行進行、cancel join、cursor/状態filterを確認する。並行fixtureはmodel run開始前にPR枠2を明示し、既定値1を変更しない。APIはfixture transportであり実Cloud合格ではない。canonical工程のport実装とdaemon書込opt-inへの配置は後続である。
+
+### native session への P tool 公開
+
+private runtime JSON に `"product_tools": true` を明示すると、共通 `SessionDriver` が新規 thread/start の dynamicTools に既存の `pr_publish` / `pr_review_request` を追加する。既定falseでは従来の kernel tool set を使う。TaskにはWave toolを追加しない。tool公開は認可・gate・正式承認を作らず、呼出は従来の process owner / session / run / thread / turn / call を固定する共通gatewayを通る。
+
+thread作成前に `PinSessionTools` が論理session / generationごとの kernel_v1 または product_v1 を保存する。保存失敗は準備予約 / RPCより前に返す。同じgenerationの構成変更や、profile記録がない既存threadのP化を拒否する。既存の無記録threadは従来K構成でのみ再開できる。変更にはtrusted `BeginMainThreadReplacement` portで停止確認・入力境界・監査を伴う明示更新を行い、新generation / 新threadを使う。既存Task threadを変更せず、新Task/sessionへ引き渡す。profileは履歴として残し、DB再open後も照合する。
+
+この設定は外部操作の受付toolを公開する。canonical gate実装とdaemon書込dispatcherの配置、WorkItem割当Taskのreadiness解放は後続であり、受付を外部送信成功へ読み替えない。
+
+検証: `go test ./internal/worker ./internal/control ./internal/storage ./internal/kernelcli -run 'TestProductTools|TestSessionToolProfile|TestRuntimeProductTools|TestRuntimeNativeProductTool|TestKernelCLIRun' -count=3`。main/Taskのrole別tool公開、profile保存失敗時のRPCゼロ、世代/再open/既存thread拒否/明示rotation後の構成変更、production Runtimeと実DBのprofile照合、private runtime opt-inの読込を確認する。RPC fixtureでP mainから実共通gatewayへpr_publishし、同じcallの再送がoperation/購読を増やさず、K Waveが同じnative tool要求を拒否することを確認した。fixtureの汎用最終出力は製品候補やWave受入の証拠にしない。実model/GitHub接続の検証とは区別する。

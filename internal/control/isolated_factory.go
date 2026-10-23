@@ -23,6 +23,7 @@ import (
 // or merge-capability prerequisite. IsolationVerified is a trusted operator
 // attestation about descendant containment; per-launch probes remain mandatory.
 type IsolatedConfig struct {
+	ProductTools      bool
 	PrivateRoot       string
 	SessionAuthFile   string // Optional access-token source owned by the authorized session.
 	Model             string
@@ -59,7 +60,7 @@ func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runt
 	config.PrivateRoot = root
 	config.Launcher = append([]string{}, config.Launcher...)
 	config.GitDirectories = append([]string{}, config.GitDirectories...)
-	return Runtime{Store: store, Factory: IsolatedFactory{Config: config, store: store}}, nil
+	return Runtime{Store: store, Factory: IsolatedFactory{Config: config, store: store}, ProductTools: config.ProductTools}, nil
 }
 
 func pathContains(root, path string) bool {

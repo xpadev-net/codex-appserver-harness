@@ -18,6 +18,7 @@ import (
 // RuntimeConfig contains host-selected launch policy, never model output or
 // credentials. SessionAuthFile references the authorized session's token source.
 type RuntimeConfig struct {
+	ProductTools      bool     `json:"product_tools,omitempty"`
 	SchemaVersion     int      `json:"schema_version"`
 	CodexBinary       string   `json:"codex_binary"`
 	WorkerCodexHome   string   `json:"worker_codex_home"`
@@ -54,7 +55,7 @@ func loadRuntime(path, root, model string) (control.IsolatedConfig, error) {
 			return control.IsolatedConfig{}, errors.New("canonical absolute runtime paths required")
 		}
 	}
-	return control.IsolatedConfig{PrivateRoot: root, Model: model, CodexBinary: c.CodexBinary, WorkerCodexHome: c.WorkerCodexHome, SessionAuthFile: c.SessionAuthFile, Launcher: c.Launcher, LauncherContract: c.LauncherContract, IsolationVerified: c.IsolationVerified, GitDirectories: c.GitDirectories}, nil
+	return control.IsolatedConfig{PrivateRoot: root, Model: model, CodexBinary: c.CodexBinary, WorkerCodexHome: c.WorkerCodexHome, SessionAuthFile: c.SessionAuthFile, Launcher: c.Launcher, LauncherContract: c.LauncherContract, IsolationVerified: c.IsolationVerified, GitDirectories: c.GitDirectories, ProductTools: c.ProductTools}, nil
 }
 
 // The process launch reservation already owns this session's fixed workspace.
