@@ -14,7 +14,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
-func productWorkspaceFixture(t *testing.T) (*KernelStore, domain.Wave, domain.Task, ProductWorkspaceRequest) {
+func productWorkspaceFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, domain.Task, ProductWorkspaceRequest) {
 	t.Helper()
 	ctx := context.Background()
 	k, source := waveStoreFixture(t)
@@ -25,6 +25,9 @@ func productWorkspaceFixture(t *testing.T) (*KernelStore, domain.Wave, domain.Ta
 	}
 	plan := storagePlanFixture()
 	plan.Phases[0].Tasks[0].WorkItemIDs = []string{"work"}
+	for _, apply := range configure {
+		apply(&plan)
+	}
 	admitted, err := k.AdoptPlan(ctx, w.Target(), "product-workspace-plan", plan)
 	if err != nil {
 		t.Fatal(err)

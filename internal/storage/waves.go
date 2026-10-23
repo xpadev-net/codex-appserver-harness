@@ -626,11 +626,15 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	return receipt, nil
 }
 func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec) (string, error) {
-	references := map[string]string{}
 	fixed, err := k.fixedProductWorkspaceInputTx(ctx, tx, wave, spec)
 	if err != nil {
 		return "", err
 	}
+	return k.taskInputWithWorkspaceTx(ctx, tx, wave, spec, fixed)
+}
+
+func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec, fixed *ProductWorkspace) (string, error) {
+	references := map[string]string{}
 	if fixed != nil {
 		digest, err := contentDigest(*fixed)
 		if err != nil {

@@ -9,10 +9,10 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 )
 
-func readyProductWorkspaceFixture(t *testing.T) (*KernelStore, ProductWorkspace) {
+func readyProductWorkspaceFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (*KernelStore, ProductWorkspace) {
 	t.Helper()
 	ctx := context.Background()
-	k, _, task, request := productWorkspaceFixture(t)
+	k, _, task, request := productWorkspaceFixture(t, configure...)
 	saved, err := k.ReserveProductWorkspace(ctx, request)
 	if err != nil {
 		t.Fatal(err)
