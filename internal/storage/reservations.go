@@ -331,6 +331,9 @@ func (k *KernelStore) reserveSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 		return ErrExecutionCapacity
 	}
 	r := ProcessReservation{Kind: "app_server", ID: b.PreparationID, SessionID: b.ID, WaveID: b.Target.WaveID, State: "held", PolicyRevision: p.Revision, Resources: []ResourceLease{}, CreatedAt: k.clock()}
+	if err := checkWorkspacePreparationTx(ctx, tx, b.CWD); err != nil {
+		return err
+	}
 	path, err := worktreeResource(ctx, b.CWD)
 	if err != nil {
 		return err
