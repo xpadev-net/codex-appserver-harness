@@ -1,0 +1,76 @@
+{
+  "observed_at": "2026-10-23T03:25:30.139284+00:00",
+  "source_commit": "589f4bc70b1894d2e69a5899911d7bc5dad136de",
+  "implementation_language": "Go",
+  "source_note": "PR #115 merged source; checks ran on its identical reviewed tree before squash merge",
+  "commands": [
+    {
+      "command": "go test ./...",
+      "result": "pass",
+      "cache_allowed": true
+    },
+    {
+      "command": "go test -race ./internal/control ./internal/storage ./internal/service ./internal/codex ./internal/worker ./internal/review ./internal/runner ./internal/workspace ./internal/kernelcli",
+      "result": "pass",
+      "packages": [
+        {
+          "package": "./internal/control",
+          "result": "pass",
+          "duration_or_cache": "128.907s"
+        },
+        {
+          "package": "./internal/storage",
+          "result": "pass",
+          "duration_or_cache": "(cached)"
+        },
+        {
+          "package": "./internal/service",
+          "result": "pass",
+          "duration_or_cache": "138.798s"
+        },
+        {
+          "package": "./internal/codex",
+          "result": "pass",
+          "duration_or_cache": "1.700s"
+        },
+        {
+          "package": "./internal/worker",
+          "result": "pass",
+          "duration_or_cache": "1.259s"
+        },
+        {
+          "package": "./internal/review",
+          "result": "pass",
+          "duration_or_cache": "1.053s"
+        },
+        {
+          "package": "./internal/runner",
+          "result": "pass",
+          "duration_or_cache": "30.252s"
+        },
+        {
+          "package": "./internal/workspace",
+          "result": "pass",
+          "duration_or_cache": "1.413s"
+        },
+        {
+          "package": "./internal/kernelcli",
+          "result": "pass",
+          "duration_or_cache": "42.983s"
+        }
+      ]
+    },
+    {
+      "command": "go vet ./...",
+      "result": "pass"
+    },
+    {
+      "command": "go build -o <temporary-binary> ./cmd/harness",
+      "result": "pass"
+    }
+  ],
+  "native_live_in_normal_suite": "skipped by explicit opt-in guard; separate unskipped native acceptance in native-fix-review.json",
+  "review_sandbox": "Unix socket creation denied there; root regression/race execution passed",
+  "private_paths_recorded": false,
+  "credential_values_recorded": false
+}

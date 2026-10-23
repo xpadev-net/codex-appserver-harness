@@ -1,0 +1,123 @@
+{
+  "observed_at": "2026-10-23T03:24:52.087762+00:00",
+  "source_commit": "589f4bc70b1894d2e69a5899911d7bc5dad136de",
+  "scope": "standalone Go CLI on a new private database; no daemon/model/GitHub calls",
+  "commands": [
+    {
+      "command": "wave init",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave create",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave create",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave list",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave list",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave pause",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave inspect",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave watch",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave watch",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave resume",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave inspect",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave steer",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave cancel",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave resume",
+      "exit_success": false,
+      "expected_rejection": true
+    },
+    {
+      "command": "wave inspect",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave session",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave runs",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave watch",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave watch",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave watch",
+      "exit_success": true,
+      "expected_rejection": false
+    },
+    {
+      "command": "wave watch",
+      "exit_success": true,
+      "expected_rejection": false
+    }
+  ],
+  "waves": 2,
+  "list_pages_disjoint": true,
+  "watch_cursor_resumes_without_duplicates": true,
+  "watch_event_count": 7,
+  "pause_resume_observed": true,
+  "direction_queued_before_cancel": true,
+  "terminal_resume_rejected": true,
+  "final_wave_state": "canceled",
+  "main_runs": 0,
+  "private_paths_recorded": false,
+  "credential_values_recorded": false
+}
