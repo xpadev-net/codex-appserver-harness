@@ -100,6 +100,37 @@ func readResourceSection(ctx context.Context, api ResourceAPI, kind, path, field
 	return s
 }
 
+// The head-wide check-runs endpoint only includes the 1000 most recent suites.
+// Enumerate suites and each suite's runs instead. If the bounded scan cannot
+// finish, retain the previous complete collection rather than invent deletions.
+func readCheckSection(ctx context.Context, api ResourceAPI, sha string) storage.PRResourceSection {
+	suites := readResourceSection(ctx, api, "check_suite", "commits/"+sha+"/check-suites?per_page=100", "check_suites", sha)
+	result := storage.PRResourceSection{Kind: "check", Availability: "unavailable", Reason: "check_suites_unavailable", Entities: []storage.PRResourceEntity{}}
+	if suites.Availability != "complete" {
+		return result
+	}
+	seen := map[string]bool{}
+	for _, suite := range suites.Entities {
+		runs := readResourceSection(ctx, api, "check", "check-suites/"+suite.ID+"/check-runs?filter=all&per_page=100", "check_runs", sha)
+		if runs.Availability != "complete" {
+			result.Reason = "check_suite_runs_incomplete"
+			result.Entities = nil
+			return result
+		}
+		for _, run := range runs.Entities {
+			if seen[run.ID] {
+				result.Reason = "duplicate_check_run"
+				result.Entities = nil
+				return result
+			}
+			seen[run.ID] = true
+			result.Entities = append(result.Entities, run)
+		}
+	}
+	result.Availability, result.Reason = "complete", ""
+	return result
+}
+
 // Collect runs outside KernelSource.Ready. Each call does fresh API reads after
 // loading the CAS digest. Never retry an old snapshot with a newer digest.
 // Collection reads are eventually consistent; a changing PR header is rejected.
@@ -167,7 +198,7 @@ func (c ResourceCollector) Collect(ctx context.Context, p storage.ProductTarget,
 	inline := readResourceSection(ctx, api, "inline_comment", path+"/comments?per_page=100", "", "")
 	scan.Sections = append(scan.Sections, issue, inline,
 		readResourceSection(ctx, api, "review", path+"/reviews?per_page=100", "", ""),
-		readResourceSection(ctx, api, "check", "commits/"+pr.Head.SHA+"/check-runs?filter=all&per_page=100", "check_runs", pr.Head.SHA),
+		readCheckSection(ctx, api, pr.Head.SHA),
 		readResourceSection(ctx, api, "status", "commits/"+pr.Head.SHA+"/statuses?per_page=100", "", pr.Head.SHA),
 		readResourceSection(ctx, api, "history", issuePath+"/events?per_page=100", "", ""))
 	reactions := readResourceSection(ctx, api, "reaction", issuePath+"/reactions?per_page=100", "", "")

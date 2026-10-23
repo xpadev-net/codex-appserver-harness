@@ -34,7 +34,7 @@ func (f *fakeResourceAPI) ResourcePages(_ context.Context, path, field string) (
 	if path == f.fail {
 		return nil, errors.New("permission denied")
 	}
-	if field != "" && field != "check_runs" {
+	if field != "" && field != "check_runs" && field != "check_suites" {
 		return nil, errors.New("bad collection field")
 	}
 	return f.collections[path], nil
@@ -71,7 +71,8 @@ func TestResourceCollectorReadsAllKindsAndParentReactionsWithoutApproval(t *test
 	api.collections["issues/42/reactions?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":91,"content":"+1"}`)}
 	api.collections["issues/comments/11/reactions?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":92,"content":"heart"}`)}
 	api.collections["pulls/comments/12/reactions?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":93,"content":"+1"}`)}
-	api.collections["commits/"+p.Candidate.SHA+"/check-runs?filter=all&per_page=100"] = []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"id":31,"head_sha":%q,"conclusion":"failure"}`, p.Candidate.SHA)), json.RawMessage(fmt.Sprintf(`{"id":32,"head_sha":%q,"conclusion":"success"}`, p.Candidate.SHA))}
+	api.collections["commits/"+p.Candidate.SHA+"/check-suites?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":7}`)}
+	api.collections["check-suites/7/check-runs?filter=all&per_page=100"] = []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"id":31,"head_sha":%q,"conclusion":"failure"}`, p.Candidate.SHA)), json.RawMessage(fmt.Sprintf(`{"id":32,"head_sha":%q,"conclusion":"success"}`, p.Candidate.SHA))}
 	api.collections["commits/"+p.Candidate.SHA+"/statuses?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":41,"state":"success"}`)}
 	api.collections["issues/42/events?per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":51,"event":"closed"}`)}
 	receipt, err := c.Collect(ctx, p, "scan")
@@ -187,5 +188,39 @@ func TestResourceCollectorRetainsMaximumPublicationBodyWithJSONMetadata(t *testi
 	var saved github.PR
 	if err = json.Unmarshal(section(state, "pr").Entities[0].Data, &saved); err != nil || saved.Body != api.pr.Body {
 		t.Fatal("legal publication body lost", err)
+	}
+}
+
+func TestResourceCollectorDoesNotInventCheckDeletionsAtSuiteWindowOrReadLimit(t *testing.T) {
+	c, api, p := collectorFixture(t)
+	ctx := context.Background()
+	suites := "commits/" + p.Candidate.SHA + "/check-suites?per_page=100"
+	api.collections[suites] = []json.RawMessage{json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)}
+	api.collections["check-suites/1/check-runs?filter=all&per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":11}`)}
+	api.collections["check-suites/2/check-runs?filter=all&per_page=100"] = []json.RawMessage{json.RawMessage(`{"id":12}`), json.RawMessage(`{"id":13}`)}
+	first, err := c.Collect(ctx, p, "all-suites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := c.Store.PRResourceState(ctx, first.ResourceKey)
+	if err != nil || len(section(state, "check").Entities) != 3 {
+		t.Fatal(state, err)
+	}
+	for i := 3; i <= 1001; i++ {
+		api.collections[suites] = append(api.collections[suites], json.RawMessage(fmt.Sprintf(`{"id":%d}`, i)))
+	}
+	second, err := c.Collect(ctx, p, "too-many-suites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = c.Store.PRResourceState(ctx, second.ResourceKey)
+	checks := section(state, "check")
+	if err != nil || checks.Availability != "unavailable" || len(checks.Entities) != 3 {
+		t.Fatal("capped/incomplete suite scan deleted old checks", checks, err)
+	}
+	for _, change := range second.Changes {
+		if change.Kind == "check" && change.Action == "deleted" {
+			t.Fatal(change)
+		}
 	}
 }
