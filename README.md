@@ -35,7 +35,7 @@ JSON
 
 これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
-request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。kernelの実行daemon・監査付き復旧CLIと実K受入は後続工程です。
+request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。監査付き復旧CLIと実K受入は後続工程です。
 
 ### Cursor付きwatch
 
@@ -44,7 +44,24 @@ request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件まで
 ./harness wave watch --root /absolute/private/kernel --cursor LAST_CURSOR --limit 32
 ```
 
-JSON Linesでroot全体の保存済みイベントと`cursor`を返します。`--once`はdaemonなしで一ページを読みます。継続watchはprivate IPC daemonを利用し、切断後は最後に正常表示された`cursor`から再接続できます。空のheartbeatは重複表示せず、大きなpayloadはID・byte数の参照になります。watchはwakeや通知ACKを送らず、modelを起動しません。実行daemonのCLI接続は後続工程です。
+JSON Linesでroot全体の保存済みイベントと`cursor`を返します。`--once`はdaemonなしで一ページを読みます。継続watchはprivate IPC daemonを利用し、切断後は最後に正常表示された`cursor`から再接続できます。空のheartbeatは重複表示せず、大きなpayloadはID・byte数の参照になります。watchはwakeや通知ACKを送らず、modelを起動しません。実行daemonは次の `wave run` で起動します。
+
+### Kernel daemon
+
+privateなruntime設定fileを用意し、foregroundで起動します。kernelのmodelは`wave init`で保存したものを使います。
+
+```json
+{"schema_version":1,"codex_binary":"/absolute/path/to/native/codex","worker_codex_home":"/absolute/private/empty-worker-template","session_auth_file":"/absolute/path/to/session/auth.json","launcher":["/absolute/path/to/scripts/isolate-linux"],"launcher_contract":"argv_passthrough_v1","isolation_verified":true,"git_directories":[]}
+```
+
+```sh
+chmod 600 runtime.json
+./harness wave run --root /absolute/private/kernel --runtime runtime.json
+```
+
+`codex_binary`はnative 0.163.0、launcherは子孫を含めた隔離を確認済みのものを指定します。`isolation_verified`はoperatorの確認を記録する値で、起動ごとの隔離/version probeも必須です。`worker_codex_home`はcontrollerのCODEX_HOMEとは別のprivate templateで、現在のsession認証を使う場合は空のdirectoryを用意し、`session_auth_file`で元sessionの認証fileを参照します。tokenをJSONへコピーせず、更新は元sessionが所有します。runtime設定・実行file・認証templateはkernel rootとworker workspaceの外に置きます。
+
+daemonはroot単位で排他し、起動時に保存済み依頼/未適用結果を再照合します。保存後hintと定期再照合から共通scheduler/runtimeへ接続し、Task用のprivate固定workspaceを起動予約後に作成します。SIGINT/SIGTERMでは停止確認と保存を待ち、停止未確認の枠を解放しません。KではGitHub設定やPRを要求しません。native K workflow全体の受入は別途記録します。
 
 ### Wave / Task の優先操作
 
