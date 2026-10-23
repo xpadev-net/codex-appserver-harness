@@ -145,6 +145,7 @@ func TestFixedProductInputSurvivesCandidateAdvanceAndReopen(t *testing.T) {
 			}
 			review := task.Spec
 			review.Kind = "review"
+			review.ID = "unbound-review"
 			beforeReview, err := productTaskDigest(t, k, w, review)
 			if err != nil {
 				t.Fatal(err)

@@ -386,3 +386,13 @@ subjectにはCandidate、code/base/scope/policyから計算する`candidate_dige
 Task専用manifestのoptional `product_subject`と、役割で絞った`product_subjects`へ保存する。parentは対象一覧を読めるが、Task専用の出力identityを持たない。reviewへの入力はschema v1と固定`candidate_digest`をreview.target_digestに使うことを指示する。subjectのdigestは入力参照、candidate_digestは評価対象を識別する別の値である。K・未固定Taskには新fieldを出力しない。
 
 検証: `go test ./internal/storage -run '^TestProductSubject' -count=1`。review/verificationの固定入力とTask/plan/manifestの一致、Candidate更新・再open後の安定、head/history/producer/登録破損の拒否、保存失敗rollback、未使用sessionと宣言済み成果の境界、明示carryとSourceResultIDからの対象選択を確認する。model停止factsはfixtureである。この保存は実行・checkout・書込・runner成功・品質/正式承認の許可ではない。独立した固定checkout、verificationのテスト追加契約と正式runner、review成果の品質gateへの接続は後続であり、製品readinessの禁止を外さない。
+
+## review専用の固定read-only checkout
+
+固定subjectを持つP review Taskにも、既存のhost `WorkspacePreparer` / `prepare-product-task`を使える。未開始Task、現在のsubject/Candidate、登録と元producerのcanonical repository・数値IDを検査し、要求base SHAがsubjectのCandidate SHAと完全一致する場合だけ準備する。model/callerが別SHAや同じSHAを持つ別repositoryへ評価対象を切り替えることを許さない。
+
+review用workspaceの値にはoptional subject ID/digestを固定し、一度だけの準備claim、privateな独立CWD/branch/git-dir、strict stopped Gitと証拠/history/資源解放のtransactionを共有する。ready化してもsession bindingは`read-only`で、work/fixの変更申告identityをmanifestへ出さない。Task/plan入力にも固定workspace証拠を追加し、subjectとcheckoutの両方を結び付ける。準備中にactive Candidateが更新された場合はstale履歴にし、元subjectを付け替えない。
+
+検証: `go test ./internal/storage ./internal/product -run 'TestProductReview|TestProductWorkspace|TestFixedProductInput' -count=1`。subject参照/read-only/入力digest、SHA/repository/未固定role拒否、準備中のCandidate変更、証拠欠落、実temp Gitで実装担当とは異なるCWD/git-dirに固定commitと製品codeがあること、再送とproducer状態維持を確認する。model factsはfixtureであり、read-only sandbox下の実model reviewやP受入には数えない。
+
+verificationのテスト追加は別の書込範囲/出力契約を必要とするため、このreview用checkoutへ自己分類しない。製品readiness、review成果の品質gate、verification/runnerへの接続は引き続き後続である。
