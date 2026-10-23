@@ -27,10 +27,42 @@ type PRDispatchClaim struct {
 	State              string                `json:"state"` // prepared, unknown, canceled
 	Product            ProductTargetSnapshot `json:"product"`
 	ReservationID      string                `json:"reservation_id"`
+	PRReservationID    string                `json:"pr_reservation_id"`
 	ReservationCreated bool                  `json:"reservation_created"`
 	MutationLease      ResourceLease         `json:"mutation_lease"`
 	PreparedAt         time.Time             `json:"prepared_at"`
 	MayHaveSentAt      time.Time             `json:"may_have_sent_at"`
+}
+
+type prLifetimeSeat struct {
+	WaveID        string `json:"wave_id"`
+	ResourceKey   string `json:"resource_key"`
+	ReservationID string `json:"reservation_id"`
+}
+
+func prSeatID(waveID, resource string) string {
+	return structureID("product-pr-seat-", waveID, resource)
+}
+func loadPRLifetimeSeatTx(ctx context.Context, q queryer, waveID, resource string) (OperationReservation, error) {
+	id := prSeatID(waveID, resource)
+	var current prLifetimeSeat
+	err := completionRecord(ctx, q, "product_pr_lifetime_seat", id, &current)
+	if err == nil {
+		if current.WaveID != waveID || current.ResourceKey != resource || current.ReservationID == "" {
+			return OperationReservation{}, errors.New("PR lifetime seat identity conflict")
+		}
+		id = current.ReservationID
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return OperationReservation{}, err
+	}
+	r, err := loadOperationReservationTx(ctx, q, id)
+	if err != nil {
+		return r, err
+	}
+	if r.Kind != "pr" || r.WaveID != waveID || r.Request.ResourceKey != resource {
+		return r, errors.New("PR lifetime reservation binding conflict")
+	}
+	return r, nil
 }
 
 func prIntentTx(ctx context.Context, q queryer, id string) (PROperationIntent, string, error) {
@@ -135,21 +167,29 @@ func (k *KernelStore) PreparePRDispatch(ctx context.Context, id, owner string) (
 		return claim, err
 	}
 	resource := fmt.Sprintf("github:%d:work:%s", p.Value.WorkItem.RepositoryID, p.Value.WorkItem.ID)
-	request := OperationCapacityRequest{ID: structureID("product-pr-seat-", w.ID, resource), Kind: "pr", SessionID: w.OrchestratorSessionID, Target: w.Target(), ResourceKey: resource}
+	request := OperationCapacityRequest{ID: prSeatID(w.ID, resource), Kind: "pr", SessionID: w.OrchestratorSessionID, Target: w.Target(), ResourceKey: resource}
+	pr, prErr := loadPRLifetimeSeatTx(ctx, tx, w.ID, resource)
+	if prErr != nil && !errors.Is(prErr, sql.ErrNoRows) {
+		return claim, prErr
+	}
+	prReservationID := pr.ID
 	if intent.Source.Name == "pr_review_request" {
 		// A registered PR number is not a substitute for accounting its open
 		// resource. Bootstrap/binding must retain its PR seat before Cloud work.
-		pr, e := loadOperationReservationTx(ctx, tx, request.ID)
-		if errors.Is(e, sql.ErrNoRows) {
+		if errors.Is(prErr, sql.ErrNoRows) {
 			return claim, ErrPRDispatchHeld
-		}
-		if e != nil {
-			return claim, e
 		}
 		if pr.State != "held" || pr.Kind != "pr" || pr.WaveID != w.ID || pr.SessionID != w.OrchestratorSessionID || pr.Request.ResourceKey != resource {
 			return claim, ErrPRDispatchHeld
 		}
 		request.ID, request.Kind, request.ResourceKey, request.CandidateSHA = id, "cloud_review", fmt.Sprintf("github:%d:pull:%d", p.Value.WorkItem.RepositoryID, p.Value.PRNumber), p.Value.Candidate.SHA
+	} else if prErr == nil {
+		request.ID = pr.ID
+		if pr.State == "released" && pr.Proof != nil && pr.Proof.Disposition == "not_started" && p.Value.PRNumber == 0 {
+			// Keep the old release proof and every canceled callback fenced.
+			// A distinct operation gets its own new reservation/lease generation.
+			request.ID = structureID("product-pr-seat-generation-", w.ID, resource+":"+id)
+		}
 	}
 	reservation, err := loadOperationReservationTx(ctx, tx, request.ID)
 	created := errors.Is(err, sql.ErrNoRows)
@@ -164,11 +204,17 @@ func (k *KernelStore) PreparePRDispatch(ctx context.Context, id, owner string) (
 	if reservation.State != "held" || reservation.Kind != request.Kind || reservation.WaveID != w.ID || reservation.SessionID != w.OrchestratorSessionID || reservation.Request.ResourceKey != request.ResourceKey || reservation.Request.CandidateSHA != request.CandidateSHA {
 		return claim, ErrPRDispatchHeld
 	}
+	if request.Kind == "pr" {
+		prReservationID = reservation.ID
+		if err = kernelRecordTx(ctx, tx, "product_pr_lifetime_seat", prSeatID(w.ID, resource), w.ID, prLifetimeSeat{WaveID: w.ID, ResourceKey: resource, ReservationID: reservation.ID}); err != nil {
+			return claim, err
+		}
+	}
 	lease, err := claimResourceTx(ctx, tx, "product-pr-mutation:"+resource, id, w.ID)
 	if err != nil {
 		return claim, err
 	}
-	claim = PRDispatchClaim{OperationID: id, OwnerID: owner, State: "prepared", Product: p, ReservationID: reservation.ID, ReservationCreated: created, MutationLease: lease, PreparedAt: k.clock()}
+	claim = PRDispatchClaim{OperationID: id, OwnerID: owner, State: "prepared", Product: p, ReservationID: reservation.ID, PRReservationID: prReservationID, ReservationCreated: created, MutationLease: lease, PreparedAt: k.clock()}
 	if err = kernelRecordTx(ctx, tx, "product_pr_dispatch", id, intent.Source.SessionID, claim); err != nil {
 		return claim, err
 	}
@@ -206,6 +252,14 @@ func validatePRClaimTx(ctx context.Context, tx *sql.Tx, intent PROperationIntent
 		return err
 	}
 	if r.State != "held" {
+		return ErrPRDispatchHeld
+	}
+	resource := fmt.Sprintf("github:%d:work:%s", claim.Product.Value.WorkItem.RepositoryID, claim.Product.Value.WorkItem.ID)
+	pr, err := loadPRLifetimeSeatTx(ctx, tx, intent.Source.Target.WaveID, resource)
+	if err != nil {
+		return err
+	}
+	if pr.State != "held" || pr.ID != claim.PRReservationID {
 		return ErrPRDispatchHeld
 	}
 	return nil

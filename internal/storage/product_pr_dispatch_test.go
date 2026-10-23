@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,5 +367,140 @@ func TestPRUnsentCleanupStillWorksAfterVerifiedResourceClosure(t *testing.T) {
 	var held int
 	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_resource_leases WHERE state='held' AND resource=?", claim.MutationLease.Resource).Scan(&held); err != nil || held != 0 {
 		t.Fatal("orphaned mutation fence", held, err)
+	}
+}
+
+func TestFreshPRPublicationAfterUnsentCancelUsesNewReservationGeneration(t *testing.T) {
+	for _, changeCandidate := range []bool{false, true} {
+		t.Run(fmt.Sprint(changeCandidate), func(t *testing.T) {
+			ctx := context.Background()
+			k, _, p, call := productCallFixture(t)
+			gateway := contract.KernelGateway{Backend: k}
+			first, err := gateway.Handle(ctx, call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old, err := k.PreparePRDispatch(ctx, first.OperationID, "old-owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = k.CancelUnsentPRDispatch(ctx, first.OperationID, "old-owner", "no request sent"); err != nil {
+				t.Fatal(err)
+			}
+			if changeCandidate {
+				p.Value.WorkItem.Version++
+				p.Value.WorkItem.Candidate = "new-candidate"
+				p.Value.Candidate.ID = "new-candidate"
+				p.Value.Candidate.SHA = strings.Repeat("c", 40)
+				if p, err = k.SetProductTarget(ctx, p.Digest, p.Value); err != nil {
+					t.Fatal(err)
+				}
+				call.Arguments, err = json.Marshal(contract.PublishPRRequest{SchemaVersion: 1, Target: p.Value.Target, Candidate: contract.CandidateReference{WorkItemID: p.Value.WorkItem.ID, CandidateID: p.Value.Candidate.ID, SHA: p.Value.Candidate.SHA}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			call.CallID = "fresh-publication"
+			next, err := gateway.Handle(ctx, call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh, err := k.PreparePRDispatch(ctx, next.OperationID, "new-owner")
+			if err != nil {
+				t.Fatal("fresh publication permanently held", err)
+			}
+			if fresh.ReservationID == old.ReservationID || fresh.MutationLease.Generation <= old.MutationLease.Generation || heldPRSlots(t, k, "pr") != 1 {
+				t.Fatal("reservation history/fence reused", old, fresh)
+			}
+			prior, err := k.OperationReservation(ctx, old.ReservationID)
+			if err != nil || prior.State != "released" || prior.Proof == nil || prior.Proof.Disposition != "not_started" {
+				t.Fatal(prior, err)
+			}
+			if err = k.CancelUnsentPRDispatch(ctx, first.OperationID, "old-owner", "no request sent"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = k.MarkPRMayHaveSent(ctx, first.OperationID, "old-owner"); !errors.Is(err, ErrPRDispatchHeld) {
+				t.Fatal("old callback escaped new generation", err)
+			}
+			if _, err = k.MarkPRMayHaveSent(ctx, next.OperationID, "new-owner"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPreparedReviewAndReplayRequireLivePRLifetimeSeat(t *testing.T) {
+	ctx := context.Background()
+	k, _, p, call := productCallFixture(t)
+	p.Value.PRNumber = 42
+	if _, err := k.SetProductTarget(ctx, p.Digest, p.Value); err != nil {
+		t.Fatal(err)
+	}
+	gateway := contract.KernelGateway{Backend: k}
+	publication, err := gateway.Handle(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.PreparePRDispatch(ctx, publication.OperationID, "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	if err = k.CancelUnsentPRDispatch(ctx, publication.OperationID, "bootstrap", "existing PR retained"); err != nil {
+		t.Fatal(err)
+	}
+	call.Name, call.CallID = "pr_review_request", "review-request"
+	review, err := gateway.Handle(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := k.PreparePRDispatch(ctx, review.OperationID, "review-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = k.ReleaseOperationCapacity(ctx, OperationReleaseProof{OperationID: claim.PRReservationID, ProofID: "pr-observed-closed", Disposition: "closed", Reason: "external PR closure"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.PreparePRDispatch(ctx, review.OperationID, "review-owner"); !errors.Is(err, ErrPRDispatchHeld) {
+		t.Fatal("review replay bypassed PR closure", err)
+	}
+	if _, err = k.MarkPRMayHaveSent(ctx, review.OperationID, "review-owner"); !errors.Is(err, ErrPRDispatchHeld) {
+		t.Fatal("review send bypassed PR closure", err)
+	}
+	if err = k.CancelUnsentPRDispatch(ctx, review.OperationID, "review-owner", "PR closed before request"); err != nil {
+		t.Fatal(err)
+	}
+	if heldPRSlots(t, k, "cloud_review") != 0 {
+		t.Fatal("unsent Cloud request could not clean up after PR closure")
+	}
+}
+
+func TestTerminalPRReleaseCannotBeReopenedAsUnsentGeneration(t *testing.T) {
+	for _, disposition := range []string{"closed", "merged"} {
+		t.Run(disposition, func(t *testing.T) {
+			ctx := context.Background()
+			k, _, _, call := productCallFixture(t)
+			gateway := contract.KernelGateway{Backend: k}
+			first, err := gateway.Handle(ctx, call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim, err := k.PreparePRDispatch(ctx, first.OperationID, "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = k.ReleaseOperationCapacity(ctx, OperationReleaseProof{OperationID: claim.PRReservationID, ProofID: "terminal-pr", Disposition: disposition, Reason: "trusted terminal observation"}); err != nil {
+				t.Fatal(err)
+			}
+			if err = k.CancelUnsentPRDispatch(ctx, first.OperationID, "owner", "cleanup unsent after terminal observation"); err != nil {
+				t.Fatal(err)
+			}
+			call.CallID = "fresh-call"
+			next, err := gateway.Handle(ctx, call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = k.PreparePRDispatch(ctx, next.OperationID, "fresh-owner"); !errors.Is(err, ErrPRDispatchHeld) {
+				t.Fatal("reopened terminal PR reservation", err)
+			}
+		})
 	}
 }
