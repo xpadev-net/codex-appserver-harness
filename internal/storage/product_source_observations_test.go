@@ -579,3 +579,51 @@ func TestProductSourceObservationMissingPolicyCannotBeRepinnedFromCurrentObserva
 		t.Fatal("current evidence replaced after pin loss", current, err)
 	}
 }
+
+func TestProductSourceObservationTerminalFactsAreRetainedAndSameFactsReholdActiveWave(t *testing.T) {
+	for _, terminal := range []domain.WaveState{domain.WaveCompleted, domain.WaveCanceled} {
+		t.Run(string(terminal), func(t *testing.T) {
+			ctx := context.Background()
+			k, w, facts := productSourceFixture(t)
+			transition := func(state domain.WaveState) {
+				t.Helper()
+				// P completion/reactivation is not exposed yet. Model only the trusted
+				// state transition to exercise the observer's independent retry guard.
+				tx, err := k.kernelTx(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.State = state
+				if err := saveWave(ctx, tx, w); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			transition(terminal)
+			facts.IssueState = "closed"
+			terminalRead, err := k.ObserveProductSource(ctx, w.Target(), "", facts)
+			if err != nil || terminalRead.Hold != nil || terminalRead.Snapshot.Value.Status != "closed" {
+				t.Fatal(terminalRead, err)
+			}
+			repeated, err := k.ObserveProductSource(ctx, w.Target(), terminalRead.Snapshot.Digest, facts)
+			if err != nil || repeated.Changed || repeated.Hold != nil {
+				t.Fatal(repeated, err)
+			}
+			transition(domain.WaveRunning)
+			activeRead, err := k.ObserveProductSource(ctx, w.Target(), terminalRead.Snapshot.Digest, facts)
+			if err != nil || !activeRead.Changed || activeRead.Hold == nil || activeRead.Hold.Reason != "closed" {
+				t.Fatal("same facts lost source prohibition after reactivation", activeRead, err)
+			}
+			if !reflect.DeepEqual(activeRead.Snapshot, terminalRead.Snapshot) {
+				t.Fatal("control refresh rewrote source evidence", activeRead.Snapshot, terminalRead.Snapshot)
+			}
+			current, err := k.Wave(ctx, w.ID)
+			if err != nil || !current.DispatchPaused() || current.State != domain.WaveRunning {
+				t.Fatal(current, err)
+			}
+		})
+	}
+}

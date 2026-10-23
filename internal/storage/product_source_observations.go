@@ -248,6 +248,10 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 		return result, err
 	}
 	var hold *domain.WaveSourceHold
+	// The snapshot retains terminal source facts. SourceHold controls runnable
+	// work only, so terminal parent delivery stays possible. Compute it before
+	// the retry check: an explicit future reactivation must reinstall a
+	// prohibition even when the external facts and snapshot digest are identical.
 	if status != "ready" && w.State != domain.WaveCanceled && w.State != domain.WaveCompleted {
 		hold = &domain.WaveSourceHold{Reason: status, Digest: digest, ObservedAt: k.clock()}
 	}
