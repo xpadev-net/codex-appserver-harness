@@ -181,7 +181,7 @@ func validateProductRunnerRuntime(runtime ProductRunnerRuntime) error {
 	return nil
 }
 
-func (k *KernelStore) productRunnerPreflightTx(ctx context.Context, tx *sql.Tx, plan ProductVerificationPlanSnapshot) (domain.Wave, error) {
+func (k *KernelStore) productRunnerPreflightTx(ctx context.Context, tx *sql.Tx, plan ProductVerificationPlanSnapshot, allowCarried bool) (domain.Wave, error) {
 	w, err := loadWave(ctx, tx, plan.Value.Target.WaveID)
 	if err != nil {
 		return w, err
@@ -189,7 +189,13 @@ func (k *KernelStore) productRunnerPreflightTx(ctx context.Context, tx *sql.Tx, 
 	if err := w.Validate(); err != nil {
 		return w, err
 	}
-	if w.Target() != plan.Value.Target || w.Policy.Stage != "P" || !w.Policy.Product || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+	sameVersion := w.Target() == plan.Value.Target
+	// Read-only evidence may survive explicit carry. currentObservedTaskTx below
+	// verifies its current-plan result/input binding; dispatch always passes false.
+	if allowCarried && w.ID == plan.Value.Target.WaveID && w.ScopeRevision == plan.Value.Target.ScopeRevision && w.Policy.Revision == plan.Value.Target.PolicyRevision && w.PlanRevision > plan.Value.Target.PlanRevision {
+		sameVersion = true
+	}
+	if !sameVersion || w.Policy.Stage != "P" || !w.Policy.Product || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
 		return w, ErrProductRunnerHeld
 	}
 	task, err := loadTask(ctx, tx, plan.Value.TaskID)
@@ -290,7 +296,7 @@ func (k *KernelStore) ReserveProductRunnerJob(ctx context.Context, planID, profi
 	if history {
 		return job, ErrTaskEvidence
 	}
-	if _, err := k.productRunnerPreflightTx(ctx, tx, plan); err != nil {
+	if _, err := k.productRunnerPreflightTx(ctx, tx, plan, false); err != nil {
 		return job, err
 	}
 	reservation, err := k.reserveOperationCapacityTx(ctx, tx, OperationCapacityRequest{ID: id, Kind: "runner", SessionID: value.SessionID, Target: w.Target(), Worktree: filepath.Join(spec.Root, id)})
@@ -338,7 +344,7 @@ func (k *KernelStore) ClaimProductRunnerJob(ctx context.Context, id, digest stri
 	if err != nil {
 		return claim, err
 	}
-	w, err := k.productRunnerPreflightTx(ctx, tx, plan)
+	w, err := k.productRunnerPreflightTx(ctx, tx, plan, false)
 	if err != nil {
 		return claim, err
 	}

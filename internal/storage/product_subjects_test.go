@@ -13,12 +13,15 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-func productSubjectFixture(t *testing.T, kind string) (*KernelStore, domain.Wave, domain.Task, ProductTaskCandidateSnapshot) {
+func productSubjectFixture(t *testing.T, kind string, configure ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, domain.Task, ProductTaskCandidateSnapshot) {
 	t.Helper()
 	ctx := context.Background()
 	k, w, producer, run := productSealFixture(t, func(plan *contract.PlanProposal) {
 		plan.Phases[1].Tasks[0].Kind = kind
 		plan.Phases[1].Tasks[0].WorkItemIDs = []string{"work"}
+		for _, apply := range configure {
+			apply(plan)
+		}
 	})
 	seal, err := k.ReserveProductSeal(ctx, producer.ID, run.ID)
 	if err != nil {

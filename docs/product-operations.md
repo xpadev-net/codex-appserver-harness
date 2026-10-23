@@ -486,3 +486,15 @@ reviewの`target_digest`はsubject自身のdigestではなく、その中の`Can
 `ReadProductTaskReview`と完了成果/SourceResultInputは、元report・run・subject・workspace・immutable historyを照合する。証拠欠落時に単なるgeneric reviewとして再利用せず、適用済みrunの再送も失われた証拠を無視しない。v1/Kのoptional出力は未使用時に追加しない。
 
 報告の完了は品質認定ではない。cleanでもWorkItem/phase/Candidate/runner結果/正式承認を更新しない。機械検証と必要reviewの品質gate、findingsのfix/再検証routing、daemon dispatch、P受入は引き続き後続接続である。検証はSQLiteの正常停止facts fixtureと実temp Gitの独立checkoutを使い、native modelのreview完了を主張しない。
+
+### 元 criterion と独立評価を照合する製品品質 gate
+
+host専用`CheckProductQuality(target, workItemID)`は、現行planと登録済みWorkItemから必要な成果・検証担当・review担当を導出する。callerがreviewerや結果の部分集合を提案する入口は持たない。共有の必須Taskと該当WorkItemの全必須Taskを、採用済み結果・正常停止・current/carry binding・不変Candidate/review証拠・Artifact実bytesに照合する。別WorkItemの独立作業全体の終了は要求しない。
+
+最終Candidateのcanonical planに対応する全profile成功と、必要な別session/threadのclean review、各reviewerが担当する元criterionのclaimed評価と証拠、全included criterionの評価coverageを要求する。未実行、不足review、inconclusive、findings、未評価criterion、runner失敗、証拠欠落・改変は通らない。同じWorkItem・scope/policy・SHAに確認済みfindingsがある場合、再sealingによるCandidate ID更新、元reviewerの退役や別clean報告で問題を消さない。別WorkItemや異なるSHAの確認済み報告とは照合を分ける。raw結果とreceipt/historyの両方から確認し、どちらかを失っても不明を合格にしない。
+
+返すproof/digestは読取時点のproduct/登録/plan/結果/検証/review/Artifact/criterionの対応で、状態更新や正式承認ではない。WorkItemはVERIFYINGを維持し、PR公開・mergeの直前に再検査する。Cloud/CI/rules・正式承認、fix/再検証routing、daemon dispatchとP受入は引き続き後続接続である。
+
+scope/policy/Candidateが同じで、親planが完了結果・元inputを明示carryし、hostが現行product targetをCAS更新した場合は、保存済みrunner成功を読取で再利用できる。carryを推測したり元snapshot/raw finalを書き換えたり、LLM/runnerを再実行して予算をリセットしない。新job起動/claimは元planとの厳密版一致を維持し、carryだけで新たな実行権限を与えない。
+
+回帰は実行factsを明示するSQLite fixtureで、検証とreviewの片方だけ、複数必須reviewer、criterion不足、全件成功、report bytes改変、古いCandidate、history欠落、退役後のfindings保持、thread再利用拒否、明示carryと予算維持を確認する。native P受入の代用にはしない。

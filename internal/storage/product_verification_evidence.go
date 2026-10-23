@@ -45,11 +45,16 @@ func (k *KernelStore) ReadProductVerificationEvidence(ctx context.Context, planI
 		return saved, err
 	}
 	defer tx.Rollback()
+	return k.productVerificationEvidenceTx(ctx, tx, planID)
+}
+
+func (k *KernelStore) productVerificationEvidenceTx(ctx context.Context, tx *sql.Tx, planID string) (ProductVerificationEvidence, error) {
+	var saved ProductVerificationEvidence
 	plan, err := loadProductVerificationPlan(ctx, tx, planID)
 	if err != nil {
 		return saved, err
 	}
-	if _, err := k.productRunnerPreflightTx(ctx, tx, plan); err != nil {
+	if _, err := k.productRunnerPreflightTx(ctx, tx, plan, true); err != nil {
 		return saved, err
 	}
 	sealed, err := sealedProductEvidence(ctx, tx, plan.Value.TaskID, plan.Value.RunID)
