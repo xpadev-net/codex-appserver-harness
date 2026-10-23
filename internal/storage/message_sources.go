@@ -58,6 +58,16 @@ func mergeMessageSources(groups ...[]MessageSource) ([]MessageSource, error) {
 }
 
 func (k *KernelStore) messageInputSourcesTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, runID string, target contract.Target) ([]MessageSource, error) {
+	return k.runInputSourcesTx(ctx, tx, b, runID, target, true)
+}
+
+// Direct sources are proven by an external notification in this exact input.
+// Relayed provenance is descriptive metadata and never grants body access.
+func (k *KernelStore) directInputSourcesTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, runID string, target contract.Target) ([]MessageSource, error) {
+	return k.runInputSourcesTx(ctx, tx, b, runID, target, false)
+}
+
+func (k *KernelStore) runInputSourcesTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, runID string, target contract.Target, includeRelayed bool) ([]MessageSource, error) {
 	if runID == "" {
 		return nil, nil
 	} // Trusted operator messages have no model input.
@@ -100,6 +110,9 @@ func (k *KernelStore) messageInputSourcesTx(ctx context.Context, tx *sql.Tx, b c
 			return nil, errors.New("Task message source is outside its input scope")
 		}
 		if n.Kind == "message" {
+			if !includeRelayed {
+				continue
+			}
 			prior, err := loadMessage(ctx, tx, n.MessageID)
 			if err != nil {
 				return nil, err

@@ -21,7 +21,7 @@ func (k *KernelStore) externalContextTx(ctx context.Context, tx *sql.Tx, b contr
 	if runID == "" {
 		return nil, "", errors.New("external context requires an active run input")
 	}
-	sources, err := k.messageInputSourcesTx(ctx, tx, b, runID, r.Target)
+	sources, err := k.directInputSourcesTx(ctx, tx, b, runID, r.Target)
 	if err != nil {
 		return nil, "", err
 	}

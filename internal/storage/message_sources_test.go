@@ -243,6 +243,37 @@ func TestExternalMessageSourceSurvivesNewRunReceivingOnlyRelayedMessage(t *testi
 	if _, err := k.ReadContext(ctx, b.ID, contract.ContextReadRequest{SchemaVersion: 1, Target: w.Target(), Section: "external", ReferenceID: original.Sources[0].NotificationID, Limit: 2048}); err == nil {
 		t.Fatal("relayed provenance granted a new-run read of the original external body")
 	}
+	// Even corrupt relay labels naming this receiver/run must not substitute for
+	// an external notification actually captured in the receiver's input.
+	received, err := loadMessage(ctx, k.DB, answer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoofed := received
+	spoofed.Sources = append([]MessageSource{}, received.Sources...)
+	if len(spoofed.Sources) != 1 {
+		t.Fatal("relay fixture has no source")
+	}
+	spoofed.Sources[0].SessionID, spoofed.Sources[0].RunID = b.ID, run.ID
+	storeMessage := func(m Message) {
+		t.Helper()
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := k.DB.ExecContext(ctx, "UPDATE kernel_messages SET payload=? WHERE id=?", raw, m.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count, err := result.RowsAffected(); err != nil || count != 1 {
+			t.Fatal("relay mutation fixture not applied", count, err)
+		}
+	}
+	storeMessage(spoofed)
+	if _, err := k.ReadContext(ctx, b.ID, contract.ContextReadRequest{SchemaVersion: 1, Target: w.Target(), Section: "external", ReferenceID: spoofed.Sources[0].NotificationID, Limit: 2048}); err == nil {
+		t.Fatal("corrupt relay labels created an external body grant")
+	}
+	storeMessage(received)
 	call.TurnID, call.CallID = "new-relay-turn", "new-relay"
 	reply, err = (contract.KernelGateway{Backend: k}).Handle(ctx, call)
 	if err != nil {
