@@ -26,7 +26,7 @@ AT-009の新fix Task/sessionはKのcomponentで追加・検証した。Pの旧ro
 | 段階 | 現在の状態 | 次の証拠 |
 | --- | --- | --- |
 | S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
-| K | runtime/DB/controller/main・Task/独立review・検証済みWave完了とCLIを接続。nativeのfindings→新fix/review→reportを観測。K全体未成立 | Task_9〜10。最終受入保留の解消、K適用ATの統合判定 |
+| K | runtime/DB/controller/main・Task/独立review・検証済みWave完了とCLIを接続。nativeのfindings→新fix/review→reportを観測。K全体未成立 | Task_9〜10。実model完了経路を追加。K適用ATの統合判定 |
 | P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
 | M | fixture移行は未実装。依頼者確認で運用DBなし | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
@@ -51,7 +51,7 @@ native 0.163.0と現在のsession認証、`gpt-6.1-sol`で新DBの`wave create/r
 
 provider向け出力schemaだけを全property requiredへ変換し、nullable pointer・既存のinput/Go decode契約を保持する修正を追加した。保存したfailed runを`reject-main`で監査付き処理し、累積予算を保持して新generationへ進めた。以降のmain/Task出力は受理され、初稿→findings→新fix→新review clean→reportと進んだ。定型fix/review間の追加main turnは0、全managed processは停止済みである。
 
-[秘匿値とprivate pathを除いた観測](../evidence/background-wave/kernel/strict-output-schema.json)は8 run（7 completed、1 failed）を記録する。最後のaccept提案は、以前の必須Task結果にremainingがあるため保留された。証拠gateを緩めず、Task内の残作業と後続Phaseの区別をagentへ明確にして新しい実行で確認する。これはschema接続の修正・pipeline観測であり、K全体合格や製品P/Cloud承認の証拠には数えない。
+[秘匿値とprivate pathを除いた観測](../evidence/background-wave/kernel/strict-output-schema.json)は8 run（7 completed、1 failed）を記録する。この最初のaccept提案は、以前の必須Task結果にremainingがあるため保留された。後述の別DBで結果契約を明確にした新しい実行を確認した。証拠gateは緩めていない。これはschema接続の修正・pipeline観測であり、K全体合格や製品P/Cloud承認の証拠には数えない。
 
 ## 導入先で残る接続検証
 
@@ -63,3 +63,26 @@ provider向け出力schemaだけを全property requiredへ変換し、nullable p
 - プロダクト固有profile・最終受入検証の十分性。
 
 これらをunknownからverifiedに変える根拠を能力reportへ保存する。一般的なコメントやローカルreviewを代替証拠にしない。
+
+## native K の完了経路と結果契約
+
+Taskの`remaining`/`blockers`は割り当てられた作業内の未完了を表し、後続Phaseの予定を含めない。`claimed`は成果に対する作業者の根拠付き主張であり、独立承認ではない。この区別をroleごとの保存入力へ追加した。未完了を隠す指示や受入gateの緩和は行っていない。
+
+opt-in Go test `TestLiveKernelCLIFixReviewAcceptance`で、native0.163.0 / gpt-6.1-sol / 現session認証を使い、新DBのCLI init/create/runから実行した。[正常完了の観測](../evidence/background-wave/kernel/native-fix-review.json)は未skip 1 test、8 completed run、初期Task 2件の実行区間の重なり、findings→新fix→新review clean→report→検証済みWave completionを記録する。mainは初回と最終判断の2回で、定型反復中の起動は0。選択された修正版の実bytes・digest・計算値・marker不在をGo testで照合し、全managed process停止を確認した。
+
+新しい試験rootの開始前にtoken上限2,000,000を明示設定した。製品既定値1,000,000は変更していない。観測下限908,212 tokenは最終請求量ではない。[既定予算での停止](../evidence/background-wave/kernel/native-token-budget-stop.json)と[producerのunverifiedによる受入保留](../evidence/background-wave/kernel/native-criterion-hold.json)も別の試行として保持する。実行済みDBの結果・予算を変更して通していない。content criterionと独立reviewのworkflow gateを区別した新規ケースで完了を確認した。
+
+再現は新規のprivate rootと絶対パスを指定する。通常のGo testsではモデルを起動せずskipする。
+
+```sh
+HARNESS_LIVE_KERNEL=1 \
+HARNESS_LIVE_CODEX_BINARY=/absolute/path/to/native/codex \
+HARNESS_LIVE_MODEL=gpt-6.1-sol \
+HARNESS_LIVE_SESSION_AUTH_FILE=/absolute/path/to/current-session/auth.json \
+HARNESS_LIVE_KERNEL_ROOT=/absolute/private/NEW-kernel-root \
+HARNESS_LIVE_KERNEL_TOKENS=2000000 \
+HARNESS_LIVE_KERNEL_EVIDENCE=/absolute/path/to/sanitized-evidence.json \
+go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -count=1 -v
+```
+
+この経路の成功はKの実model pipeline証拠であり、K適用AT全体・P/Cloud正式承認・M移行の総合判定は別途行う。
