@@ -359,6 +359,13 @@ func (k *KernelStore) ReleaseOperationCapacity(ctx context.Context, proof Operat
 		return err
 	}
 	defer tx.Rollback()
+	if err = k.releaseOperationCapacityTx(ctx, tx, proof); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (k *KernelStore) releaseOperationCapacityTx(ctx context.Context, tx *sql.Tx, proof OperationReleaseProof) error {
 	r, err := loadOperationReservationTx(ctx, tx, proof.OperationID)
 	if err != nil {
 		return err
@@ -416,5 +423,5 @@ func (k *KernelStore) ReleaseOperationCapacity(ctx context.Context, proof Operat
 	if count != 1 {
 		return errors.New("operation capacity changed before release")
 	}
-	return tx.Commit()
+	return nil
 }
