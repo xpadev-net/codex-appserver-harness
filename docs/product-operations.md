@@ -115,3 +115,13 @@ production KernelSourceのready処理から有界batchを回収する。この�
 raw cursor・元scope付きevent・通知は一transactionで保存する。再送/再起動/共通fanout照合で重複せず、保存失敗はcursorも戻す。購読は有界かつ公平に走査し、無関係なraw履歴の後にも更新がある場合と未走査購読がある場合はproduction Sourceへ即時再走査を返す。末尾のidle購読ではbusy loopを作らない。HTTP/API/modelをこのready処理から起動しない。
 
 検証: `go test ./internal/storage ./internal/control -run 'TestPRWebhook|TestPRInbox|TestPRResource|TestPRCompletion|TestPRWait|TestKernelSource' -count=1`。実署名handlerからbinding前後、同一再送、別PR除外、本文の権限非生成、ACK/wait、rollback/reopen、無関係な先行履歴、受信時刻の登録境界、cancel、古いreview SHA、購読ページとidle終了を確認する。daemonのHTTP/非同期collector配置と関連Taskへの購読展開、外部出所付き親message中継は後続である。
+
+## 親子messageの外部出所追跡
+
+`send_message`の引数やsender認可は変更しない。controllerが発行元runの保存input snapshotをdigest/容量で検証し、そのsnapshotに含まれて実runへboundされたexternal通知と受信messageから`Message.Sources`を自動付与する。モデルは出所・actor・sender等を引数で注入できない。Webhookは元の署名対象bytesまで、API差分は通知に実際に提示したscan ID/digest・決定的event ID・不変snapshotまで再照合し、resource・要求版・発行元session/run・通知/event ID・digest・PR head/対象SHA・actorを保持する。
+
+同じrunの入力で受け取った中継messageと明示replyからは元の出所を継承し、新しいrun/actorへ付け替えない。受信側のwake入力にもSourcesを含める。mainの複数Wave入力の出所は元Waveのまま残し、宛先Waveへの権限とは分離する。Sourcesはrunの文脈にあった情報の監査記録であり、本文が全sourceを引用したとの意味ではない。sourceは最大64件で、過大な連鎖を黙って削らずmessage全体を保留する。出所付きmessageはreceiverのcontextを含む実際の単一wake入力も保存前に組み立て、64 KiBへ収まらなければ通知・message・eventを全rollbackする。通常のinput/manifest容量制限も維持する。
+
+保存済み通知のIDだけを名乗る別runや、改ざんされたheader/digestではmessageを確定しない。既存の直属親子・返信・現在session/run/thread/turn/call・snapshot scopeを同じtransactionで検査する。外部本文・source metadataからsender権限、artifact grant、未登録Wave要求、criteria/policy変更や正式承認を生成しない。旧messageはSources省略のまま読み書きできる。
+
+検証: `go test ./internal/storage -run '^TestExternalMessageSource|^TestParentChildMailboxes|^TestMessage|^TestWake' -count=1`。実PR受付/署名履歴/API差分から明示wait・wake/run・共通send_messageへ通し、古いreview SHA、返信、新runで受信messageだけからの再中継、wake入力/再open/再送を確認する。出所/sender引数の偽装、保存不整合、宛先Waveの権限、未登録要求とcriteria緩和も拒否する。関連Task購読展開とP daemon接続は後続である。
