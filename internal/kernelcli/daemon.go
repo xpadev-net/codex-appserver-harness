@@ -3,11 +3,9 @@ package kernelcli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -118,8 +116,9 @@ func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runt
 	runtime.Factory = workspaceFactory{Factory: runtime.Factory, root: k.Root}
 	source := control.NewKernelSource(k)
 	loop := control.NewLoop(runtime, source)
-	var reportMu sync.Mutex
-	report := func(err error) { reportMu.Lock(); defer reportMu.Unlock(); _, _ = fmt.Fprintln(diagnostics, err) }
+	reporting, stopReporting := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopReporting()
+	report := diagnosticReporter(reporting, diagnostics)
 	source.Report, loop.Report = report, report
 	server, err := ipc.Listen(k.Root, k, loop.Wake)
 	if err != nil {
