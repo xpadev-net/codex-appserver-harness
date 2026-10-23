@@ -116,3 +116,30 @@ func TestProductVerificationSealRequiresReadyCompleteTrustedPlan(t *testing.T) {
 		})
 	}
 }
+
+func TestProductVerificationSealRejectsWrongPlanArtifactKindTypeAndOrigin(t *testing.T) {
+	for _, mode := range []string{"kind", "content_type", "origin"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, _, task, run, a, _ := verificationSealFixture(t)
+			switch mode {
+			case "kind":
+				a.Kind = "note"
+			case "content_type":
+				a.ContentType = "text/plain"
+			case "origin":
+				a.Origin = domain.ArtifactOrigin{Kind: "external", Reference: "foreign source"}
+			}
+			raw, err := json.Marshal(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := k.DB.Exec("UPDATE kernel_artifacts SET payload=? WHERE id=?", raw, a.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := k.ReserveProductSeal(ctx, task.ID, run.ID); !errors.Is(err, ErrProductChangeReference) {
+				t.Fatal("untyped plan evidence admitted", mode, err)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"mime"
 	"slices"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -58,6 +59,10 @@ func (k *KernelStore) productVerificationSealInputTx(ctx context.Context, tx *sq
 	}
 	if a.TaskID != task.ID || a.SessionID != task.SessionID || a.PlanRevision != task.PlanRevision || a.Bytes > 1<<20 {
 		return nil, fmt.Errorf("%w: bounded owned verification plan artifact required", ErrProductChangeReference)
+	}
+	mediaType, _, typeErr := mime.ParseMediaType(a.ContentType)
+	if a.Kind != "verification_plan" || typeErr != nil || mediaType != "application/json" || a.Origin.Kind != "task" || a.Origin.Reference != task.ID {
+		return nil, fmt.Errorf("%w: task-origin verification_plan application/json artifact required", ErrProductChangeReference)
 	}
 	raw, err := k.readArtifactObject(a)
 	if err != nil {
