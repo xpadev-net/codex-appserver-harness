@@ -14,8 +14,9 @@ import (
 // ProductWaveRequest is authored by the trusted source controller. External
 // Issue text and model tools cannot supply policy or repository ownership.
 type ProductWaveRequest struct {
-	Wave      WaveRequest                 `json:"wave"`
-	WorkItems []ProductWorkItemDefinition `json:"work_items"`
+	Wave               WaveRequest                 `json:"wave"`
+	WorkItems          []ProductWorkItemDefinition `json:"work_items"`
+	SourcePolicyDigest string                      `json:"source_policy_digest,omitempty"`
 }
 
 type productAdmissionValue struct {
@@ -34,6 +35,9 @@ type productAdmissionReceipt struct {
 // one transaction. Exact source retries return the current Wave without
 // restoring old definitions, emitting events or resetting control state.
 func (k *KernelStore) CreateProductWave(ctx context.Context, request ProductWaveRequest) (domain.Wave, error) {
+	if request.SourcePolicyDigest != "" && !validSourceDigest(request.SourcePolicyDigest) {
+		return domain.Wave{}, errors.New("valid source policy digest required")
+	}
 	if request.Wave.Policy.Stage != "P" || !request.Wave.Policy.Product || len(request.WorkItems) < 1 || len(request.WorkItems) > maxProductWorkItems {
 		return domain.Wave{}, errors.New("trusted P request and bounded WorkItem list required")
 	}
@@ -96,6 +100,11 @@ func (k *KernelStore) CreateProductWave(ctx context.Context, request ProductWave
 	wave, err := k.createWaveTx(ctx, tx, request.Wave)
 	if err != nil {
 		return wave, err
+	}
+	if request.SourcePolicyDigest != "" {
+		if err := saveProductSourcePolicyTx(ctx, tx, wave, request.SourcePolicyDigest); err != nil {
+			return domain.Wave{}, err
+		}
 	}
 	receipt.Value = productAdmissionValue{WaveID: wave.ID, RequestDigest: digest, Source: wave.Source, SourceID: wave.SourceID, Registrations: map[string]string{}}
 	for _, definition := range request.WorkItems {

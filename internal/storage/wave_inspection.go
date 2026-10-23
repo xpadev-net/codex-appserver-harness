@@ -12,22 +12,23 @@ import (
 )
 
 type WaveSummary struct {
-	ID                   string           `json:"id"`
-	Source               string           `json:"source"`
-	SourceID             string           `json:"source_id"`
-	Target               contract.Target  `json:"target"`
-	State                domain.WaveState `json:"state"`
-	Paused               bool             `json:"paused"`
-	Reason               string           `json:"reason"`
-	OriginalRequestBytes int              `json:"original_request_bytes"`
-	Criteria             int              `json:"criteria"`
-	TasksCreated         int              `json:"tasks_created"`
-	PhasesCreated        int              `json:"phases_created"`
-	MainTurns            int              `json:"main_turns"`
-	Replans              int              `json:"replans"`
-	FixRounds            int              `json:"fix_rounds"`
-	CreatedAt            time.Time        `json:"created_at"`
-	Deadline             time.Time        `json:"deadline"`
+	SourceHold           *domain.WaveSourceHold `json:"source_hold,omitempty"`
+	ID                   string                 `json:"id"`
+	Source               string                 `json:"source"`
+	SourceID             string                 `json:"source_id"`
+	Target               contract.Target        `json:"target"`
+	State                domain.WaveState       `json:"state"`
+	Paused               bool                   `json:"paused"`
+	Reason               string                 `json:"reason"`
+	OriginalRequestBytes int                    `json:"original_request_bytes"`
+	Criteria             int                    `json:"criteria"`
+	TasksCreated         int                    `json:"tasks_created"`
+	PhasesCreated        int                    `json:"phases_created"`
+	MainTurns            int                    `json:"main_turns"`
+	Replans              int                    `json:"replans"`
+	FixRounds            int                    `json:"fix_rounds"`
+	CreatedAt            time.Time              `json:"created_at"`
+	Deadline             time.Time              `json:"deadline"`
 }
 type WaveSummaryPage struct {
 	Waves     []WaveSummary `json:"waves"`
@@ -57,7 +58,7 @@ func (k *KernelStore) WavePage(ctx context.Context, after string, limit int) (Wa
 		if err != nil {
 			return page, err
 		}
-		page.Waves = append(page.Waves, WaveSummary{ID: w.ID, Source: w.Source, SourceID: w.SourceID, Target: w.Target(), State: w.State, Paused: w.Paused, Reason: w.Reason, OriginalRequestBytes: len(w.OriginalRequest), Criteria: len(w.Criteria), TasksCreated: w.TasksCreated, PhasesCreated: w.PhasesCreated, MainTurns: w.MainTurns, Replans: w.Replans, FixRounds: w.FixRounds, CreatedAt: w.CreatedAt, Deadline: w.Deadline})
+		page.Waves = append(page.Waves, WaveSummary{SourceHold: w.SourceHold, ID: w.ID, Source: w.Source, SourceID: w.SourceID, Target: w.Target(), State: w.State, Paused: w.Paused, Reason: w.Reason, OriginalRequestBytes: len(w.OriginalRequest), Criteria: len(w.Criteria), TasksCreated: w.TasksCreated, PhasesCreated: w.PhasesCreated, MainTurns: w.MainTurns, Replans: w.Replans, FixRounds: w.FixRounds, CreatedAt: w.CreatedAt, Deadline: w.Deadline})
 	}
 	return page, nil
 }

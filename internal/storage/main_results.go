@@ -164,7 +164,7 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 			if accepted != nil {
 				acceptedPlans[wave.ID] = *accepted
 			}
-			if wave.Paused && accepted == nil {
+			if (wave.Paused || wave.SourceHold != nil) && accepted == nil {
 				return receipt, ErrMainResultHeld
 			}
 			if (wave.State == domain.WaveCompleted || !k.clock().Before(wave.Deadline)) && accepted == nil {

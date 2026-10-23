@@ -57,6 +57,7 @@ type WavePolicy struct {
 	Limits   KernelLimits `json:"limits"`
 }
 type Wave struct {
+	SourceHold            *WaveSourceHold `json:"source_hold,omitempty"`
 	ID                    string          `json:"id"`
 	OrchestratorSessionID string          `json:"orchestrator_session_id"`
 	Source                string          `json:"source"`
@@ -81,19 +82,33 @@ type Wave struct {
 	FixRounds             int             `json:"fix_rounds"`
 }
 
+// Source prohibition is independent of manual pause and pending directions.
+type WaveSourceHold struct {
+	Reason     string    `json:"reason"`
+	Digest     string    `json:"digest"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
 func (w Wave) Target() contract.Target {
 	return contract.Target{WaveID: w.ID, ScopeRevision: w.ScopeRevision, PlanRevision: w.PlanRevision, PolicyRevision: w.Policy.Revision}
 }
 
 // A direction request stops new dispatch independently of manual pause. Resume
 // cannot remove that barrier before the stopped prior revision is settled.
-func (w Wave) DispatchPaused() bool { return w.Paused || w.PendingDirectionID != "" }
+func (w Wave) DispatchPaused() bool {
+	return w.Paused || w.PendingDirectionID != "" || w.SourceHold != nil
+}
 func (w Wave) Validate() error {
 	if w.ID == "" || w.OrchestratorSessionID == "" || (w.Source != "direct" && w.Source != "github") || w.SourceID == "" || strings.TrimSpace(w.OriginalRequest) == "" || !utf8.ValidString(w.OriginalRequest) || len(w.OriginalRequest) > 8<<20 || w.ScopeRevision < 1 || w.PlanRevision < 1 || w.Policy.Revision < 1 || w.CreatedAt.IsZero() || !w.Deadline.After(w.CreatedAt) {
 		return errors.New("invalid Wave identity/request")
 	}
 	if err := w.Policy.Limits.Validate(); err != nil {
 		return err
+	}
+	if h := w.SourceHold; h != nil {
+		if w.Policy.Stage != "P" || !w.Policy.Product || w.Source != "github" || h.Reason == "" || len(h.Reason) > 64 || !utf8.ValidString(h.Reason) || strings.ContainsAny(h.Reason, "\x00\r\n") || len(h.Digest) != 64 || strings.Trim(h.Digest, "0123456789abcdef") != "" || h.ObservedAt.IsZero() {
+			return errors.New("trusted product source hold required")
+		}
 	}
 	switch w.State {
 	case WavePlanning, WaveRunning, WaveWaiting, WaveBlocked, WaveCompleted, WaveCanceled:

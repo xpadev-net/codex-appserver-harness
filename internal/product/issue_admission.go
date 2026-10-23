@@ -193,9 +193,14 @@ func (a IssueAdmitter) admit(ctx context.Context, number int, selected func(gith
 		criteria = append(criteria, domain.WaveCriterion{ID: criterion.ID, Requirement: criterion.Requirement})
 	}
 	id := issueSourceID(a.Policy.RepositoryID, number)
+	policyJSON, err := json.Marshal(a.Policy)
+	if err != nil {
+		return domain.Wave{}, err
+	}
 	return a.Store.CreateProductWave(ctx, storage.ProductWaveRequest{
-		Wave:      storage.WaveRequest{OrchestratorSessionID: a.SessionID, Source: "github", SourceID: id, OriginalRequest: issue.Title + "\n\n" + issue.Body, Criteria: criteria, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: a.Limits}},
-		WorkItems: []storage.ProductWorkItemDefinition{{ID: id, Repository: a.Policy.Repository, RepositoryID: a.Policy.RepositoryID, Criteria: scope.Included}},
+		SourcePolicyDigest: storage.ProductSourceRequestDigest(string(policyJSON)),
+		Wave:               storage.WaveRequest{OrchestratorSessionID: a.SessionID, Source: "github", SourceID: id, OriginalRequest: issue.Title + "\n\n" + issue.Body, Criteria: criteria, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: a.Limits}},
+		WorkItems:          []storage.ProductWorkItemDefinition{{ID: id, Repository: a.Policy.Repository, RepositoryID: a.Policy.RepositoryID, Criteria: scope.Included}},
 	})
 }
 
