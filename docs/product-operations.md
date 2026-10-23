@@ -476,3 +476,13 @@ host専用`ReadProductVerificationEvidence(planID)`は、一transaction内で現
 未実行、予約済み、結果待ち、停止確認後の完了を区別し、未完了を成功にしない。全件完了でもfail/cancel/timeout/環境障害が一件あれば`Passed=false`となる。job headやhistory、terminal history、plan/policyの証拠欠落は、未実行へ戻さずerrorにする。結果と出所をまとめたdigestは読取時点のsnapshotであり、将来の公開・mergeの許可としてcacheしない。各副作用の直前に再検査する。
 
 このgateは機械検証の事実だけを評価する。独立review/品質認定/正式承認を生成せず、WorkItemはVERIFYINGのまま、P readinessも保留する。回帰は4profile（必須2・追加1・mapping1）の不足/失敗/全件成功、起動中、改変・証拠欠落、Candidate更新/停止/要求変更と、実subprocessの成功/cancel結果からの照合を含む。
+
+### 固定 Candidate に対する独立 review 報告
+
+Pの単一WorkItemのreview Taskはschema v1を維持する。`ApplyTaskResult`は、hostが固定したsubjectと独立read-only workspace、別session由来のproducer、現在の出所・入力・Candidate、正常停止済みのnonbaseline runを検査する。実際に消費したsnapshotのbytes/digest、run予算、manifest読取grant、保存manifestのTask割当とsubjectを照合する。work/fix/verificationも同じ入力証拠validatorを使い、現在のmanifestを過去runの入力の代用にしない。
+
+reviewの`target_digest`はsubject自身のdigestではなく、その中の`CandidateDigest`との完全一致を要求する。modelによるSHA申告や別Artifactのdigestを対象証拠にしない。grant済みArtifactの検査は共通適用処理を維持する。clean/findings/inconclusiveは実行報告として完了し、元raw finalと独立報告receipt/history、Task/result/application/plan完了参照を一transactionで保存する。保存失敗は全体rollbackし、snapshot/subject/workspace不足や古いCandidateは再モデル起動なしで保留できる。
+
+`ReadProductTaskReview`と完了成果/SourceResultInputは、元report・run・subject・workspace・immutable historyを照合する。証拠欠落時に単なるgeneric reviewとして再利用せず、適用済みrunの再送も失われた証拠を無視しない。v1/Kのoptional出力は未使用時に追加しない。
+
+報告の完了は品質認定ではない。cleanでもWorkItem/phase/Candidate/runner結果/正式承認を更新しない。機械検証と必要reviewの品質gate、findingsのfix/再検証routing、daemon dispatch、P受入は引き続き後続接続である。検証はSQLiteの正常停止facts fixtureと実temp Gitの独立checkoutを使い、native modelのreview完了を主張しない。

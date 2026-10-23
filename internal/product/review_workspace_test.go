@@ -75,4 +75,22 @@ func TestProductReviewPreparerCreatesIndependentReadOnlyFixedCheckout(t *testing
 	if err := s.Store.DB.QueryRow("SELECT applied FROM kernel_run_bindings WHERE run_id=?", run.ID).Scan(&applied); err != nil || !applied {
 		t.Fatal("review preparation disturbed producer run", applied, err)
 	}
+	report, err := s.Store.ImportArtifact(ctx, storage.ArtifactImport{SessionID: current.SessionID, Target: current.Target(), Key: "independent-review-report", Kind: "review_report", ContentType: "text/plain", Origin: domain.ArtifactOrigin{Kind: "task", Reference: current.ID}}, []byte("reviewed fixed implementation checkout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := contract.TaskResult{SchemaVersion: 1, Target: current.Target(), TaskID: current.ID, PhaseID: current.PhaseID, Outcome: "result", Artifacts: []string{report.ID}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "unverified", Basis: "independent review execution report", EvidenceIDs: []string{report.ID}}}, WorkItemRefs: []contract.CandidateReference{}, Remaining: []string{}, Blockers: []string{}, SubscriptionIDs: []string{}, Review: &contract.ReviewResult{TargetDigest: subject.Value.CandidateDigest, Verdict: "clean", Findings: []contract.ReviewFinding{}}}
+	reviewRun := seedVerificationCompletedRun(t, s.Store, current, result)
+	receipt, err := s.Store.ApplyTaskResult(ctx, current.SessionID, reviewRun.ID)
+	if err != nil || receipt.State != contract.TaskCompleted {
+		t.Fatal(receipt, err)
+	}
+	evidence, err := s.Store.ReadProductTaskReview(ctx, receipt.ResultID)
+	if err != nil || evidence.Value.Candidate != *sealed.Candidate || evidence.Value.Review.Verdict != "clean" {
+		t.Fatal(evidence, err)
+	}
+	target, err := s.Store.ReadProductTarget(ctx, current.Target(), ready.Value.WorkItemID)
+	if err != nil || target.Value.Candidate != *sealed.Candidate || target.Value.WorkItem.Phase != domain.Verifying {
+		t.Fatal("review report invented validation/approval", target, err)
+	}
 }

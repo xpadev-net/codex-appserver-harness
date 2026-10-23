@@ -15,6 +15,7 @@ import (
 // SourceSpec/Target are immutable; later cancellation of an omitted source Task
 // must not change the new Task's saved input digest.
 type TaskResultInput struct {
+	ProductReview    *ProductTaskReviewSnapshot    `json:"product_review,omitempty"`
 	ProductCandidate *ProductTaskCandidateSnapshot `json:"product_candidate,omitempty"`
 	ResultID         string                        `json:"result_id"`
 	RunID            string                        `json:"run_id"`
@@ -109,6 +110,13 @@ func (k *KernelStore) taskResultInputTx(ctx context.Context, tx *sql.Tx, wave do
 			return out, err
 		}
 		out.ProductCandidate = &candidate
+	}
+	if result.Outcome == "result" && UsesProductReviewOutput(wave, source) {
+		review, err := k.productTaskReviewTx(ctx, tx, id)
+		if err != nil {
+			return out, err
+		}
+		out.ProductReview = &review
 	}
 	return out, nil
 }
