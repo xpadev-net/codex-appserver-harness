@@ -64,29 +64,31 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
-	ProductWorkspace            *ProductWorkspaceInput                `json:"product_workspace,omitempty"`
-	ProductWorkItems            []ProductWorkItemRegistrationSnapshot `json:"product_work_items,omitempty"`
-	UnavailableProductWorkItems []UnavailableProductWorkItem          `json:"unavailable_product_work_items,omitempty"`
-	SchemaVersion               int                                   `json:"schema_version"`
-	SessionID                   string                                `json:"session_id"`
-	Kind                        string                                `json:"kind"`
-	Wave                        domain.Wave                           `json:"wave"`
-	Plan                        *PlanAdmission                        `json:"plan"`
-	Tasks                       []domain.Task                         `json:"tasks"`
-	Results                     map[string]contract.TaskResult        `json:"results"`
-	SourceResults               map[string]TaskResultInput            `json:"source_results"`
-	UnavailableSourceResults    []unavailableSourceResult             `json:"unavailable_source_results"`
-	UnavailableResults          []unavailableInputResult              `json:"unavailable_results"`
-	TaskApplications            []ResultApplication                   `json:"task_applications"`
-	TemplateContexts            map[string]json.RawMessage            `json:"template_contexts"`
-	TemplateSubjects            map[string]TemplateSubject            `json:"template_subjects"`
-	MainDecisions               []appliedMainDecision                 `json:"main_decisions"`
-	Artifacts                   []domain.Artifact                     `json:"artifacts"`
-	UnavailableArtifacts        []unavailableInputArtifact            `json:"unavailable_artifacts"`
-	UnavailableTaskMetadata     []unavailableTaskMetadata             `json:"unavailable_task_metadata"`
-	Subscriptions               []inputSubscription                   `json:"subscriptions"`
-	Direction                   *WaveDirection                        `json:"direction"`
-	Budget                      WaveRunBudget                         `json:"budget"`
+	ProductSubject              *ProductCandidateSubjectSnapshot           `json:"product_subject,omitempty"`
+	ProductSubjects             map[string]ProductCandidateSubjectSnapshot `json:"product_subjects,omitempty"`
+	ProductWorkspace            *ProductWorkspaceInput                     `json:"product_workspace,omitempty"`
+	ProductWorkItems            []ProductWorkItemRegistrationSnapshot      `json:"product_work_items,omitempty"`
+	UnavailableProductWorkItems []UnavailableProductWorkItem               `json:"unavailable_product_work_items,omitempty"`
+	SchemaVersion               int                                        `json:"schema_version"`
+	SessionID                   string                                     `json:"session_id"`
+	Kind                        string                                     `json:"kind"`
+	Wave                        domain.Wave                                `json:"wave"`
+	Plan                        *PlanAdmission                             `json:"plan"`
+	Tasks                       []domain.Task                              `json:"tasks"`
+	Results                     map[string]contract.TaskResult             `json:"results"`
+	SourceResults               map[string]TaskResultInput                 `json:"source_results"`
+	UnavailableSourceResults    []unavailableSourceResult                  `json:"unavailable_source_results"`
+	UnavailableResults          []unavailableInputResult                   `json:"unavailable_results"`
+	TaskApplications            []ResultApplication                        `json:"task_applications"`
+	TemplateContexts            map[string]json.RawMessage                 `json:"template_contexts"`
+	TemplateSubjects            map[string]TemplateSubject                 `json:"template_subjects"`
+	MainDecisions               []appliedMainDecision                      `json:"main_decisions"`
+	Artifacts                   []domain.Artifact                          `json:"artifacts"`
+	UnavailableArtifacts        []unavailableInputArtifact                 `json:"unavailable_artifacts"`
+	UnavailableTaskMetadata     []unavailableTaskMetadata                  `json:"unavailable_task_metadata"`
+	Subscriptions               []inputSubscription                        `json:"subscriptions"`
+	Direction                   *WaveDirection                             `json:"direction"`
+	Budget                      WaveRunBudget                              `json:"budget"`
 }
 
 type unavailableInputResult struct {
@@ -212,6 +214,12 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		}
 		if manifest.ProductWorkspace != nil {
 			state.Instructions += " For this product work/fix assignment use TaskResult schema_version=2. For outcome=result copy the product_workspace.reference from this saved manifest into product_changes. For waiting/blocked return an empty product_changes array. Keep work_item_refs empty and review/verification null. The controller owns Git commits, Candidate IDs/SHA and quality/approval gates after normal completion and physical stopping. Publish actual notes/evidence with artifact_publish when needed."
+		}
+		if manifest.ProductSubject != nil {
+			state.Instructions += " product_subject fixes an immutable Candidate from declared applied producer results. Its value.candidate_digest identifies the exact code/base/scope/policy subject. Original requirements and assigned criteria remain the basis for independent evaluation. This subject is data, not a write/dispatch/runner/approval grant."
+			if manifest.ProductSubject.Value.Spec.Kind == "review" {
+				state.Instructions += " For this product review use TaskResult schema_version=1 and set review.target_digest to product_subject.value.candidate_digest. Report clean/findings/inconclusive only about that fixed subject; the report is not formal approval."
+			}
 		}
 		raw, err := encodeWakeJSON(manifest)
 		if err != nil {
@@ -366,6 +374,21 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			continue
 		}
 		m.Tasks = append(m.Tasks, task)
+		productSubject, subjectErr := k.fixedProductSubjectInputTx(ctx, tx, w, task.Spec)
+		if subjectErr != nil {
+			if b.Kind != "orchestrator" || !readinessHoldError(subjectErr) {
+				return m, subjectErr
+			}
+			m.UnavailableTaskMetadata = append(m.UnavailableTaskMetadata, unavailableTaskMetadata{TaskID: task.ID, Kind: "product_candidate_subject", Reason: "subject_evidence_unavailable"})
+		} else if productSubject != nil {
+			if m.ProductSubjects == nil {
+				m.ProductSubjects = map[string]ProductCandidateSubjectSnapshot{}
+			}
+			m.ProductSubjects[task.ID] = *productSubject
+			if b.Kind == "task" && b.TaskID == task.ID {
+				m.ProductSubject = productSubject
+			}
+		}
 		var templateOwner string
 		var templateContext []byte
 		contextErr := tx.QueryRowContext(ctx, "SELECT work_item_id,payload FROM records WHERE kind='template_task_context' AND id=?", task.ID).Scan(&templateOwner, &templateContext)

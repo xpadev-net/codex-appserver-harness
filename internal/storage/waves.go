@@ -635,6 +635,17 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 
 func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec, fixed *ProductWorkspace) (string, error) {
 	references := map[string]string{}
+	subject, err := k.fixedProductSubjectInputTx(ctx, tx, wave, spec)
+	if err != nil {
+		return "", err
+	}
+	if subject != nil {
+		digest, err := contentDigest(*subject)
+		if err != nil {
+			return "", err
+		}
+		references["product_subject:"+subject.ID] = digest
+	}
 	if fixed != nil {
 		digest, err := contentDigest(*fixed)
 		if err != nil {
@@ -668,6 +679,9 @@ func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, 
 			return "", fmt.Errorf("%w: WorkItem is outside the trusted Wave scope", ErrTaskEvidence)
 		}
 		references["work_item:"+id] = binding.CandidateID
+		if subject != nil {
+			references["work_item:"+id] = subject.Value.OriginInputDigest
+		}
 		if fixed != nil {
 			references["work_item:"+id] = fixed.Value.InputDigest
 		}
