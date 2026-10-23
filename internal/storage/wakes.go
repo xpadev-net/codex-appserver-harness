@@ -70,6 +70,7 @@ type WakeMessage struct {
 	BodyEncoding       string          `json:"body_encoding"`
 	EncodedBodyChunks  []string        `json:"encoded_body_chunks"`
 	BodyDigest         string          `json:"body_digest"`
+	Sources            []MessageSource `json:"sources,omitempty"`
 }
 
 func encodeWakeJSON(value any) ([]byte, error) {
@@ -82,7 +83,7 @@ func encodeWakeJSON(value any) ([]byte, error) {
 	return bytes.TrimSpace(buffer.Bytes()), nil
 }
 func wakeMessage(m Message) WakeMessage {
-	w := WakeMessage{ID: m.ID, SenderSessionID: m.SenderSessionID, RecipientSessionID: m.RecipientSessionID, TaskID: m.TaskID, Target: m.Target, SourceRunID: m.Request.SourceRunID, ReplyTo: m.Request.ReplyTo, Body: m.Request.Body, BodyEncoding: "utf-8", EncodedBodyChunks: []string{}, BodyDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(m.Request.Body)))}
+	w := WakeMessage{ID: m.ID, SenderSessionID: m.SenderSessionID, RecipientSessionID: m.RecipientSessionID, TaskID: m.TaskID, Target: m.Target, SourceRunID: m.Request.SourceRunID, ReplyTo: m.Request.ReplyTo, Body: m.Request.Body, BodyEncoding: "utf-8", EncodedBodyChunks: []string{}, BodyDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(m.Request.Body))), Sources: m.Sources}
 	bodyJSON, _ := encodeWakeJSON(w.Body)
 	if len(bodyJSON) > contract.MaxInline+1024 {
 		// Quotes, controls and JS separator characters can still expand in

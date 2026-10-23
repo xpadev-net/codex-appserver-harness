@@ -33,6 +33,7 @@ type Message struct {
 	TaskID             string          `json:"task_id"` // the direct parent/child pair
 	Target             contract.Target `json:"target"`
 	CreatedAt          time.Time       `json:"created_at"`
+	Sources            []MessageSource `json:"sources,omitempty"`
 }
 type MailboxEntry struct {
 	Message              Message `json:"message"`
@@ -242,6 +243,15 @@ func (k *KernelStore) sendMessageTx(ctx context.Context, tx *sql.Tx, request Mes
 		if prior.Target != request.Target || prior.TaskID != task.ID || prior.RecipientSessionID != b.ID || prior.SenderSessionID != m.RecipientSessionID {
 			return m, errors.New("reply must reference the opposite direction of this exact conversation")
 		}
+		m.Sources = prior.Sources
+	}
+	inputSources, err := k.messageInputSourcesTx(ctx, tx, b, request.SourceRunID, request.Target)
+	if err != nil {
+		return m, err
+	}
+	m.Sources, err = mergeMessageSources(m.Sources, inputSources)
+	if err != nil {
+		return m, err
 	}
 	if _, err = k.ensureTaskMailboxesTx(ctx, tx, wave, task); err != nil {
 		return m, err
