@@ -30,6 +30,16 @@ func (k *KernelStore) checkMessageTransportTx(ctx context.Context, tx *sql.Tx, m
 	if err != nil {
 		return err
 	}
+	if b.Closed || (b.Kind == "task" && b.TaskState.Terminal()) {
+		return nil
+	}
+	wave, err := loadWave(ctx, tx, m.Target.WaveID)
+	if err != nil {
+		return err
+	}
+	if obsoleteWakeNotification(b, wave, n, k.clock()) {
+		return nil
+	}
 	state, _, err := k.sessionContextTx(ctx, tx, b, []contract.Target{m.Target})
 	if err != nil {
 		return err

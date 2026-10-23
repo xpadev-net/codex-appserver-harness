@@ -376,3 +376,24 @@ func TestExternalMessageTransportChecksSerializedReceiverContextBeforeCommit(t *
 		t.Fatal("accepted single message could not form production wake input", err)
 	}
 }
+
+func TestExternalMessageSourceRetainsTerminalRecipientHistoryWithoutWake(t *testing.T) {
+	k, w, child, b, run := externalMessageRunFixture(t, "webhook")
+	ctx := context.Background()
+	completeTemplateTask(t, k, child, "completed", "", nil)
+	m, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: b.ID, SourceRunID: run.ID, Target: w.Target(), Key: "terminal-history", Recipient: child.ID, Body: "retain external observation as history"})
+	if err != nil || len(m.Sources) != 1 {
+		t.Fatal("terminal recipient lost provenance history", m, err)
+	}
+	entries, err := k.Mailbox(ctx, child.SessionID, 0, 16)
+	if err != nil || len(entries) != 1 || !reflect.DeepEqual(entries[0].Message.Sources, m.Sources) {
+		t.Fatal(entries, err)
+	}
+	if notes, err := k.PendingWakeNotifications(ctx, child.SessionID, 16); err != nil || len(notes) != 0 {
+		t.Fatal("history reopened terminal recipient", notes, err)
+	}
+	binding, err := k.SessionBinding(ctx, child.SessionID)
+	if err != nil || !binding.Closed || !binding.TaskState.Terminal() {
+		t.Fatal(binding, err)
+	}
+}
