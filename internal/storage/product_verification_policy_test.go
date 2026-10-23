@@ -68,7 +68,7 @@ func TestProductVerificationPolicyPinsRevisionAndDoesNotPublishPrivateArgv(t *te
 }
 
 func TestProductVerificationPolicyRejectsBadPathsRevisionAndRepository(t *testing.T) {
-	for _, mode := range []string{"parent", "root", "glob", "git", "duplicate", "revision", "repository", "profile", "empty_evidence"} {
+	for _, mode := range []string{"parent", "parent_exact", "parent_prefix", "root", "glob", "git", "duplicate", "revision", "repository", "profile", "empty_evidence"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			k, w, _, request := productWorkspaceFixture(t)
@@ -76,6 +76,10 @@ func TestProductVerificationPolicyRejectsBadPathsRevisionAndRepository(t *testin
 			switch mode {
 			case "parent":
 				value.VerifierPaths = []string{"../tests/"}
+			case "parent_exact":
+				value.VerifierPaths = []string{".."}
+			case "parent_prefix":
+				value.VerifierPaths = []string{"../"}
 			case "root":
 				value.VerifierPaths = []string{"./"}
 			case "glob":

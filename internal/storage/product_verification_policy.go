@@ -59,7 +59,7 @@ func normalizeProductVerificationPolicy(value ProductVerificationPolicy) (Produc
 	seen := map[string]bool{}
 	for _, rule := range value.VerifierPaths {
 		clean := strings.TrimSuffix(rule, "/")
-		if !utf8.ValidString(rule) || len(rule) > contract.MaxInline || clean == "" || clean == "." || path.IsAbs(clean) || path.Clean(clean) != clean || strings.HasPrefix(clean, "../") || strings.ContainsAny(rule, "\x00\r\n\\*?[]") || seen[rule] {
+		if !utf8.ValidString(rule) || len(rule) > contract.MaxInline || clean == "" || clean == "." || clean == ".." || path.IsAbs(clean) || path.Clean(clean) != clean || strings.HasPrefix(clean, "../") || strings.ContainsAny(rule, "\x00\r\n\\*?[]") || seen[rule] {
 			return value, errors.New("test paths must be unique canonical relative exact paths or directory prefixes")
 		}
 		for _, part := range strings.Split(clean, "/") {
