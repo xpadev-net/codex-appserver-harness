@@ -65,6 +65,7 @@ func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	api := &budgetResourceAPI{ResourceAPI: p.Admitter.API}
 	if err := sourceRepository(ctx, api, p.Admitter.Policy); err != nil {
 		return result, err

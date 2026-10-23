@@ -16,23 +16,35 @@ type resourceBudgetKey struct{}
 type resourceReadBudget struct {
 	mu        sync.Mutex
 	remaining int64
+	parent    *resourceReadBudget
 }
 
 // WithResourceReadBudget shares wire/output accounting across this scan, even
-// when JSON decoding, entity validation, or a per-response limit fails.
+// when JSON decoding, entity validation, or a per-response limit fails. Nested
+// limits also charge their parent; they cannot reset the enclosing scan budget.
 func WithResourceReadBudget(ctx context.Context, limit int64) context.Context {
-	return context.WithValue(ctx, resourceBudgetKey{}, &resourceReadBudget{remaining: limit})
+	parent, _ := ctx.Value(resourceBudgetKey{}).(*resourceReadBudget)
+	return context.WithValue(ctx, resourceBudgetKey{}, &resourceReadBudget{remaining: limit, parent: parent})
 }
 func (b *resourceReadBudget) available() bool {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.remaining > 0
+	available := b.remaining > 0
+	b.mu.Unlock()
+	return available && (b.parent == nil || b.parent.available())
 }
 func (b *resourceReadBudget) charge(n int) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.remaining -= int64(n)
-	if b.remaining < 0 {
+	exhausted := b.remaining < 0
+	b.mu.Unlock()
+	// Charge every ancestor even when this response already exceeded its local
+	// limit: those bytes were consumed from the transport all the same.
+	if b.parent != nil {
+		if err := b.parent.charge(n); err != nil {
+			return err
+		}
+	}
+	if exhausted {
 		return errors.New("shared resource read budget exhausted")
 	}
 	return nil

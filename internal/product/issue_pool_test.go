@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,6 +198,55 @@ func TestIssuePoolCannotExceedControllerWaveCapacity(t *testing.T) {
 	if err != nil || len(again.Admitted) != 0 || !reflect.DeepEqual(again.Held, []int{46}) || wakes != 4 {
 		t.Fatal("full controller resumed held source", again, err, wakes)
 	}
+}
+
+func TestIssuePoolSharesWireBudgetAcrossFailedOversizedAdmissions(t *testing.T) {
+	p, api := issuePoolFixture(t)
+	p.Attempts = 32
+	items := make([]github.Issue, 32)
+	for i := range items {
+		items[i] = api.issue
+		items[i].Number = i + 1
+	}
+	pages, err := json.Marshal([][]github.Issue{items})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	meta, pageFile, oversized, calls := filepath.Join(dir, "meta"), filepath.Join(dir, "pages"), filepath.Join(dir, "oversized"), filepath.Join(dir, "calls")
+	for path, data := range map[string][]byte{meta: []byte(`{"id":17,"full_name":"owner/repo"}`), pageFile: pages, oversized: []byte(strings.Repeat("x", github.MaxResourceReadBytes+1))} {
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := `#!/bin/sh
+case "$*" in
+ 'api --method GET repos/owner/repo') /bin/cat "$ISSUE_POOL_BUDGET_META" ;;
+ 'api --method GET --paginate --slurp repos/owner/repo/issues?state=open&per_page=100') /bin/cat "$ISSUE_POOL_BUDGET_PAGES" ;;
+ 'api --method GET repos/owner/repo/issues/'*)
+  printf 'oversized\n' >> "$ISSUE_POOL_BUDGET_CALLS"
+  /bin/cat "$ISSUE_POOL_BUDGET_OVERSIZED" ;;
+ *) exit 49 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("ISSUE_POOL_BUDGET_META", meta)
+	t.Setenv("ISSUE_POOL_BUDGET_PAGES", pageFile)
+	t.Setenv("ISSUE_POOL_BUDGET_OVERSIZED", oversized)
+	t.Setenv("ISSUE_POOL_BUDGET_CALLS", calls)
+	p.Admitter.API = github.Client{Repository: "owner/repo", RepositoryID: 17}
+	result, err := p.Scan(context.Background())
+	if err != nil || len(result.Admitted) != 0 || len(result.Held) != 32 {
+		t.Fatal(result, err)
+	}
+	readCalls, err := os.ReadFile(calls)
+	if err != nil || strings.Count(string(readCalls), "oversized\n") != 4 {
+		t.Fatal("failed candidate reads reset scan wire budget", string(readCalls), err)
+	}
+	assertNoIssueAdmission(t, p.Admitter)
 }
 
 func TestIssuePoolCancellationJoinsInFlightRead(t *testing.T) {
