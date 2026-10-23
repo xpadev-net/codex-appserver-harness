@@ -17,18 +17,34 @@ import (
 )
 
 func TestRuntimeProductToolsUseCommonDriverAndPinnedThreadProfile(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
+	for _, mode := range []struct {
+		enabled bool
+		profile string
+	}{{false, ""}, {true, ""}, {true, "product_v2"}} {
+		enabled := mode.enabled
 		ctx := context.Background()
 		k, b := taskFixture(t)
 		p := fake(b)
 		calls := 0
-		r := Runtime{Store: k, ProductTools: enabled, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { calls++; return p, nil })}
+		r := Runtime{Store: k, ProductTools: enabled, ProductToolProfile: mode.profile, Factory: factoryFunc(func(context.Context, Launch) (Process, error) { calls++; return p, nil })}
 		if _, err := r.Execute(ctx, request(b)); err != nil {
 			t.Fatal(err)
 		}
 		names := map[string]bool{}
 		for _, tool := range p.dynamicTools {
 			names[tool.Name] = true
+			if tool.Name == "context_read" {
+				sections := tool.InputSchema["properties"].(map[string]any)["section"].(map[string]any)["enum"].([]any)
+				external := false
+				for _, section := range sections {
+					if section == "external" {
+						external = true
+					}
+				}
+				if external != (mode.profile == "product_v2") {
+					t.Fatal("native tool schema differs from pinned profile")
+				}
+			}
 			if strings.HasPrefix(tool.Name, "wave_") {
 				t.Fatal("Task acquired Wave tool", tool.Name)
 			}
@@ -43,11 +59,15 @@ func TestRuntimeProductToolsUseCommonDriverAndPinnedThreadProfile(t *testing.T) 
 		profile := "kernel_v1"
 		if enabled {
 			profile = "product_v1"
+			if mode.profile != "" {
+				profile = mode.profile
+			}
 		}
 		if err := k.PinSessionTools(ctx, current, profile); err != nil {
 			t.Fatal("profile not persisted", err)
 		}
 		r.ProductTools = !enabled
+		r.ProductToolProfile = ""
 		next := request(b)
 		next.RunID = "second-run"
 		if _, err := r.Execute(ctx, next); err == nil || !strings.Contains(err.Error(), "profile differs") {

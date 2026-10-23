@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -64,7 +65,14 @@ type PRResourceUpdateReceipt struct {
 var prSectionKinds = []string{"pr", "issue_comment", "inline_comment", "reaction", "review", "check", "status", "history"}
 
 func resourceFactDigest(head string, sections []PRResourceSection) (string, error) {
-	return contentDigest(struct {
+	raw, err := resourceFactBytes(head, sections)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
+}
+func resourceFactBytes(head string, sections []PRResourceSection) ([]byte, error) {
+	return json.Marshal(struct {
 		Head     string
 		Sections []PRResourceSection
 	}{head, sections})

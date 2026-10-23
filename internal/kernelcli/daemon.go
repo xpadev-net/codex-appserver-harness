@@ -18,15 +18,16 @@ import (
 // RuntimeConfig contains host-selected launch policy, never model output or
 // credentials. SessionAuthFile references the authorized session's token source.
 type RuntimeConfig struct {
-	ProductTools      bool     `json:"product_tools,omitempty"`
-	SchemaVersion     int      `json:"schema_version"`
-	CodexBinary       string   `json:"codex_binary"`
-	WorkerCodexHome   string   `json:"worker_codex_home"`
-	SessionAuthFile   string   `json:"session_auth_file,omitempty"`
-	Launcher          []string `json:"launcher"`
-	LauncherContract  string   `json:"launcher_contract"`
-	IsolationVerified bool     `json:"isolation_verified"`
-	GitDirectories    []string `json:"git_directories"`
+	ProductTools       bool     `json:"product_tools,omitempty"`
+	ProductToolProfile string   `json:"product_tool_profile,omitempty"`
+	SchemaVersion      int      `json:"schema_version"`
+	CodexBinary        string   `json:"codex_binary"`
+	WorkerCodexHome    string   `json:"worker_codex_home"`
+	SessionAuthFile    string   `json:"session_auth_file,omitempty"`
+	Launcher           []string `json:"launcher"`
+	LauncherContract   string   `json:"launcher_contract"`
+	IsolationVerified  bool     `json:"isolation_verified"`
+	GitDirectories     []string `json:"git_directories"`
 }
 
 func loadRuntime(path, root, model string) (control.IsolatedConfig, error) {
@@ -55,7 +56,7 @@ func loadRuntime(path, root, model string) (control.IsolatedConfig, error) {
 			return control.IsolatedConfig{}, errors.New("canonical absolute runtime paths required")
 		}
 	}
-	return control.IsolatedConfig{PrivateRoot: root, Model: model, CodexBinary: c.CodexBinary, WorkerCodexHome: c.WorkerCodexHome, SessionAuthFile: c.SessionAuthFile, Launcher: c.Launcher, LauncherContract: c.LauncherContract, IsolationVerified: c.IsolationVerified, GitDirectories: c.GitDirectories, ProductTools: c.ProductTools}, nil
+	return control.IsolatedConfig{PrivateRoot: root, Model: model, CodexBinary: c.CodexBinary, WorkerCodexHome: c.WorkerCodexHome, SessionAuthFile: c.SessionAuthFile, Launcher: c.Launcher, LauncherContract: c.LauncherContract, IsolationVerified: c.IsolationVerified, GitDirectories: c.GitDirectories, ProductTools: c.ProductTools, ProductToolProfile: c.ProductToolProfile}, nil
 }
 
 // The process launch reservation already owns this session's fixed workspace.

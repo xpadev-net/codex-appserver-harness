@@ -58,6 +58,16 @@ func (k *KernelStore) contextSliceTx(ctx context.Context, tx *sql.Tx, b contract
 	if b.Closed || wave.Target() != r.Target || b.Kind == "orchestrator" && wave.OrchestratorSessionID != b.ID || b.Kind == "task" && b.Target != r.Target || b.Kind != "orchestrator" && b.Kind != "task" {
 		return result, errors.New("context reader is outside the current Wave contract")
 	}
+	if r.Section == "external" {
+		if wave.Policy.Stage != "P" || !wave.Policy.Product {
+			return result, errors.New("external context requires the trusted P policy")
+		}
+		data, digest, err := k.externalContextTx(ctx, tx, b, r)
+		if err != nil {
+			return result, err
+		}
+		return contextBytes(data, r, "application/json", digest)
+	}
 	var data []byte
 	media := "text/plain; charset=utf-8"
 	switch r.Section {

@@ -30,6 +30,46 @@ func TestProductToolSetRequiresExplicitOptInAndRetainsTaskWaveRestriction(t *tes
 	}
 }
 
+func TestExternalContextSchemaIsExplicitProductV2WithoutChangingExistingProfiles(t *testing.T) {
+	for _, kind := range []string{"task", "orchestrator"} {
+		for _, profile := range []string{"kernel_v1", "product_v1", "product_v2", "kernel_v1", "product_v1"} {
+			tools := KernelTools(kind)
+			if profile != "kernel_v1" {
+				tools = ProductToolsForProfile(kind, profile)
+			}
+			found := false
+			for _, tool := range tools {
+				if kind == "task" && parentOnly(tool.Name) {
+					t.Fatal("Task Wave tool exposed")
+				}
+				if tool.Name != "context_read" {
+					continue
+				}
+				sections := tool.InputSchema["properties"].(map[string]any)["section"].(map[string]any)["enum"].([]string)
+				for _, section := range sections {
+					if section == "external" {
+						found = true
+					}
+				}
+			}
+			if found != (profile == "product_v2") {
+				t.Fatal("thread schema changed outside explicit profile", kind, profile)
+			}
+		}
+	}
+	if ProductToolsForProfile("task", "unknown") != nil {
+		t.Fatal("unknown product profile accepted")
+	}
+	r := ContextReadRequest{SchemaVersion: 1, Target: Target{"wave", 1, 1, 1}, Section: "external", ReferenceID: "notification", Limit: 2048}
+	if !r.Valid() {
+		t.Fatal("external slice rejected")
+	}
+	r.ReferenceID = ""
+	if r.Valid() {
+		t.Fatal("unscoped external read accepted")
+	}
+}
+
 func TestProductToolRequestsUseCommonAuthorityAndStrictCandidateContract(t *testing.T) {
 	target := Target{"wave", 1, 1, 1}
 	for _, mode := range []string{"valid", "review", "bad_sha", "spoof_repository", "wrong_scope", "namespace", "task_wave", "guard_omitted"} {

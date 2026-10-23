@@ -42,6 +42,7 @@ type owner struct {
 	rss                        <-chan *int64
 	afterCommit                func()
 	productTools               bool
+	productToolProfile         string
 }
 
 func newOwner(ctx context.Context, k *storage.KernelStore, f Factory, sessionID, runID, mode string, now func() time.Time) (*owner, error) {
@@ -87,7 +88,7 @@ func (o *owner) reserve(ctx context.Context, b contract.SessionBinding) error {
 	return nil
 }
 func (o *owner) driver() worker.SessionDriver {
-	return worker.SessionDriver{Store: persistence{KernelStore: o.store, owner: o}, RPC: o, ProductTools: o.productTools}
+	return worker.SessionDriver{Store: persistence{KernelStore: o.store, owner: o}, RPC: o, ProductTools: o.productTools, ProductToolProfile: o.productToolProfile}
 }
 func (o *owner) ensure(ctx context.Context) (*codex.SessionRPC, error) {
 	o.mu.Lock()
@@ -317,11 +318,12 @@ func (o *owner) Close() error {
 }
 
 type Runtime struct {
-	ProductTools bool // trusted opt-in; each thread's tool profile is pinned
-	Store        *storage.KernelStore
-	Factory      Factory
-	Now          func() time.Time
-	OnMutation   func() // nonblocking, payload-free hint after a committed tool mutation
+	ProductTools       bool // trusted opt-in; each thread's tool profile is pinned
+	ProductToolProfile string
+	Store              *storage.KernelStore
+	Factory            Factory
+	Now                func() time.Time
+	OnMutation         func() // nonblocking, payload-free hint after a committed tool mutation
 }
 type ExecuteRequest struct {
 	SessionID    string
@@ -368,6 +370,7 @@ func (r Runtime) Execute(ctx context.Context, request ExecuteRequest) (out Outco
 	}
 	o.afterCommit = r.OnMutation
 	o.productTools = r.ProductTools
+	o.productToolProfile = r.ProductToolProfile
 	var run contract.SessionRun
 	defer func() { err = errors.Join(err, o.Close()); out = o.outcome(run) }()
 	prepared, err := o.driver().Prepare(o.ctx, request.SessionID)

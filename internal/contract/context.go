@@ -5,7 +5,7 @@ package contract
 type ContextReadRequest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Target        Target `json:"target"`
-	Section       string `json:"section"` // request, criteria, policy, direction, manifest
+	Section       string `json:"section"` // request, criteria, policy, direction, manifest, external
 	ReferenceID   string `json:"reference_id,omitempty"`
 	Offset        int64  `json:"offset"`
 	Limit         int64  `json:"limit"`
@@ -17,7 +17,7 @@ func (r ContextReadRequest) Valid() bool {
 	if r.SchemaVersion != 1 || !r.Target.Valid() || r.Offset < 0 || r.Limit < 1 || r.Limit > MaxContextRead {
 		return false
 	}
-	if r.Section == "manifest" {
+	if r.Section == "manifest" || r.Section == "external" {
 		return len(r.ReferenceID) > 0 && len(r.ReferenceID) <= 128
 	}
 	return r.ReferenceID == "" && (r.Section == "request" || r.Section == "criteria" || r.Section == "policy" || r.Section == "direction")
