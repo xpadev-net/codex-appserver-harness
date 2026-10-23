@@ -374,3 +374,15 @@ sealed receiptのchecksum・不変history・Git停止/予約解放・固定Candi
 sidecarは元Task/run/result、入力・raw final digest、sealing参照と固定Candidateを結び付ける。完了成果の再利用と`TaskResultInput.product_candidate`は、sidecar・歴史的receipt/history・不変Candidate・正常適用済みrun・raw finalと保存済み構造化成果の一致を要求する。現在のmutableなCandidateへ古い成果を付け替えず、証拠欠落/破損時は完了成果として使わない。K/v1のJSONはoptional field未出力で維持する。
 
 検証: `go test ./internal/storage ./internal/product -run 'TestProductCandidate|TestProductWorkItemPause|TestCandidateSealer' -count=1`。原子的な採用と再open/再送、base変更再送の拒否、sidecar/plan更新失敗rollback、history/元入力/出所保留、criterion/Artifact不正による非採用、証拠欠落と保存成果改変の拒否、既存PR/branch/merge hold/予算回数の保持、実temp Gitから固定SHAの採用を確認する。model停止factsはfixtureで、Pの実model dispatch・runner/独立review・Cloud/mergeの受入には数えない。製品実行readinessと品質/正式gateの配置は後続である。
+
+## 独立評価Taskの固定Candidate入力
+
+host専用`BindProductCandidateSubject(ctx, taskID)`は、単一WorkItemのP review/verification Taskについて、宣言済みの適用済み成果から固定Candidateを選ぶ。caller/modelがSHAを渡す入力はない。直接の依存Taskが出したCandidateを優先し、それがなければ明示的なSourceResultIDsから一意の対象を選ぶ。SourceResultIDsの文脈は直接依存の評価対象を置き換えない。全依存・元成果の証拠を検査し、未完了・別WorkItemしかない・複数の対象が混在する場合は固定しない。
+
+初回は現在のactive Candidateと一致することを要求する。scope/policy/plan、登録とcriterionの範囲、未使用の独立Task/session、Wave/WorkItemの禁止を確認し、subject・不変history・Taskとplanの入力digestを原子保存する。依存成果の完成前に計画された未開始Taskの入力も、保存済みの成果から実行前に固定する。thread/run/attemptを作らず、read-only bindingを維持する。明示的に持ち越した旧planの成果は元の出所のまま参照でき、PR dispatch用のProductTargetを新planへ暗黙更新しない。
+
+subjectにはCandidate、code/base/scope/policyから計算する`candidate_digest`、producerのsidecar参照と元入力digestを保存する。以後のTask入力はmutableなWorkItem.CandidateIDを使わず、この固定subjectを参照する。Source/Artifact/依存成果と登録の検査は継続し、head/historyやproducer/Candidate証拠の欠落・破損からmutableな値へfallbackしない。active Candidateが後で更新されても、既存Taskの評価対象を付け替えない。完全一致の再送は歴史的receiptの読取だけである。
+
+Task専用manifestのoptional `product_subject`と、役割で絞った`product_subjects`へ保存する。parentは対象一覧を読めるが、Task専用の出力identityを持たない。reviewへの入力はschema v1と固定`candidate_digest`をreview.target_digestに使うことを指示する。subjectのdigestは入力参照、candidate_digestは評価対象を識別する別の値である。K・未固定Taskには新fieldを出力しない。
+
+検証: `go test ./internal/storage -run '^TestProductSubject' -count=1`。review/verificationの固定入力とTask/plan/manifestの一致、Candidate更新・再open後の安定、head/history/producer/登録破損の拒否、保存失敗rollback、未使用sessionと宣言済み成果の境界、明示carryとSourceResultIDからの対象選択を確認する。model停止factsはfixtureである。この保存は実行・checkout・書込・runner成功・品質/正式承認の許可ではない。独立した固定checkout、verificationのテスト追加契約と正式runner、review成果の品質gateへの接続は後続であり、製品readinessの禁止を外さない。

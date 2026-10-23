@@ -76,6 +76,10 @@ func (k *KernelStore) materializeProductTaskInputTx(ctx context.Context, tx *sql
 	if err != nil {
 		return err
 	}
+	return k.materializeTaskInputTx(ctx, tx, w, task)
+}
+
+func (k *KernelStore) materializeTaskInputTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task) error {
 	input, err := k.taskInputDigestTx(ctx, tx, w, task.Spec)
 	if err != nil {
 		return err
