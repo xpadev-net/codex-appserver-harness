@@ -206,6 +206,11 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 	// Validate the whole batch before adopting any plan. The transaction also
 	// rolls back budgets, sessions and notification fanout if a later write fails.
 	for _, decision := range result.Decisions {
+		if decision.Action == "wait" {
+			if err = k.awaitPRSubscriptionsTx(ctx, tx, b.ID, runID, decision.Target, decision.SubscriptionIDs); err != nil {
+				return receipt, err
+			}
+		}
 		if decision.Action == "accept" {
 			completion, err := k.completeGenericWaveTx(ctx, tx, b, runID, decision.Target, *decision.Acceptance, decision.Summary)
 			if err != nil {

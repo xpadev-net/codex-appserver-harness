@@ -402,5 +402,8 @@ func (k *KernelStore) CancelUnsentPRDispatch(ctx context.Context, id, owner, rea
 	if err = kernelRecordTx(ctx, tx, "product_pr_unsent_cancellation", id, intent.Source.SessionID, map[string]string{"reason": reason, "owner_id": owner}); err != nil {
 		return err
 	}
+	if err = kernelRecordTx(ctx, tx, "product_pr_completion", id, intent.Source.SessionID, PRCompletionReceipt{OperationID: id, Outcome: "canceled", SubscriptionID: intent.SubscriptionID, Transport: PRTransportProof{ID: id + ":unsent", OwnerID: owner, Disposition: "not_started"}, NotificationState: "pending"}); err != nil {
+		return err
+	}
 	return tx.Commit()
 }

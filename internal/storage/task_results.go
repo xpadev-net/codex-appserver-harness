@@ -254,6 +254,9 @@ func (k *KernelStore) ApplyTaskResult(ctx context.Context, sessionID, runID stri
 		return k.pendingTaskResultTx(ctx, tx, task, receipt, pendingReason)
 	}
 	if result.Outcome == "waiting" {
+		if err = k.awaitPRSubscriptionsTx(ctx, tx, b.ID, runID, task.Target(), result.SubscriptionIDs); err != nil {
+			return receipt, err
+		}
 		task.State, task.Reason = contract.TaskWaiting, "waiting on durable subscriptions"
 	} else if result.Outcome == "blocked" {
 		task.State, task.Reason = contract.TaskBlocked, strings.Join(result.Blockers, "; ")

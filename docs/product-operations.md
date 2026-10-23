@@ -39,3 +39,11 @@ PR toolは既存のsession/run/thread/turn/call検査、元snapshot scope、paus
 `resource_bound`は外部資源の確定を表す。検証/独立review/Cloud承認/merge gateの合格やWave完了を生成しない。完了outboxは永続化し、通知配送・待機条件との結合は後続sliceで接続する。実HTTP/marker取得adapterとP runtimeも引き続き未接続である。
 
 追加検証: `go test ./internal/storage -run 'TestObservedPR|TestPRBinding|TestUnknownPRBinding|TestObservedTerminal|TestBoundPR|TestPreviouslyBound|TestCanceledUnsent' -count=1`。再送の同一receipt、購読/操作/候補/leaseの失敗rollback、誤った外部header/transport証拠拒否、再起動/cancel後の事実回収、現在の候補と禁止flagの保持、一意所有、terminal枠解放と既存PR更新の枠共有を確認する。
+
+## 完了通知と明示的待機
+
+`ReconcilePRCompletionNotifications`は完了outboxを有界に処理し、状態event・通知・cursor・queued状態を保存する。queuedは通知保存を表し、配送ACKやモデル判断の適用とは別である。各操作を独立transactionにし、失敗した行が他の完了を止めないよう永続scan cursorを進め、再起動/再試行では未処理を回収する。共通KernelSourceのready走査から呼び、モデルや外部APIを起動しない。
+
+通常の完了はdeferredで保存し、`session_wait`または正常に適用したmain/Taskのwait結果が、本人の同じtarget/購読を明示して初めてpending入力へ進める。待機宣言と完了保存の前後関係を問わず同じ通知を使う。通常の成功や閲覧だけでmainを起動しない。cancel/終端session/旧scopeの通知はarchivedとして履歴に残す。未送信取消の通知はcanceledであり、資源作成や品質成功に読み替えない。ACK済みでも未判断入力を保持し、wake/runへの関連付けと論理適用は共通kernelの契約を使う。
+
+追加検証: `go test ./internal/storage -run 'TestPRCompletionNotification|TestPRWaitBefore|TestPRNotice|TestFailedPRNotice|TestPRCompletionFromPrevious' -count=1`。前後/同一再送、ACK後のwait、main構造化wait、同じ再開intent、保存失敗と再open、bad rowの後続進行、cancel/旧版を確認する。実HTTPと継続的な外部資源更新・native P公開は後続である。

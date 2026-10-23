@@ -323,6 +323,9 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 				return reply, errors.New("wait subscription is outside this session and target")
 			}
 		}
+		if err = k.awaitPRSubscriptionsTx(ctx, tx, b.ID, call.RunID, target, r.SubscriptionIDs); err != nil {
+			return reply, err
+		}
 		if err = kernelRecordTx(ctx, tx, "kernel_session_wait", op.ID, b.ID, map[string]any{"run_id": call.RunID, "target": target, "subscription_ids": r.SubscriptionIDs}); err != nil {
 			return reply, err
 		}
