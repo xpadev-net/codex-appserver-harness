@@ -20,12 +20,17 @@ func verificationSealFixture(t *testing.T, modify ...func(*verification.Plan)) (
 
 func verificationSealFixtureWithPolicy(t *testing.T, configure func(*ProductVerificationPolicy), modify ...func(*verification.Plan)) (*KernelStore, domain.Wave, domain.Task, contract.SessionRun, domain.Artifact, ProductCandidateSubjectSnapshot) {
 	t.Helper()
+	return verificationSealFixtureWithPlan(t, nil, configure, modify...)
+}
+
+func verificationSealFixtureWithPlan(t *testing.T, planConfig func(*contract.PlanProposal), configure func(*ProductVerificationPolicy), modify ...func(*verification.Plan)) (*KernelStore, domain.Wave, domain.Task, contract.SessionRun, domain.Artifact, ProductCandidateSubjectSnapshot) {
+	t.Helper()
 	ctx := context.Background()
 	var options []func(*ProductVerificationPolicy)
 	if configure != nil {
 		options = append(options, configure)
 	}
-	k, w, task, request, subject, _ := verificationWorkspaceFixture(t, options...)
+	k, w, task, request, subject, _ := verificationWorkspaceWithPlanFixture(t, planConfig, options...)
 	ready, err := k.ReserveProductWorkspace(ctx, request)
 	if err != nil {
 		t.Fatal(err)

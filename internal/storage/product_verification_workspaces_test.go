@@ -12,8 +12,17 @@ import (
 
 func verificationWorkspaceFixture(t *testing.T, configure ...func(*ProductVerificationPolicy)) (*KernelStore, domain.Wave, domain.Task, ProductWorkspaceRequest, ProductCandidateSubjectSnapshot, ProductVerificationPolicySnapshot) {
 	t.Helper()
+	return verificationWorkspaceWithPlanFixture(t, nil, configure...)
+}
+
+func verificationWorkspaceWithPlanFixture(t *testing.T, planConfig func(*contract.PlanProposal), configure ...func(*ProductVerificationPolicy)) (*KernelStore, domain.Wave, domain.Task, ProductWorkspaceRequest, ProductCandidateSubjectSnapshot, ProductVerificationPolicySnapshot) {
+	t.Helper()
 	ctx := context.Background()
-	k, w, task, source := productSubjectFixture(t, "verification")
+	var options []func(*contract.PlanProposal)
+	if planConfig != nil {
+		options = append(options, planConfig)
+	}
+	k, w, task, source := productSubjectFixture(t, "verification", options...)
 	subject, err := k.BindProductCandidateSubject(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
