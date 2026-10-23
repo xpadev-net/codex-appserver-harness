@@ -168,6 +168,25 @@ Pのstage/product flagと初期policy版はコマンドが指定し、実行上�
 
 これはPのsource受付です。Issue poolのkernel入口、製品worktree/readiness・停止後候補・daemonの書込worker配置は接続途中であり、製品Taskは`product_readiness_unavailable`で保留されます。公開gateや正式なCloud承認、P Waveの完了を省略しません。[保存契約](docs/product-operations.md)を参照してください。
 
+### GitHub Issueの明示的な受付
+
+ready/hold条件を満たす一つのIssueを、同じkernelのP Waveへ読み込めます。controller側の認証済み`gh`を使用し、IssueやPRへの書込は行いません。
+
+```json
+{"schema_version":1,"issue_number":42,"source_policy":{"repository":"OWNER/REPOSITORY","repository_id":12345,"ready_label":"harness:ready","hold_label":"harness:hold"}}
+```
+
+```sh
+chmod 600 issue-import.json
+./harness wave import-issue --root /absolute/private/kernel --file issue-import.json
+```
+
+privateなoperator fileでrepository名・数値IDと選択labelを指定します。Issue本文には下記Issue poolと同じ`harness-scope` JSON fenceが必要です。repository ID・open/ready/hold・IssueとPRの区別・依存Issueを確認し、取得前後のrepositoryとIssue本文/label/更新時刻を照合してから原子的に保存します。同じIssueは`rREPOSITORY_ID-iISSUE_NUMBER`をsource/WorkItem IDとし、編集内容での再送はscopeを上書きしません。
+
+初回scopeはrevision 1・全criterionをincludedとするものに限定します。改訂済み・部分/既mergeのscopeは履歴を取り込む後続工程まで保留します。`harness-depends-on: 41,40`は32件までで、依存はclosed、既存kernel Waveがある場合は製品Waveの完了も要求します。読取は最大30秒（CLI全体のretry枠は10秒）、各gh応答4 MiB/合計16 MiBの上限で、不明を成功にしません。HTTP取得とDB保存を跨ぐ外部の原子性はなく、公開前の再確認は引き続き必要です。
+
+このコマンドは一件の明示受付です。kernelのIssue pool自動走査、初回以降のscope同期、製品Task/候補/正式承認/mergeの統合は継続中です。実GitHub接続やP全体の受入証拠は別途必要です。
+
 ## 設定と起動
 
 ```sh

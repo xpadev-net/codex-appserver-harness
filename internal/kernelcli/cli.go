@@ -26,11 +26,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, create-product, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message, runs, output")
+		return errors.New("wave commands: init, create, create-product, import-issue, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message, runs, output")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "create-product", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message", "runs", "output":
+	case "init", "create", "create-product", "import-issue", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message", "runs", "output":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -79,7 +79,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["session"], allowed["id"] = true, true
 	case "init":
 		allowed["session"], allowed["model"] = true, true
-	case "create", "create-product", "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":
+	case "create", "create-product", "import-issue", "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":
 		allowed["file"] = true
 	case "recovery-input":
 		allowed["session"], allowed["file"] = true, true
@@ -232,6 +232,13 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 		_ = ipc.Notify(ctx, filepath.Join(*root, ipc.SocketName), "")
 		return encode(result)
+	case "import-issue":
+		wave, err := importIssue(ctx, k, c, *file)
+		if err != nil {
+			return err
+		}
+		_ = ipc.Notify(ctx, filepath.Join(*root, ipc.SocketName), "")
+		return encode(wave)
 	case "create-product":
 		wave, err := createProduct(ctx, k, c, *file)
 		if err != nil {
