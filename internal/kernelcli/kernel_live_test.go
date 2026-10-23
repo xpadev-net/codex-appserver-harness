@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,6 +32,12 @@ func TestLiveKernelCLIFixReviewAcceptance(t *testing.T) {
 	}
 	if _, err := os.Lstat(root); !os.IsNotExist(err) {
 		t.Fatal("native K requires a new root")
+	}
+	versionCtx, stopVersion := context.WithTimeout(context.Background(), 5*time.Second)
+	binaryVersion, versionErr := verifiedNativeVersion(versionCtx, binary)
+	stopVersion()
+	if versionErr != nil {
+		t.Fatal("configured native binary version is unavailable or unsupported")
 	}
 	auth := os.Getenv("HARNESS_LIVE_SESSION_AUTH_FILE")
 	if auth == "" {
@@ -116,7 +125,7 @@ Configure a saved FixReviewTemplate with input_task_id=review, classifications=[
 	go func() {
 		done <- Run(ctx, []string{"run", "--root", root, "--runtime", runtimeFile}, io.Discard, io.Discard)
 	}()
-	evidence := map[string]any{"stage": "K native CLI fix/review acceptance", "model": model, "binary_version": "codex-cli 0.163.0", "executed_tests": 1, "repository": nil, "candidate": nil, "credential_values_recorded": false, "private_paths_recorded": false, "acceptance": "not_accepted", "token_limit": tokenLimit}
+	evidence := map[string]any{"stage": "K native CLI fix/review acceptance", "model": model, "binary_version": binaryVersion, "executed_tests": 1, "repository": nil, "candidate": nil, "credential_values_recorded": false, "private_paths_recorded": false, "acceptance": "not_accepted", "token_limit": tokenLimit}
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -203,10 +212,10 @@ Configure a saved FixReviewTemplate with input_task_id=review, classifications=[
 				if strings.Contains(string(body), "NEEDS_FIX") {
 					t.Fatal("accepted native artifact still contains seed")
 				}
-				normalized := strings.ToLower(strings.ReplaceAll(string(body), " ", ""))
-				if !strings.Contains(normalized, "sum=21") || !strings.Contains(normalized, "average=7") {
-					t.Fatal("accepted native arithmetic absent")
+				if err = verifyNativeReport(body); err != nil {
+					t.Fatal("accepted native report violates source/arithmetic criteria")
 				}
+
 				digest := sha256.Sum256(body)
 				if hex.EncodeToString(digest[:]) != artifact.Digest {
 					t.Fatal("accepted native artifact digest mismatch")
@@ -224,4 +233,52 @@ Configure a saved FixReviewTemplate with input_task_id=review, classifications=[
 		case <-ticker.C:
 		}
 	}
+}
+
+func verifiedNativeVersion(ctx context.Context, binary string) (string, error) {
+	raw, err := exec.CommandContext(ctx, binary, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	version := strings.TrimSpace(string(raw))
+	if version != "codex-cli 0.163.0" {
+		return version, fmt.Errorf("unsupported native version")
+	}
+	return version, nil
+}
+func verifyNativeReport(body []byte) error {
+	dataPattern := regexp.MustCompile(`(?im)^\s*data\s*=\s*(\[[^\r\n]*\])\s*$`)
+	dataFields := dataPattern.FindAllSubmatch(body, -1)
+	if len(dataFields) != 1 {
+		return fmt.Errorf("one complete data field required")
+	}
+	var data []float64
+	if err := json.Unmarshal(dataFields[0][1], &data); err != nil {
+		return err
+	}
+	if len(data) != 3 || data[0] != 4 || data[1] != 7 || data[2] != 10 {
+		return fmt.Errorf("source data mismatch")
+	}
+	expectedSum := data[0] + data[1] + data[2]
+	expectedAverage := expectedSum / float64(len(data))
+	numberPattern := regexp.MustCompile(`(?im)^\s*(sum|average)\s*=\s*([^\s]+)\s*$`)
+	fields := numberPattern.FindAllSubmatch(body, -1)
+	values := map[string]float64{}
+	for _, field := range fields {
+		name := strings.ToLower(string(field[1]))
+		if _, exists := values[name]; exists {
+			return fmt.Errorf("duplicate arithmetic field")
+		}
+		value, err := strconv.ParseFloat(string(field[2]), 64)
+		if err != nil {
+			return err
+		}
+		values[name] = value
+	}
+	sum, sumOK := values["sum"]
+	average, averageOK := values["average"]
+	if !sumOK || !averageOK || sum != expectedSum || average != expectedAverage {
+		return fmt.Errorf("arithmetic values mismatch")
+	}
+	return nil
 }
