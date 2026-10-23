@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -289,5 +291,88 @@ func TestExternalMessageSourcesKeepOriginalWaveWhileDestinationAuthorityStaysSep
 	call.TurnID, call.CallID = "foreign-turn", "foreign-target"
 	if _, err = (contract.KernelGateway{Backend: k}).Handle(ctx, call); err == nil {
 		t.Fatal("provenance granted foreign destination rights")
+	}
+}
+
+func TestExternalMessageSourceRejectsValidReplacementScanNotPresentedInRun(t *testing.T) {
+	k, w, child, b, run := externalMessageRunFixture(t, "resource_scan")
+	ctx := context.Background()
+	state, err := k.PRResourceState(ctx, "github:17:pull:42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan := PRResourceScan{ID: "replacement", RepositoryID: 17, PRNumber: 42, HeadSHA: strings.Repeat("e", 40), StartedAt: k.clock()}
+	for _, kind := range prSectionKinds {
+		scan.Sections = append(scan.Sections, PRResourceSection{Kind: kind, Availability: "complete", Entities: []PRResourceEntity{}})
+	}
+	if _, err = k.RecordPRResourceScan(ctx, state.Digest, scan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.DB.Exec(`UPDATE kernel_events SET payload=json_set(payload,'$.scan_id','replacement') WHERE kind='product_resource_updated'`); err != nil {
+		t.Fatal(err)
+	}
+	call := kernelCall(t, b, run, "send_message", contract.SendMessageRequest{SchemaVersion: 1, Target: w.Target(), Recipient: child.ID, Body: "forward the source I actually received"})
+	call.TurnID, call.CallID = "relay-turn", "relay"
+	if _, err = (contract.KernelGateway{Backend: k}).Handle(ctx, call); err == nil {
+		t.Fatal("different valid scan silently replaced input provenance")
+	}
+	var count int
+	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_messages").Scan(&count); err != nil || count != 0 {
+		t.Fatal(count, err)
+	}
+}
+
+func TestExternalMessageTransportChecksSerializedReceiverContextBeforeCommit(t *testing.T) {
+	k, w, child, b, run := externalMessageRunFixture(t, "webhook")
+	ctx := context.Background()
+	first, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: b.ID, SourceRunID: run.ID, Target: w.Target(), Key: "first", Recipient: child.ID, Body: "external context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := k.SendMessage(ctx, MessageRequest{SenderSessionID: child.SessionID, Target: w.Target(), Key: "many-sources", Recipient: "parent", ReplyTo: first.ID, Body: "retained source history"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Represent retained history from earlier turns without running 64 models.
+	// Admission must bound serialized metadata as well as its source count.
+	base := prior.Sources[0]
+	prior.Sources = make([]MessageSource, 64)
+	prior.Sources[0] = base
+	for i := 1; i < 64; i++ {
+		s := base
+		s.DeliveryID = strings.Repeat("x", 250) + fmt.Sprintf("%06d", i)
+		prior.Sources[i] = s
+	}
+	raw, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.DB.Exec("UPDATE kernel_messages SET payload=? WHERE id=?", raw, prior.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := MessageRequest{SenderSessionID: b.ID, SourceRunID: run.ID, Target: w.Target(), Key: "large", Recipient: child.ID, ReplyTo: prior.ID, Body: strings.Repeat("x", contract.MaxInline)}
+	if _, err = k.SendMessage(ctx, request); !errors.Is(err, ErrMessageTransportLimit) {
+		t.Fatal("accepted undeliverable provenance", err)
+	}
+	var count int
+	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_messages").Scan(&count); err != nil || count != 2 {
+		t.Fatal("oversized message partially committed", count, err)
+	}
+	prior.Sources = prior.Sources[:8]
+	raw, err = json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = k.DB.Exec("UPDATE kernel_messages SET payload=? WHERE id=?", raw, prior.ID); err != nil {
+		t.Fatal(err)
+	}
+	request.Key = "fits"
+	accepted, err := k.SendMessage(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nid := structureID("notification-", mailboxSubscriptionID(child.SessionID, w.Target(), child.ID), accepted.ID)
+	if _, err = k.ReserveWake(ctx, WakeRequest{SessionID: child.SessionID, Key: "deliver", NotificationIDs: []string{nid}, IncludeSessionContext: true}); err != nil {
+		t.Fatal("accepted single message could not form production wake input", err)
 	}
 }

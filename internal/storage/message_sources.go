@@ -122,7 +122,7 @@ func (k *KernelStore) messageInputSourcesTx(ctx context.Context, tx *sql.Tx, b c
 		if err = completionRecord(ctx, tx, "notification_intent", n.SourceEventID, &intent); err != nil {
 			return nil, err
 		}
-		if intent.Target != n.SourceTarget {
+		if intent.Target != n.SourceTarget || intent.EventID != n.SourceEventID || intent.Kind != kind {
 			return nil, errors.New("message source event revision conflict")
 		}
 		s := MessageSource{Target: n.SourceTarget, SessionID: b.ID, RunID: runID, NotificationID: id, EventID: n.SourceEventID, ObservedVia: n.ObservedVia}
@@ -134,6 +134,13 @@ func (k *KernelStore) messageInputSourcesTx(ctx context.Context, tx *sql.Tx, b c
 			}
 			if o.SubscriptionID != n.SubscriptionID || n.ObservedVia != "webhook" {
 				return nil, errors.New("message webhook source conflict")
+			}
+			var presented PRWebhookObservation
+			if err = json.Unmarshal([]byte(saved.Detail), &presented); err != nil {
+				return nil, err
+			}
+			if presented != o || n.SourceEventID != structureID("pr-webhook-event-", o.SubscriptionID, o.DeliveryID) {
+				return nil, errors.New("message webhook differs from presented notification")
 			}
 			var delivery PRRawDelivery
 			if err = completionRecord(ctx, tx, "product_pr_raw_delivery", o.DeliveryID, &delivery); err != nil {
@@ -169,6 +176,18 @@ func (k *KernelStore) messageInputSourcesTx(ctx context.Context, tx *sql.Tx, b c
 			var receipt PRResourceUpdateReceipt
 			if err = completionRecord(ctx, tx, "product_pr_scan", ref.ScanID, &receipt); err != nil {
 				return nil, err
+			}
+			var presented struct {
+				ScanID      string `json:"scan_id"`
+				ResourceKey string `json:"resource_key"`
+				Digest      string `json:"snapshot_digest"`
+				Previous    string `json:"previous_digest"`
+			}
+			if err = json.Unmarshal([]byte(saved.Detail), &presented); err != nil {
+				return nil, err
+			}
+			if receipt.ScanID != ref.ScanID || presented.ScanID != ref.ScanID || presented.ResourceKey != receipt.ResourceKey || presented.Digest != receipt.Digest || presented.Previous != receipt.PreviousDigest || n.SourceEventID != structureID("pr-resource-event-", receipt.ResourceKey, receipt.ScanID) {
+				return nil, errors.New("message scan differs from presented notification")
 			}
 			var version PRResourceState
 			if err = completionRecord(ctx, tx, "product_pr_state_version", structureID("pr-state-", receipt.ResourceKey, receipt.Digest), &version); err != nil {

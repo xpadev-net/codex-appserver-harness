@@ -279,6 +279,9 @@ func (k *KernelStore) sendMessageTx(ctx context.Context, tx *sql.Tx, request Mes
 	if err = k.waveEventTx(ctx, tx, wave, "message_received", task.ID, m.ID+":received", map[string]string{"message_id": m.ID}); err != nil {
 		return m, err
 	}
+	if err = k.checkMessageTransportTx(ctx, tx, m); err != nil {
+		return m, err
+	}
 	return m, nil
 }
 
