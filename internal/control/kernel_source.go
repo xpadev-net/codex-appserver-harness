@@ -245,6 +245,9 @@ func (s *KernelSource) selectSession(ctx context.Context, state storage.SessionD
 		if e != nil {
 			return nil, false, e
 		}
+		if e = storage.ValidateTaskRecoverySnapshot(snapshot, b.ID, b.Target); e != nil {
+			return nil, false, e
+		}
 		return s.selected(ctx, ExecuteRequest{SessionID: b.ID, RunID: recovery.RunID, Snapshot: snapshot, OutputSchema: schema, Validate: validate})
 	}
 	wake := state.Wake

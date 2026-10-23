@@ -73,6 +73,16 @@ func TestKernelSourceDispatchesOnlyExactAuthorizedTaskRetryAfterRestart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	foreign, foreignErr := k.BuildSessionInput(ctx, b.ParentSessionID, []contract.Target{task.Target()})
+	if foreignErr != nil {
+		t.Fatal(foreignErr)
+	}
+	if err = k.AuthorizeTaskRecovery(ctx, task, "foreign-input", foreign, "trusted caller supplied wrong session snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	if work := taskWorkIfPresent(t, source, b.ID); work != nil {
+		t.Fatal("scheduler dispatched foreign session input", work)
+	}
 	if err = k.AuthorizeTaskRecovery(ctx, task, "obsolete-selected-retry", snapshot, "first classified recovery"); err != nil {
 		t.Fatal(err)
 	}

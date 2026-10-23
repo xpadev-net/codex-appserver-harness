@@ -346,3 +346,25 @@ func TestPendingTaskRecoveryUsesLatestDistinctDecisionAndSavedInput(t *testing.T
 		t.Fatal("unbounded retry ID accepted")
 	}
 }
+
+func TestTaskRecoveryVersionedSnapshotRejectsForeignSessionAndScope(t *testing.T) {
+	ctx := context.Background()
+	k, task := blockedRecoveryFixture(t)
+	snapshot, err := k.BuildSessionInput(ctx, task.SessionID, []contract.Target{task.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ValidateTaskRecoverySnapshot(snapshot, task.SessionID, task.Target()); err != nil {
+		t.Fatal(err)
+	}
+	wrong := task.Target()
+	wrong.ScopeRevision++
+	for _, trial := range []struct {
+		session string
+		target  contract.Target
+	}{{"main", task.Target()}, {"another-task-session", task.Target()}, {task.SessionID, wrong}} {
+		if err = ValidateTaskRecoverySnapshot(snapshot, trial.session, trial.target); !errors.Is(err, ErrTaskRecoveryRequired) {
+			t.Fatal("foreign input accepted", trial, err)
+		}
+	}
+}

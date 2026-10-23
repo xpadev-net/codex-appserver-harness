@@ -173,3 +173,23 @@ func latestTaskRecoveryTx(ctx context.Context, tx *sql.Tx, task domain.Task) (*t
 	}
 	return &permit, nil
 }
+
+// ValidateTaskRecoverySnapshot checks controller-built versioned input before
+// a host retry command or production scheduler uses its saved reference.
+func ValidateTaskRecoverySnapshot(snapshot contract.InputSnapshot, sessionID string, target contract.Target) error {
+	if err := contract.ValidateSessionInput(snapshot.Input); err != nil {
+		return err
+	}
+	var input struct {
+		SchemaVersion int               `json:"schema_version"`
+		SessionID     string            `json:"session_id"`
+		Targets       []contract.Target `json:"targets"`
+	}
+	if err := json.Unmarshal(snapshot.Input, &input); err != nil {
+		return err
+	}
+	if sessionID == "" || !target.Valid() || input.SchemaVersion != 1 || input.SessionID != sessionID || len(input.Targets) != 1 || input.Targets[0] != target {
+		return errors.Join(ErrTaskRecoveryRequired, errors.New("recovery snapshot must name this Task session and its exact current target"))
+	}
+	return nil
+}

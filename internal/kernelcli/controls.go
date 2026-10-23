@@ -13,7 +13,11 @@ func applyControlFile(ctx context.Context, k *storage.KernelStore, command, file
 	if file == "" {
 		return nil, errors.New("--file with explicit target versions, key and reason required")
 	}
-	raw, err := readFile(file, 1<<20, false)
+	limit := 1 << 20
+	if command == "retry-task" {
+		limit = 4 << 20
+	}
+	raw, err := readFile(file, int64(limit), false)
 	if err != nil {
 		return nil, err
 	}
@@ -50,12 +54,15 @@ func applyControlFile(ctx context.Context, k *storage.KernelStore, command, file
 			Snapshot contract.InputSnapshot `json:"snapshot"`
 			Reason   string                 `json:"reason"`
 		}
-		if err = contract.DecodeStrict(raw, &request); err != nil {
+		if err = contract.DecodeStrictBounded(raw, &request, 4<<20); err != nil {
 			return nil, err
 		}
 		snapshot, loadErr := k.SavedInputSnapshot(ctx, request.Snapshot.ID, request.Snapshot.Digest)
 		if loadErr != nil {
 			return nil, loadErr
+		}
+		if err = storage.ValidateTaskRecoverySnapshot(snapshot, request.Expected.SessionID, request.Expected.Target()); err != nil {
+			return nil, err
 		}
 		apply = func(ctx context.Context) error {
 			if err := k.AuthorizeTaskRecovery(ctx, request.Expected, request.RunID, snapshot, request.Reason); err != nil {
