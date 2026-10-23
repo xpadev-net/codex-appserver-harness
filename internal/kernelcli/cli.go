@@ -26,11 +26,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run")
+		return errors.New("wave commands: init, create, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run":
+	case "init", "create", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -61,8 +61,14 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	switch command {
 	case "init":
 		allowed["session"], allowed["model"] = true, true
-	case "create", "pause", "resume", "cancel", "steer", "interrupt":
+	case "create", "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn":
 		allowed["file"] = true
+	case "recovery-input":
+		allowed["session"], allowed["file"] = true, true
+	case "session":
+		allowed["session"], allowed["after"], allowed["limit"] = true, true, true
+	case "history":
+		allowed["id"], allowed["after"], allowed["limit"] = true, true, true
 	case "list":
 		allowed["after"], allowed["limit"] = true, true
 	case "inspect":
@@ -95,6 +101,39 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	defer k.Close()
 	switch command {
+	case "recovery-input":
+		raw, err := readFile(*file, 64<<10, false)
+		if err != nil {
+			return err
+		}
+		var request struct {
+			Targets []contract.Target `json:"targets"`
+		}
+		if err = contract.DecodeStrict(raw, &request); err != nil {
+			return err
+		}
+		var snapshot contract.InputSnapshot
+		err = retryMutation(ctx, func(attempt context.Context) error {
+			var buildErr error
+			snapshot, buildErr = k.BuildSessionInput(attempt, *session, request.Targets)
+			return buildErr
+		})
+		if err != nil {
+			return err
+		}
+		return encode(snapshot)
+	case "session":
+		view, err := k.InspectSessionRecovery(ctx, *session, *after, *limit)
+		if err != nil {
+			return err
+		}
+		return encode(view)
+	case "history":
+		view, err := k.InspectHistoryObservation(ctx, *id, *after, *limit)
+		if err != nil {
+			return err
+		}
+		return encode(view)
 	case "run":
 		config, err := loadRuntime(*runtimeFile, *root, c.Model)
 		if err != nil {
@@ -107,7 +146,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return runDaemon(ctx, k, runtime, errOut)
 	case "watch":
 		return watchEvents(ctx, k, *root, *cursor, *limit, *once, out)
-	case "pause", "resume", "cancel", "steer", "interrupt":
+	case "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn":
 		result, err := applyControlFile(ctx, k, command, *file)
 		if err != nil {
 			return err
