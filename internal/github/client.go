@@ -48,7 +48,11 @@ func (c Client) API(ctx context.Context, method, endpoint string, body any, out 
 			return fmt.Errorf("%w: %v", contract.ErrUnsent, err)
 		}
 	}
-	args := []string{"api", "--method", method, "repos/" + c.Repository + "/" + endpoint}
+	path := "repos/" + c.Repository
+	if endpoint != "" {
+		path += "/" + endpoint
+	}
+	args := []string{"api", "--method", method, path}
 	var stdin bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&stdin).Encode(body); err != nil {
