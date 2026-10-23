@@ -334,23 +334,9 @@ func (c *Controller) claimPool(ctx context.Context) error {
 	return nil
 }
 func ParseScope(body string) (verification.Scope, error) {
-	var scope verification.Scope
-	const fence = "```harness-scope\n"
-	start := strings.Index(body, fence)
-	if start < 0 {
-		return scope, errors.New("ready Issue requires a fenced harness-scope JSON acceptance contract")
-	}
-	rest := body[start+len(fence):]
-	end := strings.Index(rest, "```")
-	if end < 0 {
-		return scope, errors.New("unterminated harness-scope")
-	}
-	if err := contract.DecodeStrict([]byte(rest[:end]), &scope); err != nil {
-		return scope, err
-	}
-	scope.OriginalRequest = body
-	return scope, scope.Validate()
+	return verification.ParseScope(body)
 }
+
 func (c *Controller) Enqueue(ctx context.Context, w domain.WorkItem, s verification.Scope, issue github.Issue) error {
 	if err := c.ensurePolicy(ctx); err != nil {
 		return err
