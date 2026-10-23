@@ -401,11 +401,11 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
 
 ### Task_8: GitHub tool gatewayと自動購読
 
-- status: in_progress
+- status: complete
 - split: 共通gatewayに明示opt-inのpr_publish/pr_review_requestを追加し、固定candidateのCAS・Wave/session/run/turn/call認可とoperation/購読intent/receiptの原子的保存を実装した。PR/Cloud枠・mutation lease・preparedから一度だけunknownにする直前guardを既存Publisher/ReviewRequesterへ接続し、応答欠落は停止証拠付きのread-only照合で回収する。raw Webhookと有界API差分、永続outbox、明示wait/deferred/archive、割当Taskのread購読、親子messageの出所保持を共通Sourceへ接続した。独立した観測/書込worker poolで外部待ちをready処理から分離し、prepared再openとunknown非再送、別資源の並行・cancel joinを検証した。wave runのprivate observer/Webhook設定から読取と署名検証HTTP入口を起動し、全worker/handlerのjoinまでcontroller lock/storeを保持する。private runtimeのproduct_tools opt-inで共通native driverからP toolを公開し、thread generationごとのtool profile保存・既存threadの無確認変更拒否・明示rotationを検証した。RPC fixtureでP mainの共通gateway受付/再送非重複とK拒否を確認したが、実GitHub/CloudやP受入の合格には数えない。
   既存canonical WorkItem journalのpublication/review gate adapterを追加し、policy/最新Issue/固定commitの計画・runner結果・残作業・fresh request capabilityを照合する。gate自体は外部書込しない。
   product_v2の明示profileで外部本文のcontext_readを追加し、現在runの通知grantからraw bytes/不変snapshotを有界に読む。UTF-8/page/digest、後続scan/再open、peer・relay-only・破損source拒否を検証し、既存v1 schemaを保つ。
-  未完了: 新P sourceの作成/同期とgate配置、daemon書込dispatcherの配置、WorkItem割当Taskのreadinessと製品候補/merge工程はTask_11接続と合わせて進める。製品readiness保留を維持し、自己申告・reaction・通常commentから権限や正式承認を生成しない。[P受付と運用の契約](../../../product-operations.md)を参照。
+  component/fixture受入は[Task_8受入表](../../../task8-github-acceptance.md)を参照。新P sourceの作成/同期とgate配置、daemon書込dispatcherの配置、WorkItem割当Taskのreadinessと製品候補/merge工程はTask_11の未完了範囲として引き継ぐ。製品readiness保留を維持し、自己申告・reaction・通常commentから権限や正式承認を生成しない。[P受付と運用の契約](../../../product-operations.md)を参照。
 - type: impl
 - owns:
   - internal/service/tools.go
@@ -514,7 +514,7 @@ Task_0〜2はcompleted、Task_3はin_progress、Task_4〜13はpending。指定ow
   - internal/service/wave_integration_test.go
   - README.md
 - depends_on: [Task_8, Task_9]
-- description: kernelと既存Issue/WorkItem/Candidate/PR工程を接続する。Task_9と同じfileは依存順で引き継ぐ。
+- description: Task_8で受け入れた外部gateway/adapter/購読componentを使い、kernelと既存Issue/WorkItem/Candidate/PR工程を接続する。新P sourceの作成/同期、製品Taskの入力/worktree/readiness/停止後の候補結果、canonical gateとdaemon書込dispatcherの配置を含む。Task_9と同じfileは依存順で引き継ぐ。
 - acceptance:
   - Issue poolとdirect製品依頼が同じWaveへ入り、必要な検証/正式承認を保って公開・購読・mergeへ進む。
   - 先行mergeによるbase更新を通常mergeし、競合は新fix Task/sessionへ渡す。複数Wave・同じファイルのPR・部分PR・分割でも失効と予算を維持する。

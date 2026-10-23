@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | S | 合格 | [native dynamic toolと同一未完了thread再開](../evidence/background-wave/spike/session-observation.json)。後続Kより先に実施したAT-050 |
 | K | 合格 | 下表のK適用AT、実モデルによる独立Task並行・findings→新fix/review→report→検証済み完了、CLI操作、障害注入、通知参照負荷 |
-| P | 未完了 | Task_8/11/13の外部資源tool/購読・製品工程接続は後続。Cloud/CI/rulesの実成立は [#20](https://github.com/xpadev-net/codex-appserver-harness/issues/20) の未確認を保持 |
+| P | 未完了 | [Task_8 component](task8-github-acceptance.md)はfixture合格。Task_11/13の製品工程接続は後続。Cloud/CI/rulesの実成立は [#20](https://github.com/xpadev-net/codex-appserver-harness/issues/20) の未確認を保持 |
 | M | 未完了 | Task_12のv1 DB/config fixture移行が必要。依頼者確認で運用DBは存在せず、導入先の実DB切替だけがnot_applicable |
 
 ## 実行した経路
@@ -47,7 +47,7 @@
 | 054 | 合格 | 同waves `TestPlanAdmissionRollsBackStructureAndBudget`、同template `TestTemplateExpansionIsAtomicReplayableAndKeepsCumulativeBudgets`、[wave_tools_test.go](../internal/storage/wave_tools_test.go)。監査/通知を含めた失敗rollbackと再実行 |
 | 055 | 合格 | 同waves/template、[deadlines_test.go](../internal/storage/deadlines_test.go)、[run_budgets_test.go](../internal/storage/run_budgets_test.go)、同operation budgets。実model既定token超過は次dispatchを保留 |
 | 056 | K部分合格 | [operation_reservations_test.go](../internal/storage/operation_reservations_test.go) `TestKPolicyAdmitsLocalGitAndExcludesSharedRepositoryAcrossWaves` / `TestGitCapacityUsesCommonRepositoryAcrossWavesAndLinkedWorktrees`。temp Gitの共有repo排他。実PR競合/失効/期待SHA mergeはP |
-| 057 | K部分合格 | 同kernel toolsのruntime identity / 旧版 / source run検査、同messagesの親子scope、同contract tool認可、同main resultsのpolicy緩和拒否。外部comment取得と出所付き中継はTask_8のP適用部分 |
+| 057 | K部分合格 | 同kernel toolsのruntime identity / 旧版 / source run検査、同messagesの親子scope、同contract tool認可、同main resultsのpolicy緩和拒否。外部comment取得と出所付き中継は[Task_8 component受入](task8-github-acceptance.md)を参照し、P全体の工程は別判定 |
 | 058 | 合格 | [session_input_test.go](../internal/storage/session_input_test.go)、[context_test.go](../internal/storage/context_test.go)、[main_rotation_test.go](../internal/storage/main_rotation_test.go)、[main_run_rejection_test.go](../internal/storage/main_run_rejection_test.go)、[history_observations_test.go](../internal/control/history_observations_test.go)。64KiB入力・8turn更新・停止/unknown照合・通知再queue・論理session/予算保持 |
 | 059 | 合格 | [kernel_source_latency_test.go](../internal/control/kernel_source_latency_test.go)、[loop_test.go](../internal/control/loop_test.go)、同operator controls/directions/interruptions、native上限/停止/RSS、実model完了後の全停止 |
 
@@ -74,4 +74,4 @@ AT-039/049はM、042〜044はP、050は先行Sへ割り当てる。AT-001〜030�
 
 Go全suite/vet、主要packageのrace、CLI buildは [regression.json](../evidence/background-wave/kernel/regression.json) のcommandで再現できる。新しい実接続は新規private rootと明示envで実施し、既存DBの予算や結果を変更しない。CLIの直接依頼/操作JSONと各commandは [README](../README.md) にあり、cursor/reconnectの再現は `go test ./internal/kernelcli -run 'TestKernelCLIWatch|TestKernelCLIVersionedControls|TestKernelCLISteer' -count=1`、crash/message/main復旧は対応表のGo testで再実行できる。
 
-次はTask_8（#41）、Task_11（#42）、Task_12（#35）、Task_13（#43）の順に進める。#40の製品Candidate部分、AT-056の実PR経路、FR-035の外部資源購読を引き継ぐ。Cloud/CI/rulesがunknownの間は製品Wave/P/全体完成を保留する。運用DB不存在でもM fixtureを省略しない。
+Task_8のgateway/購読componentを受け入れ、次はTask_11（#42）、Task_12（#35）、Task_13（#43）の順に進める。#40の製品Candidate部分、AT-056の実PR経路、FR-035の製品runtimeへの配置を引き継ぐ。Cloud/CI/rulesがunknownの間は製品Wave/P/全体完成を保留する。運用DB不存在でもM fixtureを省略しない。
