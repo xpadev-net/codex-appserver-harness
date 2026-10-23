@@ -339,3 +339,11 @@ outcome=resultは参照一件、waiting/blockedは空のproduct_changesとする
 元要求の登録・Wave scope/policy・Task/sessionの所属を再検査し、ready記録またはhistoryの欠落/破損時は可変Candidateへのfallbackを許さない。source result、Artifactの実bytes、依存Taskの成果は引き続き現在の証拠を検証する。K、未準備Task、review/verificationの入力契約は維持する。使用済みsnapshot/runを書き換えず、完全一致の準備完了再送も元receiptを返すだけである。
 
 検証: `go test ./internal/storage -run 'TestFixedProductInput|TestProductWorkspace|TestProductChange' -count=1`。work/fixの入力・plan・manifest一致、Candidate更新と再open後の安定、reviewの従来挙動、scope/policy/登録/historyの拒否、Artifact/依存証拠の失効、plan更新失敗の全面rollbackを確認する。これは固定入力の保存接続であり、Candidate sealing、P実行readiness、品質/正式承認のgateは後続の接続範囲である。
+
+## 固定checkoutのcommit確定処理
+
+`workspace.FreezePinned` は、hostが保存したrepository・CWD・branch・正確なlinked git-dir・common-dir・base SHAを入力とする同期Git処理である。callerには、workerと子processの停止証拠、Git/worktreeの排他予約が必要であり、この関数だけでTask実行・Candidate登録や公開を許可しない。
+
+すべてのdirectoryが保存時のcanonical pathであること、元repositoryとcheckoutのcommon-dir、正確なgit-dir、branch、HEADが固定baseの子孫であることを、staging前に検査する。common-dirとbranchだけを模倣した`.git`の差し替えは拒否する。strict stopped-command profileで変更をstage/commitし、host指定identityと署名無効化、既存のhook/filter等の無効化を適用する。replace refを無効化し、legacy graftsは拒否して、実commitの親子関係を検査する。commit後も同じ所属・base ancestry・clean状態を再確認する。停止不明・取消・検査失敗には成功receiptを返さず、callerがintent/予約を保持して照合する。
+
+検証: `go test ./internal/workspace -run 'TestFreezePinned|TestStoppedGit' -count=1`。実temp Gitの不変commitとclean再送、hook/filter/signing非実行、common-dir/branchを模倣した別git-dir、branch/path差し替え、無関係なbase、取消時のstage/commit非実行を確認する。製品Taskの停止済みrunとのDB照合、sealing intent/履歴、Candidate projectionは後続であり、この関数の成功をP全体の受入には数えない。
