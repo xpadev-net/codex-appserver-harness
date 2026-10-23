@@ -139,7 +139,40 @@ func (k *KernelStore) ReconcilePRWebhookNotifications(ctx context.Context, limit
 			completed.Advanced = append(completed.Advanced, id)
 		}
 	}
+	// A backlog on an earlier watch must survive the final idle watch page.
+	// Stop only after a complete pass without progress; a failing watch alone
+	// does not mark the pass active and cannot force an endless recheck loop.
+	continued, err := k.finishPRWebhookWatchPass(ctx, len(completed.Advanced) > 0, more)
+	if err != nil {
+		failures = append(failures, err)
+	} else {
+		completed.More = continued
+	}
 	return completed, errors.Join(failures...)
+}
+
+func (k *KernelStore) finishPRWebhookWatchPass(ctx context.Context, progress, morePages bool) (bool, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var previous bool
+	err = completionRecord(ctx, tx, "kernel_reconcile_cursor", "pr_webhook_pass_active", &previous)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	dirty := previous || progress
+	if morePages && dirty {
+		if err = kernelRecordTx(ctx, tx, "kernel_reconcile_cursor", "pr_webhook_pass_active", "controller", true); err != nil {
+			return false, err
+		}
+	} else if !morePages && err == nil {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM records WHERE kind='kernel_reconcile_cursor' AND id='pr_webhook_pass_active'"); err != nil {
+			return false, err
+		}
+	}
+	return morePages || dirty, tx.Commit()
 }
 func (k *KernelStore) nextPRBoundWatchBatch(ctx context.Context, limit int) ([]string, bool, error) {
 	tx, err := k.kernelTx(ctx)

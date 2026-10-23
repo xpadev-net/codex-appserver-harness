@@ -237,3 +237,91 @@ func TestPRWebhookBoundWatchPagingReportsMoreWithoutIdleBusyLoop(t *testing.T) {
 		t.Fatal("idle watchers kept source busy", second, err)
 	}
 }
+
+func TestPRWebhookBacklogRecheckSurvivesFinalIdleSubscriptionPage(t *testing.T) {
+	k, p, id, _ := completedPRNoticeFixture(t)
+	ctx := context.Background()
+	var intent PROperationIntent
+	if err := k.Record(ctx, "product_pr_intent", id, &intent); err != nil {
+		t.Fatal(err)
+	}
+	b, err := k.SessionBinding(ctx, intent.Source.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run contract.SessionRun
+	if err = k.Record(ctx, "agent_run", intent.Source.RunID, &run); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 16; i++ {
+		call := kernelCall(t, b, run, "pr_publish", contract.PublishPRRequest{SchemaVersion: 1, Target: p.Value.Target, Candidate: intent.Candidate})
+		call.CallID = fmt.Sprintf("extra-watch-%d", i)
+		reply, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claim, err := k.PreparePRDispatch(ctx, reply.OperationID, "owner")
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := PRResourceObservation{ProofID: call.CallID, RepositoryID: 17, HeadRepositoryID: 17, BaseRepositoryID: 17, Number: 42, MarkerWorkItemID: p.Value.WorkItem.ID, HeadSHA: p.Value.Candidate.SHA, HeadBranch: p.Value.WorkItem.Branch, BaseBranch: p.Value.BaseBranch, State: "open", ObservedAt: k.clock()}
+		if _, err = k.BindObservedPRPublication(ctx, reply.OperationID, PRTransportProof{ID: call.CallID, OwnerID: claim.OwnerID, Disposition: "not_started"}, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 16; i++ {
+		receivePRComment(t, k, fmt.Sprintf("unrelated-%d", i), 43, "created")
+	}
+	receivePRComment(t, k, "relevant", 42, "created")
+	ids, _, err := k.nextPRBoundWatchBatch(ctx, 128)
+	if err != nil || len(ids) != 17 {
+		t.Fatal(ids, err)
+	}
+	backlogged := ids[0]
+	// Leave only an earlier watch behind. All other watches are already idle.
+	for _, watch := range ids[1:] {
+		for {
+			count, err := k.catchUpPRWebhookWatch(ctx, watch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count == 0 {
+				break
+			}
+		}
+	}
+	if _, err = k.DB.Exec("DELETE FROM records WHERE kind='kernel_reconcile_cursor' AND id='pr_webhook_watches'"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := k.ReconcilePRWebhookNotifications(ctx, 16)
+	if err != nil || !first.More {
+		t.Fatal(first, err)
+	}
+	last, err := k.ReconcilePRWebhookNotifications(ctx, 16)
+	if err != nil || !last.More || len(last.Advanced) != 0 {
+		t.Fatal("idle tail lost earlier backlog", last, err)
+	}
+	var cursor int64
+	if err = k.Record(ctx, "product_pr_webhook_cursor", backlogged, &cursor); err != nil || cursor != 16 {
+		t.Fatal(cursor, err)
+	}
+	// Immediate source-style passes drain the remaining relevant delivery, then
+	// one full idle pass terminates instead of spinning forever.
+	stopped := false
+	for i := 0; i < 8; i++ {
+		result, err := k.ReconcilePRWebhookNotifications(ctx, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.More && len(result.Advanced) == 0 {
+			stopped = true
+			break
+		}
+	}
+	if !stopped {
+		t.Fatal("idle pass failed to terminate")
+	}
+	if err = k.Record(ctx, "product_pr_webhook_cursor", backlogged, &cursor); err != nil || cursor != 17 {
+		t.Fatal("backlog did not drain without timer", cursor, err)
+	}
+}
