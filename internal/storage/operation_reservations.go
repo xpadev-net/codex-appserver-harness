@@ -79,8 +79,8 @@ func validateOperationCapacityRequest(r OperationCapacityRequest) error {
 			return errors.New("runner requires only its fixed workspace")
 		}
 	case "git":
-		if !filepath.IsAbs(r.Repository) || r.Worktree != "" || r.ResourceKey != "" {
-			return errors.New("Git operation requires only its repository")
+		if !filepath.IsAbs(r.Repository) || (r.Worktree != "" && !filepath.IsAbs(r.Worktree)) || r.ResourceKey != "" {
+			return errors.New("Git operation requires its repository and optional absolute preparation destination")
 		}
 	default:
 		if strings.TrimSpace(r.ResourceKey) == "" || len(r.ResourceKey) > contract.MaxInline || r.Repository != "" || r.Worktree != "" {
@@ -255,6 +255,16 @@ func (k *KernelStore) ReserveOperationCapacity(ctx context.Context, request Oper
 	return r, tx.Commit()
 }
 func (k *KernelStore) reserveOperationCapacityTx(ctx context.Context, tx *sql.Tx, request OperationCapacityRequest) (OperationReservation, error) {
+	// Persist the destination that the lease actually protects. Replaying an
+	// alias after it is retargeted must conflict, and the process owner must use
+	// this saved canonical destination rather than resolving the alias again.
+	if request.Kind == "git" && request.Worktree != "" {
+		canonical, err := resourcePath(request.Worktree)
+		if err != nil {
+			return OperationReservation{}, err
+		}
+		request.Worktree = canonical
+	}
 	r, err := loadOperationReservationTx(ctx, tx, request.ID)
 	if err == nil {
 		if !reflect.DeepEqual(r.Request, request) {
@@ -308,6 +318,9 @@ func (k *KernelStore) reserveOperationCapacityTx(ctx context.Context, tx *sql.Tx
 	resources := []string{}
 	switch request.Kind {
 	case "runner":
+		if err := checkWorkspacePreparationTx(ctx, tx, request.Worktree); err != nil {
+			return r, err
+		}
 		path, err := worktreeResource(ctx, request.Worktree)
 		if err != nil {
 			return r, err
@@ -317,6 +330,9 @@ func (k *KernelStore) reserveOperationCapacityTx(ctx context.Context, tx *sql.Tx
 		}
 		resources = append(resources, "worktree:"+path)
 	case "git":
+		if err := checkWorkspacePreparationTx(ctx, tx, request.Repository); err != nil {
+			return r, err
+		}
 		path, err := repositoryResource(ctx, request.Repository)
 		if err != nil {
 			return r, err
@@ -330,6 +346,26 @@ func (k *KernelStore) reserveOperationCapacityTx(ctx context.Context, tx *sql.Tx
 			return r, err
 		}
 		resources = append(resources, "worktree:"+tree)
+		if request.Worktree != "" {
+			if err := checkWorkspacePreparationTx(ctx, tx, request.Worktree); err != nil {
+				return r, err
+			}
+			destination, err := resourcePath(request.Worktree)
+			if err != nil {
+				return r, err
+			}
+			if err := checkWorkspacePreparationUsersTx(ctx, tx, destination); err != nil {
+				return r, err
+			}
+			preparedTree, err := worktreeResource(ctx, destination)
+			if err != nil {
+				return r, err
+			}
+			resources = append(resources, workspacePreparationPrefix+destination)
+			if preparedTree != tree {
+				resources = append(resources, "worktree:"+preparedTree)
+			}
+		}
 	default:
 		resources = append(resources, "external:"+request.Kind+":"+request.ResourceKey)
 	}

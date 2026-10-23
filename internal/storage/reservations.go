@@ -163,23 +163,56 @@ func resourcePath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errors.New("resource path must be absolute")
 	}
-	path = filepath.Clean(path)
-	real, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		return real, nil
+	// Resolve components in filesystem order, including dangling symlinks.
+	// Cleaning before following links would give the wrong target for link/..
+	// and resolving only the existing parent would discard dangling targets.
+	resolved := string(filepath.Separator)
+	pending := strings.Split(path, string(filepath.Separator))
+	links := 0
+	for len(pending) > 0 {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+		next := filepath.Join(resolved, part)
+		info, err := os.Lstat(next)
+		if errors.Is(err, os.ErrNotExist) {
+			resolved = next
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			links++
+			if links > 255 {
+				return "", errors.New("too many resource path symlinks")
+			}
+			target, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			if filepath.IsAbs(target) {
+				resolved = string(filepath.Separator)
+			}
+			pending = append(strings.Split(target, string(filepath.Separator)), pending...)
+			continue
+		}
+		if !info.IsDir() {
+			for _, rest := range pending {
+				if rest != "" {
+					return "", errors.New("resource path crosses a non-directory")
+				}
+			}
+		}
+		resolved = next
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	parent := filepath.Dir(path)
-	if parent == path {
-		return "", err
-	}
-	real, err = resourcePath(parent)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(real, filepath.Base(path)), nil
+	return resolved, nil
 }
 
 // A subdirectory shares the checkout/index with its containing worktree. A
@@ -331,6 +364,9 @@ func (k *KernelStore) reserveSessionResourcesTx(ctx context.Context, tx *sql.Tx,
 		return ErrExecutionCapacity
 	}
 	r := ProcessReservation{Kind: "app_server", ID: b.PreparationID, SessionID: b.ID, WaveID: b.Target.WaveID, State: "held", PolicyRevision: p.Revision, Resources: []ResourceLease{}, CreatedAt: k.clock()}
+	if err := checkWorkspacePreparationTx(ctx, tx, b.CWD); err != nil {
+		return err
+	}
 	path, err := worktreeResource(ctx, b.CWD)
 	if err != nil {
 		return err

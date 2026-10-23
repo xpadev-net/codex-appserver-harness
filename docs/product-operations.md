@@ -293,3 +293,13 @@ source保留、manual pause、pending directionは独立で、手動resumeはsou
 実行用禁止が変わった場合だけcommit後のwake hintを送る。pollは通知intent/無条件のmain turn、candidate、外部writeを作らない。実行中のreadはshutdownまでjoinする。pollとGitHubはatomic snapshotではなく、公開直前のfresh source gateと版付き要求同期・後続作業は引き続き後続の接続範囲である。
 
 検証: `go test ./internal/product ./internal/storage ./internal/kernelcli -run 'TestIssueSourceObserver|TestProductSourceObservationTargets' -count=1`。状態別保留/復旧・manual pause維持、再送、古いreadと新しいholdのCAS競合、repo/PR/変化/取得不能の禁止、pagination/再open、read/scan期限checkpoint、出力budget、shutdown join、private設定とGET argv/commit後hintを確認する。transport fixtureの成功を実GitHub/モデル/Cloud承認やP全体の合格には数えない。
+
+## worktree準備中の固定パス予約
+
+`OperationCapacityRequest{Kind:"git", Repository:..., Worktree:...}` のoptional `Worktree` は、trusted controllerがGit checkoutを準備する際の作成先を表す。これはcapacity/resource予約であり、Task実行やcandidateの業務上の許可ではない。既存のWorktree未指定Git操作とJSON契約は維持する。
+
+共通repository Git予約と元checkoutの排他に加え、作成前のcanonicalな作成先を`workspace_prepare:`資源へ固定する。作成前は通常directoryのpath、作成後はlinked worktreeのgit-dirに変わるため、Git discoveryだけの識別に依存しない。app-server準備・runner・Git予約は、この固定pathと同一/配下/包含directoryの新規利用を拒否する。既存のsymlink別名と、まだ参照先がない絶対/相対のsymlinkもcomponent順に解決する。link/..をリンク解決前にcleanせず、cycleや非directoryを通るpathは拒否する。予約要求のWorktreeにも解決済みpathを保存し、実行ownerは返された保存済みpathを使う。リンクの付替え後に同じoperation IDを再送して作成先を変えることは拒否する。保存済み固定pathはcheckout作成後や再open後も変えない。
+
+準備を予約する側も、作成先と重なる既存のlive session・runner・Git操作を検査する。共通Git資源・作成先・旧worktreeの予約は一transactionで保存し、失敗はrollbackする。unknown/期限切れだけで解放せず、trusted ownerの`process_stopped`または確実な`not_started`の証拠が必要である。独立したworkspaceやrepositoryは引き続き利用できる。
+
+検証: `go test ./internal/storage -run 'TestWorkspacePreparation|TestGitCapacity|TestRunnerCapacity|TestProcessCapacity' -count=1`。実temp Gitで作成前/作成後の識別変更、alias/child/包含directory、再open、unknown保持、停止証拠後の解放、既存利用者、別repoによる同じ作成先の並行予約、保存失敗rollbackを確認する。製品worktreeの作成worker・固定候補の登録・P Taskのreadinessは後続の接続であり、この予約だけで未接続の製品Taskを実行しない。
