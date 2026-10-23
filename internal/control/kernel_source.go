@@ -88,6 +88,9 @@ func (s *KernelSource) Ready(ctx context.Context, after string, limit int) (Work
 	prUpdates, prUpdateErr := s.Store.ReconcilePRResourceNotifications(ctx, 16)
 	s.report(prUpdateErr)
 	out.Recheck = out.Recheck || len(prUpdates) > 0
+	prWebhooks, prWebhookErr := s.Store.ReconcilePRWebhookNotifications(ctx, 16)
+	s.report(prWebhookErr)
+	out.Recheck = out.Recheck || len(prWebhooks.Advanced) > 0 || prWebhooks.More
 	page, err := s.Store.DispatchSessions(ctx, after, 128)
 	if err != nil {
 		return out, err
