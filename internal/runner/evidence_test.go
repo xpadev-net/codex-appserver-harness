@@ -61,6 +61,27 @@ func TestUnconfirmedGitStopDuringCancelNeverPublishesTerminalResult(t *testing.T
 	}
 }
 
+func TestRunnerCheckoutDoesNotExecuteHostConfiguredHooks(t *testing.T) {
+	s := spec(t)
+	hooks := t.TempDir()
+	marker := filepath.Join(hooks, "executed")
+	script := "#!/bin/sh\n: > '" + strings.ReplaceAll(marker, "'", "'\\''") + "'\n"
+	if err := os.WriteFile(filepath.Join(hooks, "post-checkout"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "config"))
+	if _, err := workspace.Git(context.Background(), s.Repository, "config", "--global", "core.hooksPath", hooks); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Execute(context.Background(), s)
+	if err != nil || result.Status != "passed" {
+		t.Fatal(result, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("host checkout hook executed outside runner profile", err)
+	}
+}
+
 func stoppedCompletionFixture(t *testing.T, script string, timeout int, configure ...func(*Spec)) (Spec, Completion) {
 	t.Helper()
 	s := spec(t)

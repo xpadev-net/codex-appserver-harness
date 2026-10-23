@@ -10,7 +10,7 @@ func prepareCheckout(ctx context.Context, s Spec, checkout string, git func(cont
 	if _, err := git(ctx, s.Repository, "--no-replace-objects", "clone", "--no-local", "--no-checkout", "--", s.Repository, checkout); err != nil {
 		return "", err
 	}
-	if _, err := git(ctx, checkout, "--no-replace-objects", "checkout", "--detach", s.Candidate.SHA); err != nil {
+	if _, err := git(ctx, checkout, "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "checkout", "--detach", s.Candidate.SHA); err != nil {
 		return "", err
 	}
 	head, err := git(ctx, checkout, "--no-replace-objects", "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
