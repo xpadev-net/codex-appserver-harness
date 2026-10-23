@@ -65,6 +65,15 @@ func (k *KernelStore) RegisterProductWorkItem(ctx context.Context, target contra
 		return saved, err
 	}
 	defer tx.Rollback()
+	saved, err = k.registerProductWorkItemTx(ctx, tx, target, expected, definition)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) registerProductWorkItemTx(ctx context.Context, tx *sql.Tx, target contract.Target, expected string, definition ProductWorkItemDefinition) (ProductWorkItemRegistrationSnapshot, error) {
+	var saved ProductWorkItemRegistrationSnapshot
 	w, err := loadWave(ctx, tx, target.WaveID)
 	if err != nil {
 		return saved, err
@@ -153,7 +162,7 @@ func (k *KernelStore) RegisterProductWorkItem(ctx context.Context, target contra
 			return saved, errors.New("product registration ownership conflict")
 		}
 		if prior.Digest == saved.Digest {
-			return prior, tx.Commit()
+			return prior, nil
 		}
 		if expected != prior.Digest || (prior.Value.ScopeRevision == w.ScopeRevision && prior.Value.PolicyRevision == w.Policy.Revision) {
 			return saved, errors.New("product registration requires a versioned source change and matching CAS")
@@ -186,7 +195,7 @@ func (k *KernelStore) RegisterProductWorkItem(ctx context.Context, target contra
 	if err := kernelRecordTx(ctx, tx, "product_work_item_registration_version", structureID("product-work-", definition.ID, saved.Digest), w.ID, saved); err != nil {
 		return saved, err
 	}
-	return saved, tx.Commit()
+	return saved, nil
 }
 
 func productRegistrationScope(saved ProductWorkItemRegistrationSnapshot, w domain.Wave) bool {

@@ -229,3 +229,13 @@ criterionは登録済み要求の非空・重複なし部分集合とし、順�
 保存入力には親の当該Wave全件とTask自身に割り当てたWorkItemだけを載せ、Task input digestへsource定義digestを含める。古いsource版は現在の定義として渡さず、不在理由を示す。Kの入力schemaは変更しない。候補projectionと登録済みrepositoryの不一致を拒否する。
 
 検証は `go test ./internal/storage -run '^TestProductWorkItemRegistration' -count=1`。direct/GitHub source識別、候補なし所属、再open/replay、rollback、他Wave/K/未知criterion拒否、親/Taskの入力分離、scope更新CASとcandidate解除、repository照合・件数上限・pause中再送を確認する。metadata登録は実行・検証・公開権限を生成せず、製品Taskのreadiness保留を維持する。source入口、worktree、製品結果/候補の適用とdaemon書込workerの配置はTask_11の後続である。
+
+## 初回sourceの原子的な受付
+
+`KernelStore.CreateProductWave` は trusted source controller が作成した `ProductWaveRequest`（Wave要求と1〜128件のWorkItem定義）を受け付ける共通portである。`direct` と `github` は同じtransaction経路を使う。これは正規化済みsourceの保存であり、Issue poolからの取得やCLI入口、外部Issue本文からpolicyを決める機能ではない。
+
+Wave作成・最初のevent/通知intent・全WorkItemの所属/定義/履歴・source受付receiptを一transactionで保存する。したがって、別controllerが最初のplanning入力を予約する時点で全所属が揃う。どのWorkItemやreceiptで失敗してもWaveと通知を含めてrollbackし、同じsource IDで改めて受付できる。既に見えているWaveへの初回登録の後付けは拒否し、明示的な版更新へ分ける。
+
+WorkItem一覧とcriterion一覧の順序を正規化して受付digestを固定する。定義や要求を変えた再送は拒否し、完全一致の再送は保存済みWaveの現在状態をread-onlyで返す。pause/cancelや方向修正後も初回通知を再発行せず、古いsource定義や候補を復活させない。初回定義digestはreceiptに保持し、現在定義と履歴を区別する。source IDはUTF-8で4096 bytes以下、NUL/改行を禁止する。
+
+検証は `go test ./internal/storage -run '^TestProduct(Admission|WorkItemRegistration)' -count=1`。両sourceの初回予約入力、2件目/receiptでの失敗rollback、再送の順序差・pause・方向修正・再open、定義変更・他Waveへの所属移動・既存Waveへの後付け・重複/未知criterion/K拒否を確認する。source名のfixture確認は実GitHub取得やP全体の受入ではない。
