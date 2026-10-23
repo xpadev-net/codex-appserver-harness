@@ -154,7 +154,13 @@ func TestIssueSourceObserverStaleReadCannotReplaceConcurrentProhibition(t *testi
 			t.Fatal(err)
 		}
 	}
-	result := scanSource(t, o)
+	result, scanErr := o.Scan(context.Background())
+	if result.Attempted == 0 {
+		result, scanErr = o.Scan(context.Background())
+	}
+	if scanErr == nil || !strings.Contains(scanErr.Error(), "CAS conflict") {
+		t.Fatal("conflicting read was acknowledged", result, scanErr)
+	}
 	current, err := o.Store.Wave(context.Background(), w.ID)
 	if err != nil || current.SourceHold == nil || current.SourceHold.Reason != "hold" || len(result.Failed) != 1 {
 		t.Fatal("stale source read cleared newer hold", result, current, err)
@@ -340,5 +346,68 @@ func TestIssueSourceObserverPolicyMismatchFailsBeforeGETAndPreservesPinnedFacts(
 	current, err := o.Store.Wave(context.Background(), w.ID)
 	if err != nil || len(recovered.Failed) != 0 || current.SourceHold != nil || len(api.reads) != 4 {
 		t.Fatal("restored pinned policy could not recover", recovered, current, api.reads, err)
+	}
+}
+
+func TestIssueSourceObserverUncommittedObservationPreservesCursorForRetry(t *testing.T) {
+	o, api, w := sourceObserverFixture(t)
+	ctx := context.Background()
+	initial := issueSourceCursor{PolicyDigest: o.Policy.Digest()}
+	if err := o.Store.Put(ctx, "product_issue_source_cursor", "17", "controller", initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Store.DB.Exec("CREATE TRIGGER fail_issue_source_commit BEFORE INSERT ON records WHEN NEW.kind='product_source_observation' BEGIN SELECT RAISE(FAIL,'source commit injection'); END"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := o.Scan(ctx)
+	if err == nil || !strings.Contains(err.Error(), "source commit injection") || result.Attempted != 1 {
+		t.Fatal(result, err)
+	}
+	var saved issueSourceCursor
+	if err := o.Store.Record(ctx, "product_issue_source_cursor", "17", &saved); err != nil || saved != initial {
+		t.Fatal("uncommitted source advanced cursor", saved, err)
+	}
+	var count int
+	if err := o.Store.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_source_observation'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("failed observation leaked", count, err)
+	}
+	if _, err := o.Store.DB.Exec("DROP TRIGGER fail_issue_source_commit"); err != nil {
+		t.Fatal(err)
+	}
+	result, err = o.Scan(ctx)
+	if err != nil || result.Attempted != 1 || len(api.reads) != 8 {
+		t.Fatal("uncommitted source not retried", result, api.reads, err)
+	}
+	if _, err := o.Store.ReadProductSourceObservation(ctx, w.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIssueSourceObserverExpiredPreflightHasNoAcknowledgementOrGET(t *testing.T) {
+	o, api, w := sourceObserverFixture(t)
+	readCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	update, acknowledged, err := o.observe(context.Background(), readCtx, o.API, w, time.Second)
+	if !errors.Is(err, context.Canceled) || acknowledged || update.Snapshot.ID != "" || len(api.reads) != 0 {
+		t.Fatal("expired preflight acknowledged unobserved source", update, acknowledged, api.reads, err)
+	}
+}
+
+func TestIssueSourceObserverCommittedInvalidStateMayCheckpointWithoutBlockingLaterSources(t *testing.T) {
+	o, api, w := sourceObserverFixture(t)
+	ctx := context.Background()
+	if _, err := o.Store.DB.Exec("UPDATE records SET payload='broken pin' WHERE kind='product_source_policy' AND work_item_id=?", w.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		result := scanSource(t, o)
+		current, err := o.Store.Wave(ctx, w.ID)
+		if err != nil || len(result.Failed) != 1 || current.SourceHold == nil || current.SourceHold.Reason != "state_invalid" || len(api.reads) != 0 {
+			t.Fatal(result, current, api.reads, err)
+		}
+		var saved issueSourceCursor
+		if err := o.Store.Record(ctx, "product_issue_source_cursor", "17", &saved); err != nil || saved.After != w.ID {
+			t.Fatal("durable invalid-state hold blocked scan progress", saved, err)
+		}
 	}
 }

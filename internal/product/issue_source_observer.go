@@ -54,14 +54,14 @@ func (o IssueSourceObserver) Validate() error {
 
 // observe captures the authoritative observation CAS before performing GETs.
 // An unavailable or changing source is a saved prohibition, never ready data.
-func (o IssueSourceObserver) observe(parent, readParent context.Context, api ResourceAPI, w domain.Wave, timeout time.Duration) (storage.ProductSourceUpdate, error) {
+func (o IssueSourceObserver) observe(parent, readParent context.Context, api ResourceAPI, w domain.Wave, timeout time.Duration) (storage.ProductSourceUpdate, bool, error) {
 	number, err := strconv.Atoi(strings.TrimPrefix(w.SourceID, fmt.Sprintf("r%d-i", o.Policy.RepositoryID)))
 	if err != nil || number < 1 || w.SourceID != issueSourceID(o.Policy.RepositoryID, number) {
-		return storage.ProductSourceUpdate{}, errors.New("noncanonical Issue source identity")
+		return storage.ProductSourceUpdate{}, false, errors.New("noncanonical Issue source identity")
 	}
 	prior, priorErr := o.Store.ReadProductSourceObservation(readParent, w.ID)
 	if priorErr != nil && !errors.Is(priorErr, sql.ErrNoRows) && !errors.Is(priorErr, storage.ErrTaskEvidence) {
-		return storage.ProductSourceUpdate{}, priorErr
+		return storage.ProductSourceUpdate{}, false, priorErr
 	}
 	expected := ""
 	if priorErr == nil {
@@ -71,7 +71,7 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	var readErr error
 	pinned, policyErr := o.Store.ReadProductSourcePolicy(readParent, w.Target())
 	if policyErr != nil && !errors.Is(policyErr, storage.ErrTaskEvidence) {
-		return storage.ProductSourceUpdate{}, policyErr
+		return storage.ProductSourceUpdate{}, false, policyErr
 	}
 	policyConflict := pinned != "" && pinned != facts.PolicyDigest
 	if policyConflict {
@@ -114,12 +114,15 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	// Join the read before saving. A local read deadline may persist a failure
 	// using the live parent; daemon cancellation never starts detached writes.
 	if parent.Err() != nil {
-		return storage.ProductSourceUpdate{}, parent.Err()
+		return storage.ProductSourceUpdate{}, false, parent.Err()
 	}
 	saveCtx, stop := context.WithTimeout(parent, time.Second)
 	defer stop()
 	update, saveErr := o.Store.ObserveProductSource(saveCtx, w.Target(), expected, facts)
-	return update, errors.Join(readErr, saveErr)
+	// ErrTaskEvidence can accompany a committed state_invalid prohibition (or
+	// its read-only retry). SQL/CAS/deadline failures return no acknowledgement.
+	acknowledged := saveErr == nil || (errors.Is(saveErr, storage.ErrTaskEvidence) && update.Hold != nil && update.Hold.Reason == "state_invalid")
+	return update, acknowledged, errors.Join(readErr, saveErr)
 }
 
 func (o IssueSourceObserver) Scan(ctx context.Context) (IssueSourceScan, error) {
@@ -161,7 +164,7 @@ func (o IssueSourceObserver) scan(parent context.Context, scanTimeout, readTimeo
 		result.Attempted++
 		// Read deadlines are subordinate to the scan budget. On a scan timeout,
 		// persist the attempted source failure/cursor with a bounded live parent.
-		update, observeErr := o.observe(parent, ctx, api, w, readTimeout)
+		update, acknowledged, observeErr := o.observe(parent, ctx, api, w, readTimeout)
 		if parent.Err() != nil {
 			return result, parent.Err()
 		}
@@ -177,6 +180,10 @@ func (o IssueSourceObserver) scan(parent context.Context, scanTimeout, readTimeo
 			if o.Report != nil {
 				o.Report(fmt.Errorf("Issue source %s: %w", w.ID, observeErr))
 			}
+		}
+		if !acknowledged {
+			stop()
+			return result, errors.Join(observeErr, ctx.Err())
 		}
 		cursor.After = w.ID
 		saveErr := o.Store.Put(checkpoint, "product_issue_source_cursor", key, "controller", cursor)
