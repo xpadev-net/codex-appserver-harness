@@ -3,6 +3,7 @@ package kernelcli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -107,7 +108,11 @@ func controllerLock(root string) (func(), error) {
 	return func() { _ = f.Close() }, nil
 }
 
-func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runtime, diagnostics io.Writer) error {
+// Background workers are controller-owned and must join all child work before
+// returning. Wake and report are nonblocking hints, never authority.
+type daemonWorker func(context.Context, *storage.KernelStore, func(), func(error)) error
+
+func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runtime, diagnostics io.Writer, background ...daemonWorker) error {
 	unlock, err := controllerLock(k.Root)
 	if err != nil {
 		return err
@@ -127,25 +132,29 @@ func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runt
 	defer server.Close()
 	serving, cancel := context.WithCancel(ctx)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- server.Serve(serving) }()
-	loopDone := make(chan error, 1)
-	go func() { loopDone <- loop.Run(serving) }()
-	var loopErr, serverErr error
-	select {
-	case loopErr = <-loopDone:
-		cancel()
-		serverErr = <-done
-	case serverErr = <-done:
-		cancel()
-		loopErr = <-loopDone
-		if serverErr == nil && ctx.Err() == nil {
-			serverErr = errors.New("kernel IPC server stopped")
-		}
+	done := make(chan error, 2+len(background))
+	start := func(name string, run func() error) {
+		go func() {
+			err := run()
+			if err == nil && serving.Err() == nil {
+				err = fmt.Errorf("%s stopped unexpectedly", name)
+			}
+			done <- err
+		}()
 	}
-	// Keep the controller lock and store alive until both loops have stopped and
-	// Runtime has completed bounded physical shutdown and saved its evidence.
-	return errors.Join(withoutCancellation(loopErr), withoutCancellation(serverErr))
+	start("kernel IPC server", func() error { return server.Serve(serving) })
+	start("kernel dispatch loop", func() error { return loop.Run(serving) })
+	for _, worker := range background {
+		start("kernel background worker", func() error { return worker(serving, k, loop.Wake, report) })
+	}
+	var failures []error
+	for remaining := 2 + len(background); remaining > 0; remaining-- {
+		failures = append(failures, withoutCancellation(<-done))
+		cancel()
+	}
+	// Retain the controller lock and store until every worker and Runtime's
+	// physical shutdown have completed, including cancellation of external reads.
+	return errors.Join(failures...)
 }
 
 // Cancellation is an expected stop request, but a joined failure of physical
