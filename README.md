@@ -200,7 +200,7 @@ chmod 600 issue-pool.json
 ./harness wave run --root /absolute/private/kernel --runtime runtime.json --issue-pool issue-pool.json
 ```
 
-`attempts`は1走査1〜32件、間隔は1〜3600秒です。初回はpriority label順・Issue番号順で選び、以後は永続cursorの続きから同じ順序を循環します。保留された先頭Issueが独立した後続を塞ぎ続けず、再起動でも進行を保持します。走査のbyte/call予算が尽きたら停止し、未取得Issueのcursorは進めずに次回へ残します。各候補は`import-issue`と同じfresh read/依存/原子的な受付を通り、controller全体のWave上限も維持します。
+`attempts`は1走査1〜32件、間隔は1〜3600秒です。初回はpriority label順・Issue番号順で選び、以後は永続cursorの続きから同じ順序を循環します。保留された先頭Issueが独立した後続を塞ぎ続けず、再起動でも進行を保持します。走査のbyte/call予算が尽きたら停止し、未取得Issueのcursorは進めずに次回へ残します。走査のtimeoutは取得開始済み候補の進行を保存し、daemonの停止要求とは区別します。各候補は`import-issue`と同じfresh read/依存/原子的な受付を通り、controller全体のWave上限も維持します。
 
 1走査は最大2048 entities・API data 16 MiB・128読取呼出し・45秒で、各gh応答は4 MiBまでです。失敗した過大応答も共通のtransport予算へ計上し、子の取得で走査予算をresetしません。取得不能や過大なcollectionを完全な空集合にせず、保留/障害をdaemon診断へ出します。初回通知をcommitしてからwake hintを送ります。`IssuePool`は受付とhintを行い、model起動は共通scheduler/runtimeが担当します。daemonはcancel時に読取workerもjoinするまでcontroller lock/storeを保持します。
 

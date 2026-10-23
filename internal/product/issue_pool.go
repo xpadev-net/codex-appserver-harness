@@ -49,7 +49,7 @@ type poolAdmissionAPI struct {
 }
 
 func (a *poolAdmissionAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
-	if path == a.issuePath && a.available(ctx) {
+	if ctx.Err() == nil && path == a.issuePath && a.available(ctx) {
 		a.started = true
 	}
 	return a.budgetResourceAPI.ResourceGET(ctx, path)
@@ -77,11 +77,15 @@ func (p IssuePool) Validate() error {
 }
 
 func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
+	return p.scan(ctx, 45*time.Second)
+}
+
+func (p IssuePool) scan(parent context.Context, timeout time.Duration) (IssuePoolScan, error) {
 	result := IssuePoolScan{Admitted: []string{}, Held: []int{}}
 	if err := p.Validate(); err != nil {
 		return result, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	api := &budgetResourceAPI{ResourceAPI: p.Admitter.API}
@@ -179,6 +183,24 @@ func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
 		result.Attempted++
 		wave, admitErr := admitter.Admit(ctx, issue.Number)
 		if ctx.Err() != nil {
+			if parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && attempt.started {
+				// The read has joined, but the scan's own deadline prevents a
+				// cursor write using ctx. Preserve this attempted candidate with
+				// a short parent-bound write; daemon cancellation still stops it.
+				progress, stop := context.WithTimeout(parent, time.Second)
+				cursor = issuePoolCursor{PolicyDigest: digest, LastNumber: issue.Number}
+				saveErr := p.Admitter.Store.Put(progress, "product_issue_pool_cursor", key, "controller", cursor)
+				stop()
+				if admitErr == nil {
+					result.Admitted = append(result.Admitted, wave.ID)
+					if parent.Err() == nil && p.OnMutation != nil {
+						p.OnMutation()
+					}
+				} else {
+					result.Held = append(result.Held, issue.Number)
+				}
+				return result, errors.Join(fmt.Errorf("Issue pool repository %d Issue %d: %w", p.Admitter.Policy.RepositoryID, issue.Number, ctx.Err()), saveErr)
+			}
 			return result, ctx.Err()
 		}
 		if !api.available(ctx) && !attempt.started {

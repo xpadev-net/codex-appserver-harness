@@ -2,6 +2,7 @@ package product
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,40 @@ type issuePoolAPI struct {
 	started chan struct{}
 	stopped chan struct{}
 	release chan struct{}
+}
+
+type stallingPoolCandidate struct {
+	ResourceAPI
+	started chan struct{}
+	stalled bool
+}
+
+type deadlinePoolMetadata struct {
+	ResourceAPI
+	metadataReads int
+}
+
+func (a *deadlinePoolMetadata) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
+	if path == "" {
+		a.metadataReads++
+		if a.metadataReads == 2 {
+			// Metadata finished at the scan deadline. A subsequent canceled
+			// Issue call is not an attempted fetch and must not move cursor.
+			<-ctx.Done()
+			return json.RawMessage(`{"id":17,"full_name":"owner/repo"}`), nil
+		}
+	}
+	return a.ResourceAPI.ResourceGET(ctx, path)
+}
+
+func (a *stallingPoolCandidate) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
+	if path == "issues/42" && !a.stalled {
+		a.stalled = true
+		close(a.started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return a.ResourceAPI.ResourceGET(ctx, path)
 }
 
 func (a *issuePoolAPI) ResourcePages(ctx context.Context, path, field string) ([]json.RawMessage, error) {
@@ -332,6 +367,82 @@ func TestIssuePoolCallBudgetExhaustedBeforeIssueReadKeepsCursor(t *testing.T) {
 	if err != nil || wave.SourceID != "r17-i5" {
 		t.Fatal(wave, err)
 	}
+}
+
+func TestIssuePoolScanDeadlinePreservesAttemptedIssueProgressAfterReopen(t *testing.T) {
+	p, api := issuePoolFixture(t, 42, 43)
+	stall := &stallingPoolCandidate{ResourceAPI: api, started: make(chan struct{})}
+	p.Admitter.API = stall
+	first, err := p.scan(context.Background(), 500*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) || first.Attempted != 1 || !reflect.DeepEqual(first.Held, []int{42}) {
+		t.Fatal(first, err)
+	}
+	select {
+	case <-stall.started:
+	default:
+		t.Fatal("scan expired before candidate fetch; deadline regression not exercised")
+	}
+	path := p.Admitter.Store.Root + "/state.db"
+	p.Admitter.Store.Close()
+	p.Admitter.Store, err = storage.OpenExistingKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Admitter.Store.Close()
+	second, err := p.Scan(context.Background())
+	if err != nil || len(second.Admitted) != 1 {
+		t.Fatal("timed-out first Issue starved healthy next Issue", second, err)
+	}
+	wave, err := p.Admitter.Store.Wave(context.Background(), second.Admitted[0])
+	if err != nil || wave.SourceID != "r17-i43" {
+		t.Fatal("deadline retry lost cursor", wave, err)
+	}
+}
+
+func TestIssuePoolDaemonCancellationDoesNotDetachCursorWrite(t *testing.T) {
+	p, api := issuePoolFixture(t, 42, 43)
+	stall := &stallingPoolCandidate{ResourceAPI: api, started: make(chan struct{})}
+	p.Admitter.API = stall
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.scan(ctx, time.Second)
+		done <- err
+	}()
+	select {
+	case <-stall.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("candidate fetch never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("candidate fetch did not join daemon cancellation")
+	}
+	var cursor issuePoolCursor
+	if err := p.Admitter.Store.Record(context.Background(), "product_issue_pool_cursor", "17", &cursor); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("daemon cancellation was bypassed for cursor write", cursor, err)
+	}
+	assertNoIssueAdmission(t, p.Admitter)
+}
+
+func TestIssuePoolDeadlineBeforeIssueFetchPreservesUnreadCursor(t *testing.T) {
+	p, api := issuePoolFixture(t, 42, 43)
+	p.Admitter.API = &deadlinePoolMetadata{ResourceAPI: api}
+	result, err := p.scan(context.Background(), 500*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) || len(result.Admitted) != 0 || len(result.Held) != 0 {
+		t.Fatal(result, err)
+	}
+	var cursor issuePoolCursor
+	if err := p.Admitter.Store.Record(context.Background(), "product_issue_pool_cursor", "17", &cursor); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("unread candidate was skipped at deadline", cursor, err)
+	}
+	assertNoIssueAdmission(t, p.Admitter)
 }
 
 func TestIssuePoolCancellationJoinsInFlightRead(t *testing.T) {
