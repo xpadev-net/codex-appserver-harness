@@ -55,12 +55,12 @@ func sourceID(prefix string) (string, error) {
 }
 func sourceContract(kind string) (any, worker.OutputValidator, error) {
 	if kind == "task" {
-		return contract.TaskResultSchema(), worker.ValidateTaskOutput, nil
+		return contract.StrictOutputSchema(contract.TaskResultSchema()), worker.ValidateTaskOutput, nil
 	}
 	if kind != "orchestrator" {
 		return nil, nil, errors.New("unknown source session kind")
 	}
-	return contract.MainResultSchema(), func(data []byte, b contract.SessionBinding) error {
+	return contract.StrictOutputSchema(contract.MainResultSchema()), func(data []byte, b contract.SessionBinding) error {
 		var r contract.MainResult
 		if err := contract.DecodeStrict(data, &r); err != nil {
 			return err

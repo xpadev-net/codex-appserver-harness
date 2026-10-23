@@ -26,7 +26,7 @@ AT-009の新fix Task/sessionはKのcomponentで追加・検証した。Pの旧ro
 | 段階 | 現在の状態 | 次の証拠 |
 | --- | --- | --- |
 | S | 成立。実model/launcherでAT-050が成功（1 test、2正常turn） | [実接続証拠](../evidence/background-wave/spike/session-observation.json)、[再現手順](connection-contracts.md#s-stage-dynamic-tool-spike) |
-| K | 共通runtime/DB/controller/main・Task/独立review・検証済みWave完了のcomponentとCLI初期操作を追加。K全体未成立 | Task_9〜10。実行daemon/操作/watchのCLI接続と実modelを含むK統合受入 |
+| K | runtime/DB/controller/main・Task/独立review・検証済みWave完了とCLIを接続。nativeのfindings→新fix/review→reportを観測。K全体未成立 | Task_9〜10。最終受入保留の解消、K適用ATの統合判定 |
 | P | 旧基盤のみ。Waveへの接続と外部能力の成立は未確認 | Task_8/11/13、既存#20。正式承認・CI/rulesとPR自動購読の証拠 |
 | M | fixture移行は未実装。依頼者確認で運用DBなし | Task_12 / AT-039/049のfixture、対象導入先の実移行またはnot_applicable |
 
@@ -44,6 +44,14 @@ AT-009の新fix Task/sessionはKのcomponentで追加・検証した。Pの旧ro
 2026-10-21 の追加観測では GitHub Actions の push / pull_request job が実起動し、Go tests/vet が成功した。check の head SHA と実 checkout SHA の違いを保存した。現在の branch は保護されておらず、管理者主体での開発 merge は rules / bypass 契約の証明にはしない。
 
 現在の接続証拠と未確認事項は [#20 実接続記録](issue20-live-connections.md) と [能力 report](../evidence/issue20/capabilities.json) を参照する。#20 の E2E 完成条件は未達。
+
+## native構造化出力の接続確認（K component）
+
+native 0.163.0と現在のsession認証、`gpt-6.1-sol`で新DBの`wave create/run`を実行した。初回main turnはproviderの`invalid_json_schema`（HTTP400、requiredからacceptanceが欠落）でfailedとなり、物理停止後に明示復旧待ちへ入り、自動反復しなかった。
+
+provider向け出力schemaだけを全property requiredへ変換し、nullable pointer・既存のinput/Go decode契約を保持する修正を追加した。保存したfailed runを`reject-main`で監査付き処理し、累積予算を保持して新generationへ進めた。以降のmain/Task出力は受理され、初稿→findings→新fix→新review clean→reportと進んだ。定型fix/review間の追加main turnは0、全managed processは停止済みである。
+
+[秘匿値とprivate pathを除いた観測](../evidence/background-wave/kernel/strict-output-schema.json)は8 run（7 completed、1 failed）を記録する。最後のaccept提案は、以前の必須Task結果にremainingがあるため保留された。証拠gateを緩めず、Task内の残作業と後続Phaseの区別をagentへ明確にして新しい実行で確認する。これはschema接続の修正・pipeline観測であり、K全体合格や製品P/Cloud承認の証拠には数えない。
 
 ## 導入先で残る接続検証
 

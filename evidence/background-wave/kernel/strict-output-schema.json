@@ -1,0 +1,69 @@
+{
+  "stage": "K component: native structured output compatibility",
+  "observed_at": "2026-10-23T01:53:21.509663+00:00",
+  "model": "gpt-6.1-sol",
+  "binary_version": "codex-cli 0.163.0",
+  "authentication": "current session external token source",
+  "authentication_subject_sha256": [
+    "3a4c3e142d779cc59c23ee5aa0c187c30b2dae038275caa39dfb847f8c5919ad"
+  ],
+  "credential_values_recorded": false,
+  "private_paths_recorded": false,
+  "repository": null,
+  "candidate": null,
+  "provider_schema_failure_before_fix": {
+    "http_status": 400,
+    "code": "invalid_json_schema",
+    "parameter": "text.format.schema",
+    "missing_required_key": "acceptance"
+  },
+  "explicit_main_rejection_count": 1,
+  "main_generations": 2,
+  "model_runs": 8,
+  "run_states": {
+    "completed": 7,
+    "failed": 1
+  },
+  "post_fix_main_completed": 2,
+  "task_results": [
+    {
+      "kind": "work",
+      "remaining_count": 1,
+      "blocker_count": 0
+    },
+    {
+      "kind": "review",
+      "remaining_count": 1,
+      "blocker_count": 0
+    },
+    {
+      "kind": "fix",
+      "remaining_count": 1,
+      "blocker_count": 0
+    },
+    {
+      "kind": "review",
+      "remaining_count": 0,
+      "blocker_count": 0
+    },
+    {
+      "kind": "work",
+      "remaining_count": 0,
+      "blocker_count": 0
+    }
+  ],
+  "review_verdicts": [
+    "findings",
+    "clean"
+  ],
+  "fix_rounds": 1,
+  "task_sessions_unique": true,
+  "main_turns_during_fix_review": 0,
+  "all_managed_processes_stopped": true,
+  "daemon_socket_removed": true,
+  "wave_state": "running",
+  "kernel_acceptance": "not_accepted",
+  "remaining_issue": "Final acceptance remains held because earlier required Task results contain remaining work. Do not relax the evidence gate; clarify Task-local result guidance and verify a fresh run.",
+  "source_base_commit": "7aeb48d9dd100e0f262aa7e2ab3c3d319df5d892",
+  "fix_review_window_basis": "first findings reviewer start through final report Task start; draft producer identified by the reviewed artifact digest"
+}
