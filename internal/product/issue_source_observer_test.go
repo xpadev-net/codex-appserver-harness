@@ -305,3 +305,40 @@ func TestIssueSourceObserverExcessiveReadHoldsWithoutAdditionalRequests(t *testi
 		t.Fatal(current, err)
 	}
 }
+
+func TestIssueSourceObserverPolicyMismatchFailsBeforeGETAndPreservesPinnedFacts(t *testing.T) {
+	o, api, w := sourceObserverFixture(t)
+	originalPolicy := o.Policy
+	originalBody := api.issue.Body
+	o.Policy.ReadyLabel = "different-ready-rule"
+	reports := 0
+	o.Report = func(err error) {
+		if !errors.Is(err, ErrIssueSourcePolicyConflict) {
+			t.Fatal(err)
+		}
+		reports++
+	}
+	first := scanSource(t, o)
+	snapshot, err := o.Store.ReadProductSourceObservation(context.Background(), w.ID)
+	if err != nil || len(first.Failed) != 1 || snapshot.Value.Status != "policy_changed" || snapshot.Value.Facts.Available || snapshot.Value.Facts.RequestDigest != "" || len(api.reads) != 0 {
+		t.Fatal(first, snapshot, api.reads, err)
+	}
+	api.issue.Body += " changed while configured policy conflicts"
+	second := scanSource(t, o)
+	repeated, err := o.Store.ReadProductSourceObservation(context.Background(), w.ID)
+	if err != nil || len(second.Failed) != 1 || len(second.Changed) != 0 || len(api.reads) != 0 || reports != 2 || !reflect.DeepEqual(snapshot, repeated) {
+		t.Fatal("policy conflict adopted changed source facts or hid retry failure", second, repeated, api.reads, reports, err)
+	}
+	pinned, err := o.Store.ReadProductSourcePolicy(context.Background(), w.Target())
+	if err != nil || pinned != originalPolicy.Digest() {
+		t.Fatal("observer replaced authoritative policy pin", pinned, err)
+	}
+	o.Policy = originalPolicy
+	o.Report = nil
+	api.issue.Body = originalBody
+	recovered := scanSource(t, o)
+	current, err := o.Store.Wave(context.Background(), w.ID)
+	if err != nil || len(recovered.Failed) != 0 || current.SourceHold != nil || len(api.reads) != 4 {
+		t.Fatal("restored pinned policy could not recover", recovered, current, api.reads, err)
+	}
+}

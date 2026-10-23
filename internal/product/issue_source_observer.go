@@ -34,6 +34,7 @@ type IssueSourceScan struct {
 }
 
 var ErrIssueSourceScanBudget = errors.New("Issue source observation budget exhausted; resume from saved cursor")
+var ErrIssueSourcePolicyConflict = errors.New("Issue source observer policy differs from the admitted policy revision")
 
 type issueSourceCursor struct {
 	PolicyDigest string `json:"policy_digest"`
@@ -68,7 +69,18 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	}
 	facts := storage.ProductSourceFacts{RepositoryID: o.Policy.RepositoryID, IssueNumber: number, PolicyDigest: o.Policy.Digest(), Failure: "read_failed"}
 	var readErr error
-	if !errors.Is(priorErr, storage.ErrTaskEvidence) {
+	pinned, policyErr := o.Store.ReadProductSourcePolicy(readParent, w.Target())
+	if policyErr != nil && !errors.Is(policyErr, storage.ErrTaskEvidence) {
+		return storage.ProductSourceUpdate{}, policyErr
+	}
+	policyConflict := pinned != "" && pinned != facts.PolicyDigest
+	if policyConflict {
+		// Retain a policy_changed prohibition without reading or storing Issue
+		// facts evaluated under different selection rules. Report every retry.
+		facts.Failure = "invalid_source"
+		readErr = ErrIssueSourcePolicyConflict
+	}
+	if !errors.Is(priorErr, storage.ErrTaskEvidence) && policyErr == nil && !policyConflict {
 		readCtx, cancel := context.WithTimeout(readParent, timeout)
 		readErr = sourceRepository(readCtx, api, o.Policy)
 		if readErr == nil {
