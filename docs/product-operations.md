@@ -105,3 +105,13 @@ production KernelSourceのready処理から有界batchを回収する。この�
 `PRRawDeliveries`はcontroller用のrepository別cursor読取で、workerへの履歴grantではない。小さな索引をseekし、最大128件/2 MiBのページに制限する。`NextAfter`は後続ページ、`LastSequence`は現在の末尾で再接続・次の受信待ちに使える。rowidに依存せずVACUUM/reopen後も同じsequenceとなる。coverageは初回受信時刻と`history_before=unavailable`・`captured_deliveries_only`を保存し、受信前履歴やWebhook欠落を架空の完全取得にしない。
 
 検証: `go test ./internal/storage -run '^TestPRInbox' -count=1`。実HMAC handlerの署名/設定repo/再送/衝突、binding前保存と権限非生成、元bytes、rollback、複数repo cursor、VACUUM/reopen、末尾後の新規受信、大きなpayloadのページ境界を確認する。この分割は受信portであり、daemon HTTP配置・raw履歴のPR登録境界回収・関連Task通知は後続である。
+
+## 登録境界のWebhook履歴回収
+
+`ReconcilePRWebhookNotifications`はbinding済み購読ごとのraw cursorで、intent保存後に受信した更新をPR番号へ照合する。PR作成応答とbindingの間に届いたcomment等も、binding確定後の走査で回収する。issue commentはPR issueであることを確認し、review/inline/PRとcheck-suite/run/workflowの明示PR番号を扱う。PR番号を持たないstatus・check等はraw履歴に保持し、collectorの差分照合で補う。この経路で不明なPRを推測してTaskを起動しない。
+
+通知には元delivery ID/sequence/digest、種別/action、actor数値ID、PR headとreview/inline対象SHAを区別して保存する。本文は挿入せず、raw eventから最新state・candidate・承認・sender権限を変更しない。逆順deliveryも履歴事実として残し、現在状態は別のAPI snapshotで確認する。通常は明示waitまでdeferred、cancel/終端/旧scopeはarchivedとなる。
+
+raw cursor・元scope付きevent・通知は一transactionで保存する。再送/再起動/共通fanout照合で重複せず、保存失敗はcursorも戻す。購読は有界かつ公平に走査し、無関係なraw履歴の後にも更新がある場合と未走査購読がある場合はproduction Sourceへ即時再走査を返す。末尾のidle購読ではbusy loopを作らない。HTTP/API/modelをこのready処理から起動しない。
+
+検証: `go test ./internal/storage ./internal/control -run 'TestPRWebhook|TestPRInbox|TestPRResource|TestPRCompletion|TestPRWait|TestKernelSource' -count=1`。実署名handlerからbinding前後、同一再送、別PR除外、本文の権限非生成、ACK/wait、rollback/reopen、無関係な先行履歴、受信時刻の登録境界、cancel、古いreview SHA、購読ページとidle終了を確認する。daemonのHTTP/非同期collector配置と関連Taskへの購読展開、外部出所付き親message中継は後続である。

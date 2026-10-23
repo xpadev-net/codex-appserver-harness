@@ -347,6 +347,9 @@ func (k *KernelStore) fanoutNotificationTx(ctx context.Context, tx *sql.Tx, inte
 	if err = k.fanoutPRResourceUpdateTx(ctx, tx, intent); err != nil {
 		return err
 	}
+	if err = k.fanoutPRWebhookTx(ctx, tx, intent); err != nil {
+		return err
+	}
 	if err = k.fanoutParentAttentionTx(ctx, tx, intent); err != nil {
 		return err
 	}
