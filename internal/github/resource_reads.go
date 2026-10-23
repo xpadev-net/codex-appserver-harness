@@ -26,6 +26,13 @@ func WithResourceReadBudget(ctx context.Context, limit int64) context.Context {
 	parent, _ := ctx.Value(resourceBudgetKey{}).(*resourceReadBudget)
 	return context.WithValue(ctx, resourceBudgetKey{}, &resourceReadBudget{remaining: limit, parent: parent})
 }
+
+// ResourceReadBudgetAvailable lets a bounded scanner stop before classifying
+// unattempted resources as failures. A context without a budget is unrestricted.
+func ResourceReadBudgetAvailable(ctx context.Context) bool {
+	budget, _ := ctx.Value(resourceBudgetKey{}).(*resourceReadBudget)
+	return budget == nil || budget.available()
+}
 func (b *resourceReadBudget) available() bool {
 	b.mu.Lock()
 	available := b.remaining > 0

@@ -200,10 +200,11 @@ func TestIssuePoolCannotExceedControllerWaveCapacity(t *testing.T) {
 	}
 }
 
-func TestIssuePoolSharesWireBudgetAcrossFailedOversizedAdmissions(t *testing.T) {
+func nativeIssuePoolBudgetFixture(t *testing.T, count, goodNumber int) (IssuePool, string) {
+	t.Helper()
 	p, api := issuePoolFixture(t)
-	p.Attempts = 32
-	items := make([]github.Issue, 32)
+	p.Attempts = count
+	items := make([]github.Issue, count)
 	for i := range items {
 		items[i] = api.issue
 		items[i].Number = i + 1
@@ -219,16 +220,27 @@ func TestIssuePoolSharesWireBudgetAcrossFailedOversizedAdmissions(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	script := `#!/bin/sh
+	good := api.issue
+	good.Number = goodNumber
+	goodRaw, err := json.Marshal(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodFile := filepath.Join(dir, "good")
+	if err := os.WriteFile(goodFile, goodRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf(`#!/bin/sh
 case "$*" in
  'api --method GET repos/owner/repo') /bin/cat "$ISSUE_POOL_BUDGET_META" ;;
  'api --method GET --paginate --slurp repos/owner/repo/issues?state=open&per_page=100') /bin/cat "$ISSUE_POOL_BUDGET_PAGES" ;;
+ 'api --method GET repos/owner/repo/issues/%d') /bin/cat "$ISSUE_POOL_BUDGET_GOOD" ;;
  'api --method GET repos/owner/repo/issues/'*)
   printf 'oversized\n' >> "$ISSUE_POOL_BUDGET_CALLS"
   /bin/cat "$ISSUE_POOL_BUDGET_OVERSIZED" ;;
  *) exit 49 ;;
 esac
-`
+`, goodNumber)
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -237,9 +249,15 @@ esac
 	t.Setenv("ISSUE_POOL_BUDGET_PAGES", pageFile)
 	t.Setenv("ISSUE_POOL_BUDGET_OVERSIZED", oversized)
 	t.Setenv("ISSUE_POOL_BUDGET_CALLS", calls)
+	t.Setenv("ISSUE_POOL_BUDGET_GOOD", goodFile)
 	p.Admitter.API = github.Client{Repository: "owner/repo", RepositoryID: 17}
+	return p, calls
+}
+
+func TestIssuePoolSharesWireBudgetAcrossFailedOversizedAdmissions(t *testing.T) {
+	p, calls := nativeIssuePoolBudgetFixture(t, 32, 0)
 	result, err := p.Scan(context.Background())
-	if err != nil || len(result.Admitted) != 0 || len(result.Held) != 32 {
+	if !errors.Is(err, ErrIssuePoolScanBudget) || result.Attempted != 4 || len(result.Admitted) != 0 || len(result.Held) != 4 {
 		t.Fatal(result, err)
 	}
 	readCalls, err := os.ReadFile(calls)
@@ -247,6 +265,73 @@ esac
 		t.Fatal("failed candidate reads reset scan wire budget", string(readCalls), err)
 	}
 	assertNoIssueAdmission(t, p.Admitter)
+}
+
+func TestIssuePoolWireExhaustionResumesFirstUnreadIssueAfterReopen(t *testing.T) {
+	p, calls := nativeIssuePoolBudgetFixture(t, 5, 5)
+	first, err := p.Scan(context.Background())
+	if !errors.Is(err, ErrIssuePoolScanBudget) || first.Attempted != 4 || len(first.Admitted) != 0 || !reflect.DeepEqual(first.Held, []int{1, 2, 3, 4}) {
+		t.Fatal(first, err)
+	}
+	path := p.Admitter.Store.Root + "/state.db"
+	p.Admitter.Store.Close()
+	p.Admitter.Store, err = storage.OpenExistingKernel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Admitter.Store.Close()
+	second, err := p.Scan(context.Background())
+	if !errors.Is(err, ErrIssuePoolScanBudget) || len(second.Admitted) != 1 || len(second.Held) != 4 {
+		t.Fatal("valid fifth Issue starved after budget exhaustion", second, err)
+	}
+	wave, err := p.Admitter.Store.Wave(context.Background(), second.Admitted[0])
+	if err != nil || wave.SourceID != "r17-i5" {
+		t.Fatal(wave, err)
+	}
+	readCalls, err := os.ReadFile(calls)
+	if err != nil || strings.Count(string(readCalls), "oversized\n") != 8 {
+		t.Fatal(string(readCalls), err)
+	}
+}
+
+func TestIssuePoolCallBudgetExhaustedBeforeIssueReadKeepsCursor(t *testing.T) {
+	p, api := issuePoolFixture(t, 1, 2, 3, 4, 5)
+	p.Attempts = 5
+	dependencies := func(start, count int) string {
+		var ids []string
+		for number := start; number < start+count; number++ {
+			item := api.issue
+			item.Number, item.State = number, "closed"
+			api.dependencies[fmt.Sprintf("issues/%d", number)] = item
+			ids = append(ids, fmt.Sprint(number))
+		}
+		return "\nharness-depends-on: " + strings.Join(ids, ",")
+	}
+	full := dependencies(100, 32)
+	held := dependencies(200, 15)
+	item := api.dependencies["issues/214"]
+	item.State = "open"
+	api.dependencies["issues/214"] = item
+	for i := 0; i < 3; i++ {
+		setPoolItem(t, api, i, func(issue *github.Issue) { issue.Body += full })
+	}
+	setPoolItem(t, api, 3, func(issue *github.Issue) { issue.Body += held })
+	first, err := p.Scan(context.Background())
+	if !errors.Is(err, ErrIssuePoolScanBudget) || len(first.Admitted) != 3 || !reflect.DeepEqual(first.Held, []int{4}) {
+		t.Fatal(first, err)
+	}
+	var cursor issuePoolCursor
+	if err := p.Admitter.Store.Record(context.Background(), "product_issue_pool_cursor", "17", &cursor); err != nil || cursor.LastNumber != 4 {
+		t.Fatal("unread fifth Issue advanced cursor", cursor, err)
+	}
+	second, err := p.Scan(context.Background())
+	if err != nil || len(second.Admitted) != 1 {
+		t.Fatal("unread fifth Issue starved", second, err)
+	}
+	wave, err := p.Admitter.Store.Wave(context.Background(), second.Admitted[0])
+	if err != nil || wave.SourceID != "r17-i5" {
+		t.Fatal(wave, err)
+	}
 }
 
 func TestIssuePoolCancellationJoinsInFlightRead(t *testing.T) {

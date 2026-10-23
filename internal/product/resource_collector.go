@@ -27,8 +27,12 @@ type budgetResourceAPI struct {
 	calls, bytes int
 }
 
+func (a *budgetResourceAPI) available(ctx context.Context) bool {
+	return a.calls < 128 && a.bytes < 16<<20 && github.ResourceReadBudgetAvailable(ctx)
+}
+
 func (a *budgetResourceAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
-	if a.calls >= 128 {
+	if !a.available(ctx) {
 		return nil, errors.New("resource scan request budget exhausted")
 	}
 	a.calls++
@@ -41,7 +45,7 @@ func (a *budgetResourceAPI) ResourceGET(ctx context.Context, path string) (json.
 }
 func (a *budgetResourceAPI) ResourcePages(ctx context.Context, path, field string) ([]json.RawMessage, error) {
 	// Reserve the last read for the final PR header consistency check.
-	if a.calls >= 127 {
+	if a.calls >= 127 || !a.available(ctx) {
 		return nil, errors.New("resource scan request budget exhausted")
 	}
 	a.calls++

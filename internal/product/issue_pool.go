@@ -32,9 +32,27 @@ type IssuePoolScan struct {
 	Admitted  []string `json:"admitted"`
 	Held      []int    `json:"held"`
 }
+
+var ErrIssuePoolScanBudget = errors.New("Issue pool scan budget exhausted; resume from saved cursor")
+
 type issuePoolCursor struct {
 	PolicyDigest string `json:"policy_digest"`
 	LastNumber   int    `json:"last_number"`
+}
+
+// Metadata reads may exhaust the scan budget before the candidate Issue is
+// fetched. Only a candidate whose Issue read started may advance the cursor.
+type poolAdmissionAPI struct {
+	*budgetResourceAPI
+	issuePath string
+	started   bool
+}
+
+func (a *poolAdmissionAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
+	if path == a.issuePath && a.available(ctx) {
+		a.started = true
+	}
+	return a.budgetResourceAPI.ResourceGET(ctx, path)
 }
 
 // Validate checks host selection bounds without API calls or mutations.
@@ -140,7 +158,6 @@ func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
 		}
 	}
 	admitter := p.Admitter
-	admitter.API = api
 	for i := 0; i < len(eligible) && result.Attempted < p.Attempts; i++ {
 		issue := eligible[(start+i)%len(eligible)]
 		var existing string
@@ -154,10 +171,20 @@ func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		if !api.available(ctx) {
+			break
+		}
+		attempt := &poolAdmissionAPI{budgetResourceAPI: api, issuePath: "issues/" + strconv.Itoa(issue.Number)}
+		admitter.API = attempt
 		result.Attempted++
 		wave, admitErr := admitter.Admit(ctx, issue.Number)
 		if ctx.Err() != nil {
 			return result, ctx.Err()
+		}
+		if !api.available(ctx) && !attempt.started {
+			// The scan ran out while checking repository metadata, before this
+			// Issue could be fetched. Resume with this Issue on the next scan.
+			break
 		}
 		if admitErr != nil {
 			result.Held = append(result.Held, issue.Number)
@@ -176,6 +203,12 @@ func (p IssuePool) Scan(ctx context.Context) (IssuePoolScan, error) {
 		if err := p.Admitter.Store.Put(ctx, "product_issue_pool_cursor", key, "controller", cursor); err != nil {
 			return result, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if !api.available(ctx) {
+		return result, ErrIssuePoolScanBudget
 	}
 	return result, nil
 }
