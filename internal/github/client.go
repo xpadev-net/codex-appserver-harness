@@ -119,7 +119,7 @@ func (c Client) Pull(ctx context.Context, number int) (PR, error) {
 	err := c.API(ctx, "GET", fmt.Sprintf("pulls/%d", number), nil, &p)
 	return p, err
 }
-func Marker(workItem string) string { return "<!-- harness-work-item:" + workItem + " -->" }
+func Marker(workItem string) string { return contract.PublicationWorkItemMarker(workItem) }
 func (c Client) FindPR(ctx context.Context, branch, workItem string) (*PR, error) {
 	var all []PR
 	if err := c.Pages(ctx, "pulls?state=all&per_page=100", &all); err != nil {

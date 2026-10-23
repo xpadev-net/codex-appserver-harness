@@ -232,8 +232,17 @@ func (p Publisher) ReconcilePublication(ctx context.Context, id string, proof st
 	if err != nil {
 		return receipt, err
 	}
-	if found == nil || !matched(*found, claim) || found.Title != packet.Title || found.Body != github.Marker(claim.Product.Value.WorkItem.ID)+"\n"+packet.Body || !strings.Contains(found.Body, operationMarker(id)) {
+	if found == nil {
 		return receipt, storage.ErrPRReconciliationRequired
 	}
-	return p.Store.BindObservedPRPublication(ctx, id, proof, observation(*found, claim, fmt.Sprintf("%s:reconciled", id)))
+	// List responses omit fields such as merged. Fetch the full resource before
+	// deriving terminal facts or a capacity-release disposition.
+	full, err := api.Pull(ctx, found.Number)
+	if err != nil {
+		return receipt, err
+	}
+	if full.Number != found.Number || !matched(full, claim) || full.Title != packet.Title || full.Body != github.Marker(claim.Product.Value.WorkItem.ID)+"\n"+packet.Body || !strings.Contains(full.Body, operationMarker(id)) {
+		return receipt, storage.ErrPRReconciliationRequired
+	}
+	return p.Store.BindObservedPRPublication(ctx, id, proof, observation(full, claim, fmt.Sprintf("%s:reconciled", id)))
 }

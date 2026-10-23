@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 )
 
 // Publication text is controller-derived, never a PR tool argument. Keep the
@@ -34,6 +36,9 @@ func (k *KernelStore) SavePRPublicationPayload(ctx context.Context, id, owner, t
 	}
 	if state != "accepted" || intent.Source.Name != "pr_publish" {
 		return packet, ErrPRDispatchHeld
+	}
+	if len(contract.PublicationWorkItemMarker(intent.Candidate.WorkItemID))+1+len(body) > 64<<10 {
+		return packet, errors.New("complete publication body exceeds request budget")
 	}
 	var claim PRDispatchClaim
 	if err = completionRecord(ctx, tx, "product_pr_dispatch", id, &claim); err != nil {

@@ -20,14 +20,15 @@ import (
 )
 
 type fakeAPI struct {
-	repository   Repository
-	head         string
-	pr           *github.PR
-	before       func(context.Context, string, string) error
-	onPublish    func()
-	afterGuard   func()
-	loseResponse bool
-	writes       int
+	repository      Repository
+	head            string
+	pr              *github.PR
+	before          func(context.Context, string, string) error
+	onPublish       func()
+	afterGuard      func()
+	listOmitsMerged bool
+	loseResponse    bool
+	writes          int
 }
 
 func (f *fakeAPI) Repository(context.Context) (Repository, error)     { return f.repository, nil }
@@ -38,7 +39,14 @@ func (f *fakeAPI) Pull(context.Context, int) (github.PR, error) {
 	}
 	return *f.pr, nil
 }
-func (f *fakeAPI) FindPR(context.Context, string, string) (*github.PR, error) { return f.pr, nil }
+func (f *fakeAPI) FindPR(context.Context, string, string) (*github.PR, error) {
+	if f.pr != nil && f.listOmitsMerged {
+		copy := *f.pr
+		copy.Merged = false
+		return &copy, nil
+	}
+	return f.pr, nil
+}
 func (f *fakeAPI) Publish(ctx context.Context, base, branch, work, title, body string) (github.PR, error) {
 	if f.onPublish != nil {
 		f.onPublish()
@@ -299,5 +307,55 @@ esac
 	data, err := os.ReadFile(log)
 	if err != nil || !strings.Contains(string(data), "api --method GET repos/owner/repo\n") || !strings.Contains(string(data), "git/ref/heads/harness%2Fwork") {
 		t.Fatal(string(data), err)
+	}
+}
+
+func TestLostResponseRecoveryFetchesFullMergedPRBeforeRelease(t *testing.T) {
+	p, api, _, id := publicationFixture(t)
+	api.loseResponse = true
+	if _, err := p.Publish(context.Background(), id, "owner"); !errors.Is(err, storage.ErrPRReconciliationRequired) {
+		t.Fatal(err)
+	}
+	api.pr.State, api.pr.Merged, api.listOmitsMerged = "closed", true, true
+	receipt, err := p.ReconcilePublication(context.Background(), id, storage.PRTransportProof{ID: "transport-stopped", OwnerID: "owner", Disposition: "reconciled_after_stop"})
+	if err != nil || !receipt.Observation.Merged {
+		t.Fatal("list omitted merged flag became durable fact", receipt, err)
+	}
+	var claim storage.PRDispatchClaim
+	if err = p.Store.Record(context.Background(), "product_pr_dispatch", id, &claim); err != nil {
+		t.Fatal(err)
+	}
+	seat, err := p.Store.OperationReservation(context.Background(), claim.PRReservationID)
+	if err != nil || seat.Proof == nil || seat.Proof.Disposition != "merged" {
+		t.Fatal(seat, err)
+	}
+	if api.writes != 1 {
+		t.Fatal("merged recovery resent publication", api.writes)
+	}
+}
+
+func TestPublicationBodyBudgetIncludesBothMarkersBeforeWrite(t *testing.T) {
+	for _, extra := range []int{0, 1} {
+		t.Run(fmt.Sprint(extra), func(t *testing.T) {
+			p, api, saved, id := publicationFixture(t)
+			available := (64 << 10) - len(github.Marker(saved.Value.WorkItem.ID)) - 1 - len(operationMarker(id)) - 1
+			p.Gate = func(context.Context, storage.ProductTargetSnapshot) (Publication, error) {
+				return Publication{Title: "Bounded publication", Body: strings.Repeat("x", available+extra)}, nil
+			}
+			_, err := p.Publish(context.Background(), id, "owner")
+			if extra == 0 {
+				if err != nil || api.writes != 1 || len(api.pr.Body) != (64<<10) {
+					t.Fatal(api.writes, err)
+				}
+			} else {
+				if err == nil || api.writes != 0 {
+					t.Fatal("oversized complete request reached HTTP", api.writes, err)
+				}
+				var claim storage.PRDispatchClaim
+				if err = p.Store.Record(context.Background(), "product_pr_dispatch", id, &claim); err != nil || claim.State != "prepared" {
+					t.Fatal("oversized body consumed send claim", claim.State, err)
+				}
+			}
+		})
 	}
 }

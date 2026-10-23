@@ -2,6 +2,12 @@ package contract
 
 import "strings"
 
+// PublicationWorkItemMarker is part of the controller/GitHub correlation wire
+// format. Sharing it also lets storage bound the exact outgoing request body.
+func PublicationWorkItemMarker(workItem string) string {
+	return "<!-- harness-work-item:" + workItem + " -->"
+}
+
 // Only the controller resolves repository, branch, policy and publication body.
 // A model names an already registered immutable product candidate.
 type PublishPRRequest struct {
