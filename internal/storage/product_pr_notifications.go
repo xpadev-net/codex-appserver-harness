@@ -121,7 +121,7 @@ func (k *KernelStore) queuePRCompletionNotice(ctx context.Context, id string) er
 	if err != nil {
 		return err
 	}
-	if receipt.OperationID != id || receipt.SubscriptionID != intent.SubscriptionID || state != "completed" || ((receipt.Outcome != "resource_bound" || intent.State != "completed") && (receipt.Outcome != "canceled" || intent.State != "canceled")) {
+	if receipt.OperationID != id || receipt.SubscriptionID != intent.SubscriptionID || state != "completed" || (((receipt.Outcome != "resource_bound" && receipt.Outcome != "review_requested") || intent.State != "completed") && (receipt.Outcome != "canceled" || intent.State != "canceled")) {
 		return errors.New("PR completion outbox identity conflict")
 	}
 	wave, err := loadWave(ctx, tx, intent.Source.Target.WaveID)

@@ -45,13 +45,14 @@ type PRResourceBinding struct {
 	HeadBranch   string `json:"head_branch"`
 }
 type PRCompletionReceipt struct {
-	OperationID       string                `json:"operation_id"`
-	Outcome           string                `json:"outcome"` // resource_bound, not a validation/approval claim
-	Resource          PRResourceBinding     `json:"resource"`
-	Observation       PRResourceObservation `json:"observation"`
-	Transport         PRTransportProof      `json:"transport"`
-	SubscriptionID    string                `json:"subscription_id"`
-	NotificationState string                `json:"notification_state"` // durable outbox; delivery wired separately
+	OperationID       string                      `json:"operation_id"`
+	Outcome           string                      `json:"outcome"` // resource_bound, not a validation/approval claim
+	Resource          PRResourceBinding           `json:"resource"`
+	Observation       PRResourceObservation       `json:"observation"`
+	Transport         PRTransportProof            `json:"transport"`
+	SubscriptionID    string                      `json:"subscription_id"`
+	NotificationState string                      `json:"notification_state"` // durable outbox; delivery wired separately
+	ReviewRequest     *PRReviewRequestObservation `json:"review_request,omitempty"`
 }
 
 func validPRProofID(value string) bool {
@@ -156,24 +157,8 @@ func (k *KernelStore) BindObservedPRPublication(ctx context.Context, id string, 
 	if watch.OperationID != id || watch.SessionID != intent.Source.SessionID || watch.Target != intent.Source.Target || watch.RepositoryID != o.RepositoryID {
 		return receipt, errors.New("PR subscription identity conflict")
 	}
-	watch.ResourceKey, watch.PRNumber, watch.State = binding.ResourceKey, o.Number, "bound"
-	if err = kernelRecordTx(ctx, tx, "product_pr_subscription_intent", watch.ID, watch.SessionID, watch); err != nil {
+	if err = bindPRReceiveSubscriptionTx(ctx, tx, &watch, binding); err != nil {
 		return receipt, err
-	}
-	raw, err := json.Marshal(watch)
-	if err != nil {
-		return receipt, err
-	}
-	updated, err := tx.ExecContext(ctx, "UPDATE kernel_subscriptions SET resource=?,payload=? WHERE id=? AND session_id=?", "external:"+binding.ResourceKey, raw, watch.ID, watch.SessionID)
-	if err != nil {
-		return receipt, err
-	}
-	count, err := updated.RowsAffected()
-	if err != nil {
-		return receipt, err
-	}
-	if count != 1 {
-		return receipt, errors.New("PR receive subscription missing")
 	}
 	if o.State == "closed" && r.State == "held" {
 		disposition := "closed"
@@ -264,4 +249,27 @@ func (k *KernelStore) attachCurrentPRNumberTx(ctx context.Context, tx *sql.Tx, i
 		return err
 	}
 	return kernelRecordTx(ctx, tx, "product_target_observation", current.Digest, p.Target.WaveID, current)
+}
+
+func bindPRReceiveSubscriptionTx(ctx context.Context, tx *sql.Tx, watch *PRSubscriptionIntent, binding PRResourceBinding) error {
+	watch.ResourceKey, watch.PRNumber, watch.State = binding.ResourceKey, binding.Number, "bound"
+	if err := kernelRecordTx(ctx, tx, "product_pr_subscription_intent", watch.ID, watch.SessionID, watch); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(watch)
+	if err != nil {
+		return err
+	}
+	updated, err := tx.ExecContext(ctx, "UPDATE kernel_subscriptions SET resource=?,payload=? WHERE id=? AND session_id=?", "external:"+binding.ResourceKey, raw, watch.ID, watch.SessionID)
+	if err != nil {
+		return err
+	}
+	count, err := updated.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("PR receive subscription missing")
+	}
+	return nil
 }
