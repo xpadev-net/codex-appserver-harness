@@ -623,3 +623,12 @@ local実行・PR dispatcher・source照合はmodel loopの外で動き、終了/
 `CloudReviewReader.Read`はホストのreview policy/report readerとread-only resource APIを明示し、repository/PR head/base/WorkItem markerと確定request commentを新しく取得する。native reviewを30秒・128要求/16 MiB内で読み、PRとrepositoryを再取得して変化を拒否し、最後にcapability reportを再読込する。`cloud_request`・`cloud_native_approval`・`review_sha`のverified/evidenceとホストpolicyの両方を満たす場合だけ、信頼するreviewerの現在SHAへの有効な正式APPROVEDを判定できる。unknown/unsupported、証拠なし、古いSHA/round、COMMENTED、後続CHANGES_REQUESTED/DISMISSEDを承認へ変換しない。取得中の能力取消、欠落/編集/曖昧なrequest comment、未来時刻・PR/base変更も拒否/不承認へ反映する。
 
 roundの時刻は依頼commentのhost側確定観測時刻を保守的な閾値として使い、それ以前に提出されたreviewは同じSHAでも受け入れない。実Cloudの早すぎる結果やround関連付けが立証できない場合に、古い承認へfallbackしない。このreaderはfresh factsの読取portであり、approval権限の永続化、Cloud枠の解放、merge送信、Wave受入は行わない。後続のmergeはsource/quality/CI/rules/操作許可を別途直前照合する。fixtureのAPPROVED/reportは実Cloud能力の証拠に数えない。
+
+
+### Cloud依頼に対するprovider actorの固定
+
+`publication.review_routes[].cloud_reviewer_ids`を指定すると、ホストが確認したCloud providerのreviewer数値ID集合（1..128件、一意/正数）を依頼packetへ固定する。送信者の`requester_id`とは別の集合で、Issue/model入力や一般の承認者一覧から推測しない。集合はコピーして昇順に正規化し、同じ集合の順序変更は同一入力として扱う。保存後に別の集合へ変更できず、送信直前にもcanonical gateを再実行して集合の変化を拒否する。
+
+省略した旧設定/旧packetはprovider不明のまま保持し、送信者をproviderへ自動補完しない。依頼本文とround markerは従来どおりで、provider ID集合はモデルのtool引数へ追加しない。保存したroundのdigestにも集合が含まれ、pause/再open後も元の集合を保持する。これはCloud側の実完了と予約枠解放を照合するための入力準備であり、この設定だけで完了・正式APPROVED・mergeを許可しない。
+
+fixtureで集合のcopy/canonical replay/immutable変更拒否、private設定の重複/過大/不正ID拒否、送信前の集合変更による未送信保持、順序のみ変更した依頼と旧packetの互換性を確認する。実providerのIDとrequest/SHA関連付けは導入時の接続証拠で確認し、fixture IDを実Cloud能力の証拠には数えない。

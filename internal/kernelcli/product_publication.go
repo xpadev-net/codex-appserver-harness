@@ -25,10 +25,11 @@ type ProductPublicationConfig struct {
 }
 
 type ProductReviewRouteConfig struct {
-	RepositoryID     int64  `json:"repository_id"`
-	Trigger          string `json:"trigger"`
-	RequesterID      int64  `json:"requester_id"`
-	CapabilitiesPath string `json:"capabilities_path"`
+	CloudReviewerIDs []int64 `json:"cloud_reviewer_ids,omitempty"`
+	RepositoryID     int64   `json:"repository_id"`
+	Trigger          string  `json:"trigger"`
+	RequesterID      int64   `json:"requester_id"`
+	CapabilitiesPath string  `json:"capabilities_path"`
 }
 
 func readProductCapabilities(ctx context.Context, path string) (contract.Report, error) {
@@ -66,6 +67,10 @@ func (c *ProductPublicationConfig) routes(repositories []product.ExecutionReposi
 		if err := github.CheckClosingText(route.Trigger); err != nil {
 			return nil, nil, err
 		}
+		actors, err := storage.CanonicalCloudReviewerIDs(route.CloudReviewerIDs)
+		if err != nil {
+			return nil, nil, err
+		}
 		path := route.CapabilitiesPath
 		real, err := filepath.EvalSymlinks(path)
 		if err != nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || real != path {
@@ -74,7 +79,7 @@ func (c *ProductPublicationConfig) routes(repositories []product.ExecutionReposi
 		if _, err := readProductCapabilities(context.Background(), path); err != nil {
 			return nil, nil, err
 		}
-		routes[route.RepositoryID] = product.CloudReviewRoute{Trigger: route.Trigger, RequesterID: route.RequesterID, ReadReport: func(ctx context.Context) (contract.Report, error) { return readProductCapabilities(ctx, path) }}
+		routes[route.RepositoryID] = product.CloudReviewRoute{CloudReviewerIDs: actors, Trigger: route.Trigger, RequesterID: route.RequesterID, ReadReport: func(ctx context.Context) (contract.Report, error) { return readProductCapabilities(ctx, path) }}
 		hidden = append(hidden, path)
 	}
 	return routes, hidden, nil

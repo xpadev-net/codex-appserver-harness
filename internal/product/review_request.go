@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,8 +15,9 @@ import (
 )
 
 type ReviewRequest struct {
-	Trigger     string
-	RequesterID int64
+	CloudReviewerIDs []int64
+	Trigger          string
+	RequesterID      int64
 }
 
 // Gate verifies canonical candidate/validation and the configured, proven Cloud
@@ -93,7 +95,11 @@ func (r ReviewRequester) Request(ctx context.Context, id, owner string) (storage
 	if err != nil {
 		return receipt, err
 	}
-	packet, err := r.Store.SavePRReviewRequestPayload(ctx, id, owner, request.Trigger, request.RequesterID)
+	request.CloudReviewerIDs, err = storage.CanonicalCloudReviewerIDs(request.CloudReviewerIDs)
+	if err != nil {
+		return receipt, err
+	}
+	packet, err := r.Store.SavePRReviewRequestPayload(ctx, id, owner, request.Trigger, request.RequesterID, request.CloudReviewerIDs)
 	if err != nil {
 		return receipt, err
 	}
@@ -117,7 +123,11 @@ func (r ReviewRequester) Request(ctx context.Context, id, owner string) (storage
 		if err != nil {
 			return err
 		}
-		if fresh != request {
+		fresh.CloudReviewerIDs, err = storage.CanonicalCloudReviewerIDs(fresh.CloudReviewerIDs)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(fresh, request) {
 			return errors.New("canonical review request facts changed")
 		}
 		if _, err = r.Store.MarkPRMayHaveSent(writeCtx, id, owner); err != nil {

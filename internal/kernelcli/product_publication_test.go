@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestProductPublicationConfigIsExplicitPrivateAndBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer k.Close()
-	for _, mode := range []string{"workers_zero", "workers_large", "too_many_routes", "duplicate", "repository", "requester", "trigger", "closing", "missing_report", "relative_report", "public_report", "symlink_report", "hardlink_report", "invalid_report", "oversized_report", "source_repository", "source_duplicate", "source_labels", "source_limit"} {
+	for _, mode := range []string{"workers_zero", "workers_large", "too_many_routes", "duplicate", "repository", "requester", "trigger", "closing", "missing_report", "relative_report", "public_report", "symlink_report", "hardlink_report", "invalid_report", "oversized_report", "source_repository", "source_duplicate", "source_labels", "source_limit", "actor_zero", "actor_duplicate", "actor_limit"} {
 		t.Run(mode, func(t *testing.T) {
 			c := publicationConfigFixture(t)
 			route := &c.Publication.ReviewRoutes[0]
@@ -47,6 +48,12 @@ func TestProductPublicationConfigIsExplicitPrivateAndBounded(t *testing.T) {
 				c.Publication.SourcePolicies = []product.IssueSourcePolicy{{RepositoryID: 17, Repository: "owner/repo", ReadyLabel: "ready", HoldLabel: "ready"}}
 			case "source_limit":
 				c.Publication.SourcePolicies = make([]product.IssueSourcePolicy, 129)
+			case "actor_zero":
+				route.CloudReviewerIDs = []int64{0}
+			case "actor_duplicate":
+				route.CloudReviewerIDs = []int64{91, 91}
+			case "actor_limit":
+				route.CloudReviewerIDs = make([]int64, 129)
 			case "workers_zero":
 				c.Publication.Workers = 0
 			case "workers_large":
@@ -117,6 +124,7 @@ func TestProductPublicationConfigIsExplicitPrivateAndBounded(t *testing.T) {
 
 func TestProductReviewRoutesReloadPrivateReportsAndKeepSeparatePaths(t *testing.T) {
 	c := publicationConfigFixture(t)
+	c.Publication.ReviewRoutes[0].CloudReviewerIDs = []int64{93, 91}
 	second := c.Repositories[0]
 	second.Name = "owner/second"
 	second.Policy.RepositoryID = 18
@@ -127,6 +135,9 @@ func TestProductReviewRoutesReloadPrivateReportsAndKeepSeparatePaths(t *testing.
 	routes, hidden, err := c.Publication.routes(c.Repositories)
 	if err != nil || len(hidden) != 2 {
 		t.Fatal(routes, hidden, err)
+	}
+	if !slices.Equal(routes[17].CloudReviewerIDs, []int64{91, 93}) {
+		t.Fatal("configured actor set was not frozen", routes[17].CloudReviewerIDs)
 	}
 	for i, route := range c.Publication.ReviewRoutes {
 		observed, err := routes[route.RepositoryID].ReadReport(context.Background())

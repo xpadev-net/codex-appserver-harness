@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,19 +17,31 @@ import (
 
 // Controller-owned request text and identity; none are model tool arguments.
 type PRReviewRequestPayload struct {
-	OperationID   string `json:"operation_id"`
-	ProductDigest string `json:"product_digest"`
-	RoundID       string `json:"round_id"`
-	RequesterID   int64  `json:"requester_id"`
-	Trigger       string `json:"trigger"`
+	CloudReviewerIDs []int64 `json:"cloud_reviewer_ids,omitempty"`
+	OperationID      string  `json:"operation_id"`
+	ProductDigest    string  `json:"product_digest"`
+	RoundID          string  `json:"round_id"`
+	RequesterID      int64   `json:"requester_id"`
+	Trigger          string  `json:"trigger"`
 }
 
 func (p PRReviewRequestPayload) Body() string {
 	return p.Trigger + "\n\n<!-- harness-review:" + p.RoundID + " -->"
 }
 
-func (k *KernelStore) SavePRReviewRequestPayload(ctx context.Context, id, owner, trigger string, requester int64) (PRReviewRequestPayload, error) {
+func (k *KernelStore) SavePRReviewRequestPayload(ctx context.Context, id, owner, trigger string, requester int64, expected ...[]int64) (PRReviewRequestPayload, error) {
 	var packet PRReviewRequestPayload
+	if len(expected) > 1 {
+		return packet, errors.New("one Cloud actor set required")
+	}
+	var actors []int64
+	if len(expected) == 1 {
+		var err error
+		actors, err = CanonicalCloudReviewerIDs(expected[0])
+		if err != nil {
+			return packet, err
+		}
+	}
 	if requester <= 0 || strings.TrimSpace(trigger) == "" || !utf8.ValidString(trigger) || strings.ContainsRune(trigger, '\x00') || !validPRProofID(id) || strings.ContainsAny(id, "<>") {
 		return packet, errors.New("verified requester and bounded review trigger required")
 	}
@@ -57,13 +70,13 @@ func (k *KernelStore) SavePRReviewRequestPayload(ctx context.Context, id, owner,
 	if err = validatePRClaimTx(ctx, tx, intent, claim); err != nil {
 		return packet, err
 	}
-	packet = PRReviewRequestPayload{OperationID: id, ProductDigest: claim.Product.Digest, RoundID: id, RequesterID: requester, Trigger: trigger}
+	packet = PRReviewRequestPayload{CloudReviewerIDs: actors, OperationID: id, ProductDigest: claim.Product.Digest, RoundID: id, RequesterID: requester, Trigger: trigger}
 	if len(packet.Body()) > 64<<10 {
 		return packet, errors.New("complete review request exceeds body budget")
 	}
 	var old PRReviewRequestPayload
 	err = completionRecord(ctx, tx, "product_pr_review_payload", id, &old)
-	if err == nil && old != packet {
+	if err == nil && !reflect.DeepEqual(old, packet) {
 		return packet, errors.New("review request payload is immutable")
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -178,4 +191,23 @@ func (k *KernelStore) BindObservedPRReviewRequest(ctx context.Context, id string
 		return receipt, err
 	}
 	return receipt, tx.Commit()
+}
+
+// CanonicalCloudReviewerIDs freezes an optional host-owned provider identity
+// set. An absent set preserves legacy requests without granting completion.
+func CanonicalCloudReviewerIDs(ids []int64) ([]int64, error) {
+	if len(ids) > 128 {
+		return nil, errors.New("Cloud reviewer identity set exceeds 128")
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	result := slices.Clone(ids)
+	slices.Sort(result)
+	for i, id := range result {
+		if id < 1 || i > 0 && result[i-1] == id {
+			return nil, errors.New("unique positive Cloud reviewer IDs required")
+		}
+	}
+	return result, nil
 }
