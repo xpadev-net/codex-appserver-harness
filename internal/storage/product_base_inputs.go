@@ -144,6 +144,12 @@ func baseInputAncestors(input ProductBaseInput, initial string) ([]string, error
 		return nil, ErrProductBasePlanHeld
 	}
 	ancestors := []string{seed}
+	for _, node := range prep.Continuations {
+		if !fixedSHA(node.Value.ParentMergeSHA) {
+			return nil, ErrProductBasePlanHeld
+		}
+		ancestors = append(ancestors, node.Value.ParentMergeSHA)
+	}
 	if ref := prep.Task.Spec.ProductBaseConflict; ref != nil {
 		// The authenticated source digest is part of preparation input. The
 		// source base is added below by the private input snapshot.

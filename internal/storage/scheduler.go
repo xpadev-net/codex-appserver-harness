@@ -39,7 +39,7 @@ type ReadySet struct {
 }
 
 func readinessHoldError(err error) bool {
-	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrTaskBinding) || errors.Is(err, ErrArtifactUnavailable) || errors.Is(err, ErrArtifactScope) || errors.Is(err, ErrArtifactIntegrity) || errors.Is(err, ErrTemplateNeedsMain)
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrTaskBinding) || errors.Is(err, ErrArtifactUnavailable) || errors.Is(err, ErrArtifactScope) || errors.Is(err, ErrArtifactIntegrity) || errors.Is(err, ErrTemplateNeedsMain) || errors.Is(err, ErrProductContinuationHeld)
 }
 
 // ReadyTasks evaluates only saved facts. Selection reserves no process or run;

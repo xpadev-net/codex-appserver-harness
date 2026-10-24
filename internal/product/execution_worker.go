@@ -36,7 +36,7 @@ func (w *ExecutionWorker) Hint() {
 }
 
 func executionPending(err error) bool {
-	return errors.Is(err, storage.ErrProductSealHeld) || errors.Is(err, storage.ErrProductBasePlanHeld) || errors.Is(err, storage.ErrProductWorkspaceHeld) || errors.Is(err, storage.ErrProductSubjectHeld) || errors.Is(err, storage.ErrProductRunnerHeld) || errors.Is(err, storage.ErrProductQualityHeld) || errors.Is(err, storage.ErrTemplateNeedsMain) || errors.Is(err, storage.ErrExecutionCapacity)
+	return errors.Is(err, storage.ErrProductSealHeld) || errors.Is(err, storage.ErrProductContinuationHeld) || errors.Is(err, storage.ErrProductBasePlanHeld) || errors.Is(err, storage.ErrProductWorkspaceHeld) || errors.Is(err, storage.ErrProductSubjectHeld) || errors.Is(err, storage.ErrProductRunnerHeld) || errors.Is(err, storage.ErrProductQualityHeld) || errors.Is(err, storage.ErrTemplateNeedsMain) || errors.Is(err, storage.ErrExecutionCapacity)
 }
 
 func (w *ExecutionWorker) task(ctx context.Context, id string) (bool, error) {
