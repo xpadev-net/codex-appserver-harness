@@ -40,4 +40,12 @@ host が `ProductWorkspaceRequest` に base plan の ID/digest を渡すと、wo
 
 実 temp Git/SQLite の検査では、新 SHA の実取得・同じ SHA の checkout、既存 object の無送信、送信直前の source 保留、取得後の HEAD 変更、replay、停止未確認の claim/capacity 保持を確認する。DB の起動検査では初回 turn の時刻失効、thread 作成後の再観測、同じ未完了 Task の waiting→入力通知→再開、run/snapshot の監査対応、journal 喪失を検査する。HTTP/ancestry と model 実行は fixture で、native P の証拠には含めない。
 
-この adapter は host が明示的に呼ぶ契約である。daemon/CLI の自動 base 選択、失敗時の親通知、旧候補への通常 merge と新 fix Task への競合引渡しは後続へ残る。
+## daemon の自動選択と準備例外
+
+CLI の publication 設定がある場合、実 `KernelSourceGate` と GitHub reader を `Executor.BasePlanner` へ接続する。新しい WorkItem の unused な work/fix Task は現在の default HEAD を選び、上記の取得・workspace 証拠を経て model 起動へ進む。publication 設定を持たないローカル工程は host の初期 base を使う。
+
+準備済みで未実行の Task は、観測時刻が失効したときだけ source/HEAD を読み直す。同じ HEAD なら保存 workspace を変更せず選択時刻を更新する。異なる HEAD なら既存 workspace を書き換えず初回 turn を保留する。未 claim の prepared profile は `not_started` の停止証拠を保存して Git capacity を解放する。開始済み・停止未確認の owner は再実行や解放を行わない。
+
+既知の準備失敗、未解決 owner、証拠の欠落、準備後の base 変更は、Task・計画・SHA・停止結果の安全な要約を親通知へ保存する。private path、取得先、資格情報、command、raw log は親入力に渡さない。同一の原因と証拠は ACK や定期照合で追加通知せず、通知の利用時にも原因が現在有効か再照合する。親 turn、新しい Task/session、Git の再実行を定期照合だけで生成しない。
+
+実 Git/SQLite の統合検査は、自動選択した新 SHA の取得、fresh な準備済み workspace の無操作、同じ HEAD の時刻更新、変更後の起動保留と一度の通知、未着手 profile の停止・capacity 解放、通知改変と古い原因の拒否を確認する。GitHub HEAD/ancestry と model は fixture であり、native P の受入ではない。旧候補への通常 merge と新 fix Task への競合引渡しは後続へ残る。
