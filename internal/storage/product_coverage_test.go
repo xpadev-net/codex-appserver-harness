@@ -288,7 +288,7 @@ func TestProductCoverageUnavailableRegistrationKeepsWorkAndOverlappingCriterionR
 	if _, err := k.RegisterProductWorkItem(ctx, p.Target, "", other); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"unmerged", "unavailable", "missing"} {
+	for _, mode := range []string{"unmerged", "unavailable", "missing", "orphan_history"} {
 		if mode == "unavailable" {
 			if err := k.Put(ctx, "product_work_item_registration", other.ID, p.Target.WaveID, map[string]string{"damaged": "source registration"}); err != nil {
 				t.Fatal(err)
@@ -296,6 +296,11 @@ func TestProductCoverageUnavailableRegistrationKeepsWorkAndOverlappingCriterionR
 		}
 		if mode == "missing" {
 			if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_work_item_registration' AND id=?", other.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if mode == "orphan_history" {
+			if _, err := k.DB.Exec("DELETE FROM records WHERE kind='wave_work_item' AND id=?", other.ID); err != nil {
 				t.Fatal(err)
 			}
 		}

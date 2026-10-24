@@ -30,6 +30,7 @@ type ProductCoverageFact struct {
 type ProductCoveragePending struct {
 	MergeID    string `json:"merge_id,omitempty"`
 	WorkItemID string `json:"work_item_id,omitempty"`
+	RecordID   string `json:"record_id,omitempty"`
 	Reason     string `json:"reason"`
 }
 type ProductCoverageValue struct {
@@ -81,13 +82,46 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 	if err != nil {
 		return ledger, err
 	}
+	// Immutable versions retain identities even when both current indexes are
+	// lost. They discover unresolved ownership, never replace a missing head.
+	versionIDs, err := inputIDsTx(ctx, tx, "SELECT id FROM records WHERE kind='product_work_item_registration_version' AND work_item_id=? ORDER BY id LIMIT ?", w.ID, maxProductCoverageMerges+1)
+	if err != nil {
+		return ledger, err
+	}
+	if len(versionIDs) > maxProductCoverageMerges {
+		return ledger, ErrProductCoverageHeld
+	}
+	workSet := map[string]bool{}
+	for _, id := range workIDs {
+		workSet[id] = true
+	}
+	unknownRegistration := false
+	for _, id := range versionIDs {
+		var version ProductWorkItemRegistrationSnapshot
+		err := taskEvidenceRecord(ctx, tx, "product_work_item_registration_version", id, &version)
+		if ctx.Err() != nil {
+			return ledger, ctx.Err()
+		}
+		digest, digestErr := contentDigest(version.Value)
+		work := version.Value.Definition.ID
+		if err != nil || digestErr != nil || version.Digest != digest || version.Value.WaveID != w.ID || work == "" || id != structureID("product-work-", work, digest) {
+			unknownRegistration = true
+			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{RecordID: id, Reason: "registration_history_unavailable"})
+			continue
+		}
+		workSet[work] = true
+	}
+	workIDs = workIDs[:0]
+	for id := range workSet {
+		workIDs = append(workIDs, id)
+	}
+	sort.Strings(workIDs)
 	if len(workIDs) > maxProductWorkItems {
 		return ledger, ErrProductCoverageHeld
 	}
 	registrations := map[string]string{}
 	workCriteria := map[string][]string{}
 	mergedWork := map[string]bool{}
-	unknownRegistration := false
 	for _, id := range workIDs {
 		r, err := loadProductWorkItemRegistration(ctx, tx, id)
 		if ctx.Err() != nil {
