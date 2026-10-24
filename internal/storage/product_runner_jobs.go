@@ -28,6 +28,7 @@ type ProductRunnerRuntime struct {
 }
 
 type ProductRunnerJobValue struct {
+	RetryOf      string      `json:"retry_of,omitempty"`
 	PlanID       string      `json:"plan_id"`
 	PlanDigest   string      `json:"plan_digest"`
 	PolicyID     string      `json:"policy_id"`
@@ -92,7 +93,11 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 	if err != nil {
 		return job, err
 	}
-	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || id != productRunnerJobID(job.Value.PlanID, job.Value.Spec.ProfileID) || job.CreatedAt.IsZero() || job.Value.Spec.JobID != id || job.Value.Spec.Validate() != nil || job.State != "prepared" && job.State != "launching" && job.State != "completed" || (job.State == "prepared") != job.ClaimedAt.IsZero() {
+	expectedID := productRunnerJobID(job.Value.PlanID, job.Value.Spec.ProfileID)
+	if job.Value.RetryOf != "" {
+		expectedID = productRunnerRetryID(job.Value.RetryOf)
+	}
+	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || id != expectedID || job.CreatedAt.IsZero() || job.Value.Spec.JobID != id || job.Value.Spec.Validate() != nil || job.State != "prepared" && job.State != "launching" && job.State != "completed" || (job.State == "prepared") != job.ClaimedAt.IsZero() {
 		return job, ErrTaskEvidence
 	}
 	if job.State == "completed" {
@@ -123,6 +128,15 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 	if !reflect.DeepEqual(history, job.Value) {
 		return job, ErrTaskEvidence
 	}
+	if job.Value.RetryOf != "" {
+		previous, err := loadProductRunnerJob(ctx, q, job.Value.RetryOf)
+		if err != nil {
+			return job, err
+		}
+		if !productRunnerRetryValueMatches(previous, job.Value) {
+			return job, ErrTaskEvidence
+		}
+	}
 	plan, err := loadProductVerificationPlan(ctx, q, job.Value.PlanID)
 	if err != nil {
 		return job, err
@@ -147,7 +161,7 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 	if err != nil {
 		return job, err
 	}
-	if r.Kind != "runner" || r.SessionID != job.Value.SessionID || r.Request.Target != plan.Value.Target || r.Request.Worktree != filepath.Join(s.Root, id) || job.State != "completed" && r.State != "held" {
+	if r.Kind != "runner" || r.SessionID != job.Value.SessionID || r.Request.Target != plan.Value.Target || r.Request.RetryOf != job.Value.RetryOf || r.Request.Worktree != filepath.Join(s.Root, id) || job.State != "completed" && r.State != "held" {
 		return job, ErrTaskEvidence
 	}
 	return job, nil

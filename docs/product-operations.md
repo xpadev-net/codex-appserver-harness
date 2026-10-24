@@ -509,6 +509,14 @@ adopted plan、product targetの明示CAS更新、生成Task/lineage/receipt/his
 
 後続の生成fixは、直前のCandidateが変わった場合に限り、未使用session・attemptゼロ・thread/run未作成・全依存完了・元の生成spec/history・現在Candidate SHAを検査して、workspace予約と同じtransactionで入力を固定する。既存workspaceや使用済みsnapshotを再束縛しない。
 
-P自動展開は中間review Phaseも扱い、後続の未使用Taskを新ID/sessionへ複製し、依存と将来templateのrootを更新する。peer reviewの暗黙出力依存と元のPhase境界を再reviewへ保持する。使用済みTask/process、roleの自己依存・統合、旧Artifact IDを特定する明示selectorの再配置は理由付き親再計画とし、権限を黙って広げない。daemonの製品dispatch/readiness、実model/隔離launcher/Cloudを含むP受入、環境障害のrunner retryとmerge経路は引き続き未接続である。fixtureは実行factsを明示し、Kのtemplate回帰と共に分類、複数owner/role、修復→再検証→再review→品質、rollback/history欠落、繰返し上限、main/worker run増加ゼロを検証する。
+P自動展開は中間review Phaseも扱い、後続の未使用Taskを新ID/sessionへ複製し、依存と将来templateのrootを更新する。peer reviewの暗黙出力依存と元のPhase境界を再reviewへ保持する。使用済みTask/process、roleの自己依存・統合、旧Artifact IDを特定する明示selectorの再配置は理由付き親再計画とし、権限を黙って広げない。daemonの製品dispatch/readiness、実model/隔離launcher/Cloudを含むP受入、環境障害のrunner retryは後述のhost portで扱い、daemonの自動呼び出しとmerge経路は引き続き未接続である。fixtureは実行factsを明示し、Kのtemplate回帰と共に分類、複数owner/role、修復→再検証→再review→品質、rollback/history欠落、繰返し上限、main/worker run増加ゼロを検証する。
 
 後続へ複製した同じWorkItemのwork/fix Taskは、新規workspace予約時だけ、完了した直接依存の唯一のCandidateを取り込める。保存した展開のhead/history・作成Task/spec・clone対応を照合し、現行Candidateの固定SHAとの一致、全依存の正常適用、未使用session（thread/preparation/run/予約/processなし）を確認してTaskとplanの入力digestを同一transactionで更新する。旧SHA、欠落・矛盾した履歴、使用済みsession、未完了依存では予約も入力変更も行わない。既存workspaceの再送とClaimは固定済み入力を変更しない。
+
+### 製品 runner の環境障害再試行
+
+`ReserveProductRunnerRetry(previousID)` は正常停止と保存結果が照合済みの `infrastructure_failure` からだけ、一つの後続 job を保存する。Candidate、canonical plan、profile/policy、launcher/argv、private root を元の不変入力から引き継ぎ、job ID と実行ディレクトリを新しくする。旧 spec/log/result/terminal receipt は更新しない。generic runner の同じ workspace 条件を変えず、認証済み製品 job の決定的な後続 ID だけ別ディレクトリを許す。
+
+validation job と既存 retry lineage の予算、実行枠、workspace lease、job/history を同じ transaction で予約し、再送で再課金しない。unknown/launching、検証の failed、timeout、canceled、passed はこの自動再試行の対象外である。予約と Claim の両方で現行 scope/Candidate・pause/期限を再照合する。`product.Runner.StartRetry` はcommit済み Claimの後だけ独立 wrapper を起動し、再送で二重起動しない。
+
+機械検証の読み取りは認証済みの後続 job を追い、再試行待ちを pending とする。後続 head/history/terminal が欠落した場合はエラーとし、古い結果へ戻らない。fixtureで上限・rollback・履歴欠落・二段の再試行・pauseを、実subprocessでlauncher不在→同じ実行パスの復旧→再試行成功を確認する。modelやCloudのP受入を意味せず、daemonによる自動再試行呼び出しはhost executor接続で行う。

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -34,6 +35,68 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// A missing trusted launcher creates a real infrastructure failure. Restoring
+// that executable lets a fresh attempt use the same frozen argv and Candidate.
+func checkProductRunnerRetryExecution(t *testing.T, k *storage.KernelStore, plan storage.ProductVerificationPlanSnapshot) {
+	t.Helper()
+	ctx := context.Background()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Runner{Store: k, Executable: exe}
+	launcher := filepath.Join(k.Root, "restorable-runner-launcher")
+	runtime := storage.ProductRunnerRuntime{Root: filepath.Join(k.Root, "runners"), LauncherContract: "argv_passthrough_v1", Launcher: []string{launcher}}
+	job, err := r.Start(ctx, plan.ID, "unit", runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	await := func(id string) storage.ProductRunnerJob {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			result, err := r.Reconcile(ctx, id)
+			if err == nil {
+				return result
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("actual retry reconciliation", err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	first := await(job.ID)
+	if first.Completion.Result.Status != "infrastructure_failure" {
+		t.Fatal(first)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexec \"$@\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := r.StartRetry(ctx, first.ID)
+	if err != nil || retry.ID == first.ID || retry.Value.RetryOf != first.ID || retry.Value.Spec.Candidate != first.Value.Spec.Candidate {
+		t.Fatal(retry, err)
+	}
+	if _, err := r.StartRetry(ctx, first.ID); !errors.Is(err, storage.ErrProductRunnerHeld) {
+		t.Fatal("retry started twice", err)
+	}
+	finished := await(retry.ID)
+	if finished.Completion.Result.Status != "passed" || finished.Completion.Result.TestedSHA != plan.Value.Candidate.SHA {
+		t.Fatal(finished)
+	}
+	evidence, err := k.ReadProductVerificationEvidence(ctx, plan.ID)
+	if err != nil || !evidence.Value.Passed || evidence.Value.Jobs[0].JobID != retry.ID {
+		t.Fatal(evidence, err)
+	}
+	old, err := k.ReadProductRunnerJob(ctx, first.ID)
+	if err != nil || !reflect.DeepEqual(old, first) {
+		t.Fatal("retry changed measured first attempt", old, err)
+	}
+	budget, err := k.WaveOperationBudget(ctx, plan.Value.Target.WaveID)
+	if err != nil || budget.ValidationJobs != 2 || budget.RunnerRetries != 1 {
+		t.Fatal(budget, err)
+	}
 }
 
 // Extends the real-temp-Git seal/adoption fixture. This is measured subprocess
