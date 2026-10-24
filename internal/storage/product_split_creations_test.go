@@ -41,6 +41,13 @@ func TestProductSplitHTTPHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer k.Close()
+	if value := os.Getenv("HARNESS_SPLIT_HTTP_TEST_NOW"); value != "" {
+		now, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k.Now = func() time.Time { return now }
+	}
 	id := os.Getenv("HARNESS_SPLIT_HTTP_TEST_ID")
 	job, err := k.ReadProductSplitCreate(context.Background(), id)
 	if err != nil {
@@ -105,7 +112,7 @@ func startSplitCreationOwner(t *testing.T, k *KernelStore, job ProductSplitCreat
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestProductSplitHTTPHelper$")
-	cmd.Env = append(os.Environ(), "HARNESS_SPLIT_HTTP_TEST_ROOT="+k.Root, "HARNESS_SPLIT_HTTP_TEST_ID="+job.ID)
+	cmd.Env = append(os.Environ(), "HARNESS_SPLIT_HTTP_TEST_ROOT="+k.Root, "HARNESS_SPLIT_HTTP_TEST_ID="+job.ID, "HARNESS_SPLIT_HTTP_TEST_NOW="+k.clock().Format(time.RFC3339Nano))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -563,5 +570,88 @@ func TestProductSplitCreationClockRollbackCannotCommitAbortOrActivation(t *testi
 	}
 	if _, err := k.AbortUnactivatedProductSplitCreate(ctx, job.ID, job.Value.OwnerID, job.Digest, "clock-abort"); err != nil {
 		t.Fatal("clock recovery could not retry abort", err)
+	}
+}
+
+func TestProductSplitCreationExpiredGateCanRenewOnlyAfterFreshObservation(t *testing.T) {
+	ctx := context.Background()
+	k, _, r, job := splitCreationFixture(t)
+	first, err := k.ObserveProductSplitCreateGate(ctx, job.ID, job.Value.OwnerID, job.Digest, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := first.ObservedAt.Add(6 * time.Second)
+	k.Now = func() time.Time { return later }
+	replay, err := k.PrepareProductSplitCreate(ctx, r, job.Value.Child.ID, job.Value.OwnerID)
+	if err != nil || !reflect.DeepEqual(replay, job) {
+		t.Fatal("metadata replay changed prepared intent", err)
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, gateErr := k.splitCreateSendGateTx(ctx, tx, replay)
+	tx.Rollback()
+	if !errors.Is(gateErr, ErrProductSplitHeld) {
+		t.Fatal("metadata replay extended send permission", gateErr)
+	}
+	// The host's new observation can renew an intact expired gate.
+	renewed, err := k.ObserveProductSplitCreateGate(ctx, job.ID, job.Value.OwnerID, job.Digest, "", "")
+	if err != nil || !renewed.ObservedAt.Equal(later) {
+		t.Fatal("expired gate could not renew", renewed, err)
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_split_create_gate_history' AND work_item_id=?", job.ID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("renewal overwrote immutable history", count, err)
+	}
+	identity := startSplitCreationOwner(t, k, job)
+	stopCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := process.StopGroup(stopCtx, identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.FinishProductSplitCreateHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), "renewed-gate-stop"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductSplitCreationStoppedReplayAllowsHeldSuccessorLeaseGenerations(t *testing.T) {
+	ctx := context.Background()
+	k, _, r, job := splitCreationFixture(t)
+	identity := startSplitCreationOwner(t, k, job)
+	stopCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := process.StopGroup(stopCtx, identity); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := k.FinishProductSplitCreateHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), "durable-stop")
+	if err != nil || stopped.State != "stopped" {
+		t.Fatal(stopped, err)
+	}
+	for next := 0; next < 2; next++ {
+		tx, err := k.kernelTx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease, err := claimResourceTx(ctx, tx, job.Lease.Resource, "new-physical-owner", r.Target.WaveID)
+		if err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		replay, err := k.FinishProductSplitCreateHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), "durable-stop")
+		if err != nil || !reflect.DeepEqual(replay, stopped) {
+			t.Fatal("lost-response stop replay depended on newer owner", replay, err)
+		}
+		var owner, state string
+		var generation int64
+		if err := k.DB.QueryRow("SELECT run_id,state,generation FROM kernel_resource_leases WHERE resource=?", lease.Resource).Scan(&owner, &state, &generation); err != nil || owner != "new-physical-owner" || state != "held" || generation != lease.Generation {
+			t.Fatal("historical stop changed newer lease", owner, state, generation, err)
+		}
+		if _, err := k.DB.Exec("UPDATE kernel_resource_leases SET state='released' WHERE resource=? AND run_id=? AND generation=?", lease.Resource, owner, generation); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

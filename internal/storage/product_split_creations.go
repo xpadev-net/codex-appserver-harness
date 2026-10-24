@@ -251,6 +251,8 @@ func loadSplitCreate(ctx context.Context, tx *sql.Tx, id string) (ProductSplitCr
 		if leaseOwner != id || leaseState != "held" || generation != job.Lease.Generation {
 			return job, ErrProductSplitHeld
 		}
+		// Higher generations belong to successors and remain untouched by this
+		// historical proof read or an idempotent stop replay.
 	} else if generation < job.Lease.Generation || generation == job.Lease.Generation && (leaseOwner != id || leaseState != "released") {
 		return job, ErrProductSplitHeld
 	}
@@ -341,6 +343,9 @@ func (k *KernelStore) splitCreatePreflightTx(ctx context.Context, tx *sql.Tx, r 
 	return nil
 }
 
+// Exact replay returns metadata without extending send authority. An intact
+// expired gate can be renewed by ObserveProductSplitCreateGate after a fresh
+// host source read; missing evidence is never recreated by a replay.
 func (k *KernelStore) PrepareProductSplitCreate(ctx context.Context, r ProductSplitChildPlanRequest, childID, ownerID string) (ProductSplitCreate, error) {
 	var job ProductSplitCreate
 	if childID == "" || strings.TrimSpace(ownerID) == "" || len(ownerID) > 256 || strings.ContainsAny(ownerID, "\x00\r\n") {
