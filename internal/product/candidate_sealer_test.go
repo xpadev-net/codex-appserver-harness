@@ -21,12 +21,23 @@ import (
 func candidateSealerFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (CandidateSealer, storage.ProductWorkspace, domain.Task, contract.SessionRun) {
 	t.Helper()
 	ctx := context.Background()
-	p, request, w, task := workspacePreparerFixture(t, configure...)
+	p, request, _, task := workspacePreparerFixture(t, configure...)
 	ready, err := p.Prepare(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	k := p.Store
+	task, run := stoppedProductWriterRunFixture(t, p.Store, ready, task)
+	return CandidateSealer{Store: p.Store}, ready, task, run
+}
+
+// The structured result/run/stop are synthetic; checkout and sealing are real.
+func stoppedProductWriterRunFixture(t *testing.T, k *storage.KernelStore, ready storage.ProductWorkspace, task domain.Task) (domain.Task, contract.SessionRun) {
+	t.Helper()
+	ctx := context.Background()
+	w, err := k.Wave(ctx, task.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	task, err = k.Task(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +102,7 @@ func candidateSealerFixture(t *testing.T, configure ...func(*contract.PlanPropos
 	if err := os.WriteFile(filepath.Join(ready.Value.CWD, "implementation.txt"), []byte("implemented behavior\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return CandidateSealer{Store: k}, ready, task, run
+	return task, run
 }
 
 func TestCandidateSealerConnectsStoppedRunToFixedCommitWithoutApplyingQuality(t *testing.T) {

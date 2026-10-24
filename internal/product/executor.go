@@ -79,7 +79,7 @@ func (e Executor) Prepare(ctx context.Context, taskID string) (storage.ProductWo
 	}
 	request := storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: repo.Policy.RepositoryID, Repository: repo.Policy.Repository, BaseSHA: base}
 	preparer := WorkspacePreparer{Store: e.Store}
-	if input.Product == nil && (task.Spec.Kind == "work" || task.Spec.Kind == "fix") && e.BasePlanner != nil {
+	if (task.Spec.Kind == "work" || task.Spec.Kind == "fix") && e.BasePlanner != nil {
 		if e.BasePlanner.Executor.Store != e.Store {
 			return storage.ProductWorkspace{}, errors.New("base planner store owner mismatch")
 		}
@@ -91,7 +91,10 @@ func (e Executor) Prepare(ctx context.Context, taskID string) (storage.ProductWo
 		if h.RepositoryID != repo.Policy.RepositoryID || h.Repository != repo.Name || h.BaseBranch != repo.BaseBranch || h.InitialSHA != repo.InitialSHA || plan.Value.Input.Value.Policy.Value.Repository != repo.Policy.Repository {
 			return storage.ProductWorkspace{}, storage.ErrProductWorkspaceHeld
 		}
-		request.BaseSHA, request.BasePlanID, request.BasePlanDigest = h.HeadSHA, plan.ID, plan.Digest
+		request.BasePlanID, request.BasePlanDigest = plan.ID, plan.Digest
+		if input.Product == nil {
+			request.BaseSHA = h.HeadSHA
+		}
 		preparer.RefreshBase = e.BasePlanner.Prepare
 	}
 	return preparer.Prepare(ctx, request)
