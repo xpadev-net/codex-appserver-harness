@@ -27,37 +27,8 @@ func (k *KernelStore) completeGenericWaveTx(ctx context.Context, tx *sql.Tx, b c
 	if err != nil {
 		return completion, err
 	}
-	if wave.OrchestratorSessionID != b.ID || b.Kind != "orchestrator" {
-		return completion, ErrMainResultInvalid
-	}
-	var pending bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM kernel_tool_operations WHERE state IN ('accepted','unknown') AND json_extract(payload,'$.target.wave_id')=?)`, wave.ID).Scan(&pending); err != nil {
+	if err := checkWaveCompletionIdleTx(ctx, tx, b, wave); err != nil {
 		return completion, err
-	}
-	if pending {
-		return completion, ErrMainResultHeld
-	}
-	// Capacity intents also own runner/Git/external operations. Their trusted
-	// release port requires terminal/stop proof; a live or unknown reservation
-	// cannot be hidden by completing the Wave before its deadline stops it.
-	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE wave_id=? AND state<>'released')", wave.ID).Scan(&pending); err != nil {
-		return completion, err
-	}
-	if pending {
-		return completion, ErrMainResultHeld
-	}
-	var creating, stopped bool
-	if err = tx.QueryRowContext(ctx, "SELECT creating,process_stopped FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating, &stopped); err != nil {
-		return completion, err
-	}
-	if creating || !stopped {
-		return completion, ErrMainResultHeld
-	}
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records p WHERE p.kind='managed_process' AND json_extract(p.payload,'$.state')<>'stopped' AND (json_extract(p.payload,'$.request.binding.id')=? OR json_extract(p.payload,'$.request.binding.id') IN (SELECT s.id FROM kernel_sessions s JOIN kernel_tasks t ON t.id=s.task_id WHERE t.wave_id=?)))`, b.ID, wave.ID).Scan(&pending); err != nil {
-		return completion, err
-	}
-	if pending {
-		return completion, ErrMainResultHeld
 	}
 	proof, err := k.checkArtifactAcceptanceTx(ctx, tx, target, p)
 	if err != nil {
@@ -75,4 +46,41 @@ func (k *KernelStore) completeGenericWaveTx(ctx context.Context, tx *sql.Tx, b c
 		return completion, err
 	}
 	return completion, nil
+}
+
+func checkWaveCompletionIdleTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, wave domain.Wave) error {
+	var err error
+	if wave.OrchestratorSessionID != b.ID || b.Kind != "orchestrator" {
+		return ErrMainResultInvalid
+	}
+	var pending bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM kernel_tool_operations WHERE state IN ('accepted','unknown') AND json_extract(payload,'$.target.wave_id')=?)`, wave.ID).Scan(&pending); err != nil {
+		return err
+	}
+	if pending {
+		return ErrMainResultHeld
+	}
+	// Capacity intents also own runner/Git/external operations. Their trusted
+	// release port requires terminal/stop proof; a live or unknown reservation
+	// cannot be hidden by completing the Wave before its deadline stops it.
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE wave_id=? AND state<>'released')", wave.ID).Scan(&pending); err != nil {
+		return err
+	}
+	if pending {
+		return ErrMainResultHeld
+	}
+	var creating, stopped bool
+	if err = tx.QueryRowContext(ctx, "SELECT creating,process_stopped FROM kernel_sessions WHERE id=?", b.ID).Scan(&creating, &stopped); err != nil {
+		return err
+	}
+	if creating || !stopped {
+		return ErrMainResultHeld
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records p WHERE p.kind='managed_process' AND json_extract(p.payload,'$.state')<>'stopped' AND (json_extract(p.payload,'$.request.binding.id')=? OR json_extract(p.payload,'$.request.binding.id') IN (SELECT s.id FROM kernel_sessions s JOIN kernel_tasks t ON t.id=s.task_id WHERE t.wave_id=?)))`, b.ID, wave.ID).Scan(&pending); err != nil {
+		return err
+	}
+	if pending {
+		return ErrMainResultHeld
+	}
+	return nil
 }
