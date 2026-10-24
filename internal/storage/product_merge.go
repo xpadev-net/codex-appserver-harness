@@ -366,6 +366,12 @@ func (k *KernelStore) ClaimProductMerge(ctx context.Context, id, owner, digest s
 	if job.Value.OwnerID != owner || job.Digest != digest {
 		return out, ErrProductMergeHeld
 	}
+	// Terminal receipts are readonly acknowledgements. In particular a
+	// protocol abort seals every delayed physical/native start permanently.
+	if productMergeTerminal(job) || job.State == "canceled" {
+		return out, tx.Commit()
+	}
+
 	if job.State != "prepared" {
 		return out, tx.Commit()
 	}
@@ -421,7 +427,7 @@ func (k *KernelStore) MarkProductMergeMayHaveSent(ctx context.Context, id, owner
 	if err != nil {
 		return empty, err
 	}
-	if job.Value.OwnerID != owner || job.Digest != digest || job.State != "launching" || !job.MayHaveSentAt.IsZero() || job.OwnerProcess != process.Identify(os.Getpid()) || job.OwnerInstanceID != instance {
+	if job.Value.OwnerID != owner || job.Digest != digest || job.State != "launching" || job.HTTPAbort != nil || !job.MayHaveSentAt.IsZero() || job.OwnerProcess != process.Identify(os.Getpid()) || job.OwnerInstanceID != instance {
 		return empty, ErrProductMergeHeld
 	}
 	round, err := k.productCloudRoundTx(ctx, tx, job.Value.RequestID)

@@ -149,6 +149,37 @@ func TestProductMergeHTTPAbortSealsDelayedWrapperAndProtectsNextLease(t *testing
 	if err != nil || aborted.State != "aborted_http" || aborted.HTTP != nil || aborted.HTTPAbort == nil {
 		t.Fatal(aborted, err)
 	}
+	// Every public follow-up port must keep this terminal journal sealed.
+	prepared, err := k.PrepareProductMergeHTTP(ctx, job.Value.RequestID, job.Value.OwnerID, job.Value.Method)
+	if err != nil || !reflect.DeepEqual(prepared, aborted) {
+		t.Fatal("terminal preparation replay mutated", prepared, err)
+	}
+	claimed, err := k.ClaimProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest)
+	if err != nil || claimed.Start || !reflect.DeepEqual(claimed.Merge, aborted) {
+		t.Fatal("terminal physical claim reopened", claimed, err)
+	}
+	if _, err := k.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, mergeGateObservationFixture(k, job)); !errors.Is(err, ErrProductMergeHeld) {
+		t.Fatal("terminal send fence reopened", err)
+	}
+	if _, err := k.CancelPreparedProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest, "second-cancel", "already aborted"); !errors.Is(err, ErrProductMergeHeld) {
+		t.Fatal("terminal abort became prepared cancel", err)
+	}
+	stop := ProductMergeStop{MergeID: job.ID, ProofID: "second-stop", Reason: "already aborted", StartedAt: job.ClaimedAt, FinishedAt: k.clock(), Disposition: "outcome_unknown"}
+	if _, err := k.RecordProductMergeStopped(ctx, job.ID, job.Value.OwnerID, job.Digest, stop); !errors.Is(err, ErrProductMergeHeld) {
+		t.Fatal("terminal abort gained stop", err)
+	}
+	if _, err := k.ConfirmProductMergeObserved(ctx, job.ID, job.Value.OwnerID, job.Digest, mergeReconciliationFixture(k, job)); !errors.Is(err, ErrProductMergeHeld) {
+		t.Fatal("terminal abort became merged", err)
+	}
+	page, err := k.MergeReconciliationTargets(ctx, "", 128)
+	if err != nil || len(page.OperationIDs) != 0 {
+		t.Fatal("terminal abort requeued", page, err)
+	}
+	unchanged, err := k.ReadProductMerge(ctx, job.ID)
+	if err != nil || !reflect.DeepEqual(aborted, unchanged) {
+		t.Fatal("follow-up port altered sealed receipt", unchanged, err)
+	}
+
 	if late := activateHTTPChild(t, k, job); late.Start || late.Error == "" {
 		t.Fatal("late wrapper sent after abort", late)
 	}
