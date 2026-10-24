@@ -14,7 +14,7 @@ import (
 
 // Local Git/SQL quality and registered HTTP stop are real; source GETs,
 // formal approvals/CI/rules and the remote merge response are fixtures.
-func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID string, adoptRequest bool) {
+func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID string, adoptRequest, prepareWork bool) {
 	t.Helper()
 	ctx := context.Background()
 	k := e.Store
@@ -22,7 +22,13 @@ func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGat
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkMergeHTTPWrapper(t, g, saved, requestID, "success")
+	var remote, physicalMergeSHA string
+	if prepareWork {
+		remote, physicalMergeSHA = physicalContinuationMerge(t, e, saved)
+		checkMergeHTTPWrapper(t, g, saved, requestID, "success", physicalMergeSHA)
+	} else {
+		checkMergeHTTPWrapper(t, g, saved, requestID, "success")
+	}
 	parent, changed, err := k.RecordProductMergedWorkItem(ctx, job.ID)
 	if err != nil || !changed || parent.Value.Projection == nil {
 		t.Fatal(parent, changed, err)
@@ -157,5 +163,8 @@ func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGat
 	}
 	if adoptRequest {
 		checkAdoptedRequestTaskEvidence(t, k, w, node)
+	}
+	if prepareWork {
+		checkVersionedPhysicalCandidate(t, e, w, node, remote, physicalMergeSHA, observer)
 	}
 }

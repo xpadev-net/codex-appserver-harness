@@ -69,3 +69,11 @@ coverage は現在版の登録から全系譜を照合し、元の登録 digest 
 最初に通常の `wave steer --file` で新 scope を適用し、停止境界の完了を確認する。元 merge と現在 target を明示して `continue-product` を行う。本文変更がある場合は方向修正全文を新しい Issue の title/本文と一致させ、source observer が保存した `request_changed` 観測を指定して `adopt-product-source` を行う。次の正しい source 観測で ready となった後、親が新 plan/Task を採用する。CLI 自体は model/Git/外部書込みを起動せず、保存後に既存 daemon へ best-effort hint を送る。操作は同じ Go port の再送・rollback・source/merge 証拠 gate を使う。
 
 CLI の SQLite 検査は private/未知 field/不正 flag/必須ファイル、未観測 merge・未適用 source の拒否、正しい保存済み coverage 読取、Wave/Task/run/tool operation の非変更を確認する。成立する merge/方向修正/採用・再送の検査は前節の Go port 統合で確認している。CLI の検査だけで後続候補や native P の受入を主張しない。これらは operator 専用であり、model の本文を trusted source 権限へ変換する tool は公開しない。
+
+## 新しい固定 base からの物理候補
+
+`publication_http_versioned_work` の統合 fixture は、ローカル repository を別の remote fixture へ clone し、元候補を通常の `merge --no-ff` で取り込む。実在する二親 merge SHA を HTTP 応答の fixture と authenticated receipt に使い、後続系譜の親 merge SHA と一致させる。存在しない仮 SHA を fetch 成功として扱わない。
+
+通常の方向修正・後続登録・4 GET の source 再確認後、別 ID の plan/Task/session を作る。production `BasePlanner` と source gate、固定 commit の実 fetch/checkout、停止した writer fixture、host の seal/adoption を通し、新候補の base が元 merge SHA、新候補 SHA と WorkItem/PR が元と異なることを確認する。元の登録・系譜・PR、Wave の期限と累積予算を保持する。
+
+新候補は `VERIFYING` で、元の品質による公開を拒否する。新 verifier は別 session/checkout に新候補を固定し、元の検証計画を継承しない。独立検証モデルの実行・新 runner/review・新 PR/正式 merge・親受入はこの単位では完了させない。model の run/stop、Issue GET、正式承認/CI/rules、remote HTTP 応答は明示的な fixture であり、実 Git/SQLite の検査を native P の受入へ読み替えない。
