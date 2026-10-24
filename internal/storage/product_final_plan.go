@@ -134,6 +134,7 @@ func (k *KernelStore) readProductFinalPlanTx(ctx context.Context, q *sql.Tx, id 
 		for profile := range expectedProfiles {
 			requested = append(requested, profile)
 		}
+		sort.Strings(requested)
 		expected, err := policy.Value.Verification.ExecutionSet(requested)
 		if err != nil || !slices.Equal(expected, repo.Profiles) {
 			return plan, ErrTaskEvidence
@@ -249,6 +250,7 @@ func (k *KernelStore) PrepareProductFinalPlan(ctx context.Context, target contra
 		for id := range profileSets[repo.RepositoryID] {
 			requested = append(requested, id)
 		}
+		sort.Strings(requested)
 		repo.Profiles, err = policy.Value.Verification.ExecutionSet(requested)
 		if err != nil {
 			return plan, err
@@ -310,5 +312,6 @@ func productFinalVerificationProfiles(ctx context.Context, q queryer, policy Pro
 	for profile := range requested {
 		profiles = append(profiles, profile)
 	}
+	sort.Strings(profiles)
 	return policy.Value.Verification.ExecutionSet(profiles)
 }
