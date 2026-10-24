@@ -17,6 +17,7 @@ import (
 )
 
 type ProductExecutorConfig struct {
+	Publication       *ProductPublicationConfig     `json:"publication,omitempty"`
 	SchemaVersion     int                           `json:"schema_version"`
 	EverySeconds      int                           `json:"every_seconds"`
 	IsolationVerified bool                          `json:"isolation_verified"`
@@ -37,6 +38,14 @@ func loadProductExecutor(path string, k *storage.KernelStore, runtime control.Is
 	}
 	if k == nil || c.SchemaVersion != 1 || c.EverySeconds < 1 || c.EverySeconds > 3600 || !c.IsolationVerified || len(c.Repositories) == 0 || len(c.Repositories) > 128 {
 		return nil, nil, errors.New("product executor schema 1, verified isolation, repositories 1..128 and every_seconds 1..3600 required")
+	}
+	routes, reportPaths, err := c.Publication.routes(c.Repositories)
+	if err != nil {
+		return nil, nil, err
+	}
+	sources, err := c.Publication.sources(c.Repositories)
+	if err != nil {
+		return nil, nil, err
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -73,6 +82,7 @@ func loadProductExecutor(path string, k *storage.KernelStore, runtime control.Is
 		hidden = append(hidden, filepath.Join(absolute, "gh"))
 	}
 	hidden = append(hidden, runtime.GitDirectories...)
+	hidden = append(hidden, reportPaths...)
 	repositories := map[int64]product.ExecutionRepository{}
 	for _, repo := range c.Repositories {
 		parts := strings.Split(repo.Name, "/")
@@ -108,12 +118,22 @@ func loadProductExecutor(path string, k *storage.KernelStore, runtime control.Is
 		}
 		repositories[policy.RepositoryID] = repo
 	}
-	w := product.NewExecutionWorker(product.Executor{Store: k, Repositories: repositories, Runner: product.Runner{Store: k, Executable: exe, SocketPath: filepath.Join(k.Root, ipc.SocketName)}}, time.Duration(c.EverySeconds)*time.Second)
+	executor := product.Executor{Store: k, Repositories: repositories, Runner: product.Runner{Store: k, Executable: exe, SocketPath: filepath.Join(k.Root, ipc.SocketName)}}
+	every := time.Duration(c.EverySeconds) * time.Second
+	w := product.NewExecutionWorker(executor, every)
 	return func(ctx context.Context, store *storage.KernelStore, wake func(), report func(error)) error {
 		if store != k {
 			return errors.New("product executor store owner mismatch")
 		}
 		w.OnMutation, w.Report = wake, report
-		return w.Run(ctx)
+		if c.Publication == nil {
+			return w.Run(ctx)
+		}
+		dispatcher := productPublicationDispatcher(executor, routes, sources, c.Publication.Workers, every)
+		dispatcher.OnMutation, dispatcher.Report = wake, report
+		if len(sources) == 0 {
+			return runProductPipeline(ctx, w.Run, dispatcher.Run)
+		}
+		return runProductPipeline(ctx, w.Run, dispatcher.Run, func(ctx context.Context) error { return runPublicationSources(ctx, k, sources, every, wake, report) })
 	}, w.Hint, nil
 }

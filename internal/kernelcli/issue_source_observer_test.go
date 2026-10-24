@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/xpadev-net/codex-appserver-harness/internal/control"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,27 +100,29 @@ func TestIssueSourceObserverConfigRequiresPrivateBoundedOptIn(t *testing.T) {
 	}
 }
 func TestIssueSourceObserverConfiguredGETWorkerCommitsBeforeHint(t *testing.T) {
-	root := cliRoot(t)
-	k, main, err := openKernel(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer k.Close()
-	path := issueSourceConfigFile(t)
-	policy := product.IssueSourcePolicy{Repository: "owner/repo", RepositoryID: 17, ReadyLabel: "ready", HoldLabel: "hold"}
-	w, err := k.CreateProductWave(context.Background(), storage.ProductWaveRequest{SourcePolicyDigest: policy.Digest(), Wave: storage.WaveRequest{OrchestratorSessionID: main.SessionID, Source: "github", SourceID: "r17-i42", OriginalRequest: "source title\n\nsource body", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "preserve expected behavior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: main.Limits}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "r17-i42", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := t.TempDir()
-	meta, item, calls := filepath.Join(bin, "meta"), filepath.Join(bin, "issue"), filepath.Join(bin, "calls")
-	if err := os.WriteFile(meta, []byte(`{"id":17,"full_name":"owner/repo"}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(item, []byte(`{"number":42,"title":"source title","body":"source body","state":"open","labels":[{"name":"ready"},{"name":"hold"}],"updated_at":"2026-10-24T00:00:00Z"}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	script := `#!/bin/sh
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprint("pipeline=", pipeline), func(t *testing.T) {
+			root := cliRoot(t)
+			k, main, err := openKernel(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer k.Close()
+			path := issueSourceConfigFile(t)
+			policy := product.IssueSourcePolicy{Repository: "owner/repo", RepositoryID: 17, ReadyLabel: "ready", HoldLabel: "hold"}
+			w, err := k.CreateProductWave(context.Background(), storage.ProductWaveRequest{SourcePolicyDigest: policy.Digest(), Wave: storage.WaveRequest{OrchestratorSessionID: main.SessionID, Source: "github", SourceID: "r17-i42", OriginalRequest: "source title\n\nsource body", Criteria: []domain.WaveCriterion{{ID: "AC", Requirement: "preserve expected behavior"}}, Policy: domain.WavePolicy{Revision: 1, Stage: "P", Product: true, Limits: main.Limits}}, WorkItems: []storage.ProductWorkItemDefinition{{ID: "r17-i42", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			meta, item, calls := filepath.Join(bin, "meta"), filepath.Join(bin, "issue"), filepath.Join(bin, "calls")
+			if err := os.WriteFile(meta, []byte(`{"id":17,"full_name":"owner/repo"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(item, []byte(`{"number":42,"title":"source title","body":"source body","state":"open","labels":[{"name":"ready"},{"name":"hold"}],"updated_at":"2026-10-24T00:00:00Z"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			script := `#!/bin/sh
 printf '%s\n' "$*" >> "$SOURCE_OBSERVER_TEST_CALLS"
 case "$*" in
  'api --method GET repos/owner/repo') /bin/cat "$SOURCE_OBSERVER_TEST_META" ;;
@@ -126,33 +130,40 @@ case "$*" in
  *) exit 49 ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	t.Setenv("SOURCE_OBSERVER_TEST_CALLS", calls)
-	t.Setenv("SOURCE_OBSERVER_TEST_META", meta)
-	t.Setenv("SOURCE_OBSERVER_TEST_ISSUE", item)
-	worker, err := loadIssueSourceObserver(path, k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	hints := 0
-	err = worker(ctx, k, func() {
-		current, err := k.Wave(context.Background(), w.ID)
-		if err != nil || current.SourceHold == nil || current.SourceHold.Reason != "hold" {
-			t.Fatal("hint before source commit", current, err)
-		}
-		hints++
-		cancel()
-	}, func(err error) { t.Errorf("unexpected source worker failure: %v", err) })
-	if !errors.Is(err, context.Canceled) || hints != 1 {
-		t.Fatal(err, hints)
-	}
-	raw, err := os.ReadFile(calls)
-	if err != nil || strings.Count(string(raw), "\n") != 4 || strings.Contains(string(raw), "POST") {
-		t.Fatal("unexpected source transport", string(raw), err)
+			if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			t.Setenv("SOURCE_OBSERVER_TEST_CALLS", calls)
+			t.Setenv("SOURCE_OBSERVER_TEST_META", meta)
+			t.Setenv("SOURCE_OBSERVER_TEST_ISSUE", item)
+			worker, err := loadIssueSourceObserver(path, k)
+			if pipeline {
+				config := publicationConfigFixture(t)
+				config.Publication.SourcePolicies = []product.IssueSourcePolicy{policy}
+				worker, _, err = loadProductExecutor(operatorFile(t, config), k, control.IsolatedConfig{})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			hints := 0
+			err = worker(ctx, k, func() {
+				current, err := k.Wave(context.Background(), w.ID)
+				if err != nil || current.SourceHold == nil || current.SourceHold.Reason != "hold" {
+					t.Fatal("hint before source commit", current, err)
+				}
+				hints++
+				cancel()
+			}, func(err error) { t.Errorf("unexpected source worker failure: %v", err) })
+			if !errors.Is(err, context.Canceled) || hints != 1 {
+				t.Fatal(err, hints)
+			}
+			raw, err := os.ReadFile(calls)
+			if err != nil || strings.Count(string(raw), "\n") != 4 || strings.Contains(string(raw), "POST") {
+				t.Fatal("unexpected source transport", string(raw), err)
+			}
+		})
 	}
 }

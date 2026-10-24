@@ -379,3 +379,10 @@ PR の `MERGED` / 分割元の `SPLIT` と親全体の完了は別に保存し�
 ### PR の検証証拠
 
 初回公開と候補更新の PR 本文に、正式検証計画の profile と版、現在候補の最新結果、tested SHA、job ID、`harness-journal:work-items/WORK_ITEM/validation/JOB_ID` を掲載します。参照は controller の journal の識別子です。権限のある運用者は `harness inspect --config CONFIG --id WORK_ITEM` の `validation` で同じ job ID を探し、`log_path` の完全ログを controller 上で確認できます。`evidence_retention` が `expired` の場合、保持期間を過ぎたログは取得できません。PR 本文に private path、ログ本文、実行環境や秘密値は出力しません。探索的な profile や旧候補の結果を正式検証の要約へ混ぜません。
+
+
+### 製品実行・PR公開worker
+
+`wave run --runtime runtime.json --product-executor product-executor.json` で、ホストが保存した private schema 1 設定の実行workerを有効にします。設定にはrepository、固定初回SHA、base branch、検証policy、隔離runnerが必要です。さらに `publication` を明示した場合だけ、固定候補のbranch公開、PR作成/更新、確認済み経路からのCloud review依頼をdaemonが処理します。未設定のCloud能力は保留し、正式承認やmerge許可を生成しません。
+
+[設定と公開時の照合](docs/product-operations.md#daemonのpr公開worker)を参照してください。製品モデルdispatchの `product_readiness_unavailable`、正式承認/CI/merge、部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。
