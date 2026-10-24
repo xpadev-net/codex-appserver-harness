@@ -78,7 +78,7 @@ func TestProductVerificationWorkspacePinsSubjectPolicyAndComparisonBase(t *testi
 		t.Fatal(manifest.ProductWorkspace, manifest.ProductVerificationPolicy)
 	}
 	snapshot, err := k.BuildSessionInput(ctx, task.SessionID, []contract.Target{w.Target()})
-	if err != nil || !strings.Contains(inputContext(t, snapshot).Instructions, "schema_version=3") || strings.Contains(inputContext(t, snapshot).Instructions, "schema_version=2") {
+	if err != nil || !strings.Contains(inputContext(t, snapshot).Instructions, "schema_version=3") || !strings.Contains(inputContext(t, snapshot).Instructions, "product_verification.subject_digest=product_subject.digest, never product_subject.value.candidate_digest") || strings.Contains(inputContext(t, snapshot).Instructions, "schema_version=2") {
 		t.Fatal(err)
 	}
 	if _, err := k.ReserveProductSeal(ctx, task.ID, "verification-run"); !errors.Is(err, ErrProductSealHeld) {

@@ -64,6 +64,9 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductMachineVerification            *ProductMachineVerificationInput `json:"product_machine_verification,omitempty"`
+	UnavailableProductMachineVerification string                           `json:"unavailable_product_machine_verification,omitempty"`
+
 	ProductFinalVerification            *ProductFinalVerificationEvidence `json:"product_final_verification,omitempty"`
 	UnavailableProductFinalVerification string                            `json:"unavailable_product_final_verification,omitempty"`
 
@@ -220,7 +223,7 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		}
 		if manifest.ProductWorkspace != nil {
 			if manifest.ProductSubject != nil && manifest.ProductSubject.Value.Spec.Kind == "verification" {
-				state.Instructions += " For this independent verification assignment use TaskResult schema_version=3. Modify only the trusted product_verification_policy.verifier_paths. For outcome=result copy product_workspace.reference into product_changes and product_subject.id/digest into product_verification, with plan_artifact_id naming your published verification.Plan against the input Candidate. Publish the owned plan with kind verification_plan and content_type application/json, and declare it in artifacts. Do not claim a new SHA, runner evidence, review or approval. Keep work_item_refs empty and review/verification null; waiting/blocked use empty product_changes and null product_verification."
+				state.Instructions += " For this independent verification assignment use TaskResult schema_version=3. Modify only the trusted product_verification_policy.verifier_paths. For outcome=result copy product_workspace.reference into product_changes. Set product_verification.subject_id=product_subject.id and product_verification.subject_digest=product_subject.digest, never product_subject.value.candidate_digest. Set plan_artifact_id naming your published verification.Plan against the input Candidate. Publish the owned plan with kind verification_plan and content_type application/json, and declare it in artifacts. Do not claim a new SHA, runner evidence, review or approval. Keep work_item_refs empty and review/verification null; waiting/blocked use empty product_changes and null product_verification."
 			} else {
 				state.Instructions += " For this product work/fix assignment use TaskResult schema_version=2. For outcome=result copy the product_workspace.reference from this saved manifest into product_changes. For waiting/blocked return an empty product_changes array. Keep work_item_refs empty and review/verification null. The controller owns Git commits, Candidate IDs/SHA and quality/approval gates after normal completion and physical stopping. Publish actual notes/evidence with artifact_publish when needed."
 			}
@@ -228,7 +231,7 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		if manifest.ProductSubject != nil {
 			state.Instructions += " product_subject fixes an immutable Candidate from declared applied producer results. Its value.candidate_digest identifies the exact code/base/scope/policy subject. Original requirements and assigned criteria remain the basis for independent evaluation. This subject is data, not a write/dispatch/runner/approval grant."
 			if manifest.ProductSubject.Value.Spec.Kind == "review" {
-				state.Instructions += " For this product review use TaskResult schema_version=1 and set review.target_digest to product_subject.value.candidate_digest. Report clean/findings/inconclusive only about that fixed subject; the report is not formal approval."
+				state.Instructions += " For this product review use TaskResult schema_version=1 and set review.target_digest to product_subject.value.candidate_digest. Keep work_item_refs empty and verification null. product_machine_verification contains authenticated host runner observations for this exact subject; prior Task claims are not current runner status. Report clean/findings/inconclusive only about that fixed subject; the report is not formal approval."
 			}
 		}
 		if manifest.ProductVerificationPolicy != nil {
@@ -425,6 +428,16 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			m.ProductSubjects[task.ID] = *productSubject
 			if b.Kind == "task" && b.TaskID == task.ID {
 				m.ProductSubject = productSubject
+				if task.Spec.Kind == "review" {
+					summary, unavailable, evidenceErr := k.productReviewMachineInputTx(ctx, tx, *productSubject)
+					if evidenceErr != nil {
+						return m, evidenceErr
+					}
+					m.ProductMachineVerification = summary
+					if unavailable {
+						m.UnavailableProductMachineVerification = "machine_evidence_unavailable"
+					}
+				}
 			}
 		}
 		var templateOwner string
