@@ -726,3 +726,11 @@ wrapperは受け取った新しい測定packetで`MarkProductMergeHTTPMayHaveSen
 ghはwrapperと同じgroupを継承する。wrapperは応答保存後もsupervisorがgroup全体を停止するまでleaderを保持し、保存済みresultを物理停止に読み替えない。再起動したcontrollerも保存済みidentityでgroupを停止/確認してから`FinishProductMergeHTTP`へ渡す。応答fileなし/不正は未送信証拠にしない。isolated model/runnerにはHTTP spec/result directory・authority socket/lockもforbidden pathとして渡す。
 
 実Git/runner/独立reviewのquality fixtureから実Go subprocess・fake-ghを起動し、expected-head body、一回だけのPUT、unknown保持、metadata不一致、controller不在、直前pause、他PID拒否、応答後の生存descendant、spec改変/消失したnative-write証拠、private file制限を確認する。Cloud/CI/source応答とHTTP結果はfixtureであり、native P合格には数えない。daemonのmerge dispatch/authority起動と自動復旧ループは後続で、ここでは自動mergeを有効化しない。
+
+### ControllerによるHTTP wrapperの監督と再起動回収
+
+`MergeHTTPTransport.Start`は親のgate/fenceが成立したregistered intentだけから新規のimmutable specを作成し、trusted executableの`_merge-http`を独立groupとして一回だけ起動する。最大35秒で結果を待ち、cancel/期限切れにも別の5秒のcleanup予算を使って元identityのgroup全体を停止してからleaderをreapする。停止不明は所有を保持し、resultだけで解放しない。既存/部分specを新しい起動権限として使わない。
+
+`Recover`はモデル・HTTP送信・代替wrapperを起動しない。元のHTTP登録があれば5秒以内でgroupを停止し、その後private resultを再認証して`FinishProductMergeHTTP`へ渡す。result/specの欠落・不正は、native write recordがなくても`outcome_unknown`としてmutation leaseを保持する。HTTP登録前ならDB transactionで将来の登録を封じる既存abort protocolを使う。既存の停止/abort結果は保存済みreceiptを返し、再利用されたPIDへ触れない。
+
+実Go wrapper・fake-ghのfixtureで、成功と生存descendant、unknown、native送信中cancel後のgroup停止、明確な未開始、実行file欠落、別store epochでの回収、result欠落/不正spec、未登録intentのseal、再実行でPUTが増えないことを確認する。daemonの送信queue/authority起動は後続であり、自動mergeとnative P受入は引き続き未成立である。

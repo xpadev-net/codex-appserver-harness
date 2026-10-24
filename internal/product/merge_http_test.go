@@ -22,6 +22,17 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 	t.Helper()
 	ctx := context.Background()
 	k := g.Cloud.Store
+	transportMode := ""
+	if strings.HasPrefix(mode, "transport_") {
+		transportMode = strings.TrimPrefix(mode, "transport_")
+		mode = transportMode
+		if mode == "success" {
+			mode = "group"
+		}
+		if mode == "missing" {
+			mode = "no_request"
+		}
+	}
 	job, err := k.PrepareProductMergeHTTP(ctx, requestID, "kernel-http-owner", "merge")
 	if err != nil {
 		t.Fatal(err)
@@ -36,13 +47,6 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 	job, err = k.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, gate)
 	if err != nil {
 		t.Fatal(err)
-	}
-	spec, err := WriteMergeHTTPSpec(ctx, k, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := WriteMergeHTTPSpec(ctx, k, job.ID); !os.IsExist(err) {
-		t.Fatal("spec was not immutable", err)
 	}
 	var authCalls atomic.Int64
 	if mode != "no_authority" {
@@ -90,6 +94,7 @@ case "$*" in
    /bin/cat > "$HTTP_WRAPPER_DATA/request.json"
    case "$HTTP_WRAPPER_MODE" in
      unknown) printf 'lost response'; exit 51 ;;
+     cancel) /bin/sleep 30 ;;
      group) /bin/sleep 30 & ;;
    esac
    printf '%s' '{"merged":true,"sha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}' ;;
@@ -98,6 +103,17 @@ esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
+	}
+	if transportMode != "" {
+		checkMergeHTTPTransport(t, k, job, bin, mode, transportMode)
+		return
+	}
+	spec, err := WriteMergeHTTPSpec(ctx, k, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteMergeHTTPSpec(ctx, k, job.ID); !os.IsExist(err) {
+		t.Fatal("spec was not immutable", err)
 	}
 	exe, err := os.Executable()
 	if err != nil {
