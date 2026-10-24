@@ -15,7 +15,8 @@ import (
 )
 
 type CloudReviewPolicy struct {
-	Policy     review.Policy
+	Policy review.Policy
+	// ReadReport must honor the supplied cancellation and deadline.
 	ReadReport func(context.Context) (contract.Report, error)
 }
 
@@ -41,6 +42,8 @@ func (r CloudReviewReader) Read(ctx context.Context, operationID string) (CloudR
 	if r.Store == nil || r.API == nil {
 		return snapshot, errors.New("Cloud review store and read transport required")
 	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	round, err := r.Store.ReadProductCloudRound(ctx, operationID)
 	if err != nil {
 		return snapshot, err
@@ -58,8 +61,6 @@ func (r CloudReviewReader) Read(ctx context.Context, operationID string) (CloudR
 	if transport == nil {
 		return snapshot, errors.New("missing Cloud review read transport")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	api := &budgetResourceAPI{ResourceAPI: transport}
 	raw, err := api.ResourceGET(ctx, "")

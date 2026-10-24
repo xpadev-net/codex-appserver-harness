@@ -77,7 +77,7 @@ func (a *cloudReadAPI) ResourcePages(ctx context.Context, path, field string) ([
 }
 
 func TestCloudReviewReaderRequiresCurrentFormalApprovalAndFreshCapability(t *testing.T) {
-	for _, mode := range []string{"approved", "commented", "old_sha", "old_round", "untrusted", "dismissed", "changes_requested", "unknown_capability", "unknown_request", "unknown_sha", "future_report", "future_final_report", "unsupported_capability", "missing_evidence", "host_disabled", "revoked_during_read", "report_error", "missing_comment", "edited_comment", "wrong_requester", "duplicate_comment", "wrong_base", "changed_head", "changed_repository", "future_review", "duplicate_review"} {
+	for _, mode := range []string{"approved", "initial_timeout", "commented", "old_sha", "old_round", "untrusted", "dismissed", "changes_requested", "unknown_capability", "unknown_request", "unknown_sha", "future_report", "future_final_report", "unsupported_capability", "missing_evidence", "host_disabled", "revoked_during_read", "report_error", "missing_comment", "edited_comment", "wrong_requester", "duplicate_comment", "wrong_base", "changed_head", "changed_repository", "future_review", "duplicate_review"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			r, requestAPI, saved, id := requestFixture(t)
@@ -167,8 +167,14 @@ func TestCloudReviewReaderRequiresCurrentFormalApprovalAndFreshCapability(t *tes
 				wantError = true
 			}
 			reads := 0
-			reader := CloudReviewReader{Store: r.Store, API: func(storage.ProductTarget) ResourceAPI { return api }, Repositories: map[int64]CloudReviewPolicy{17: {Policy: policy, ReadReport: func(context.Context) (contract.Report, error) {
+			reader := CloudReviewReader{Store: r.Store, API: func(storage.ProductTarget) ResourceAPI { return api }, Repositories: map[int64]CloudReviewPolicy{17: {Policy: policy, ReadReport: func(readCtx context.Context) (contract.Report, error) {
 				reads++
+				if mode == "initial_timeout" {
+					deadline, ok := readCtx.Deadline()
+					if !ok || time.Until(deadline) > 30*time.Second {
+						return report, errors.New("report lookup is outside read deadline")
+					}
+				}
 				if mode == "report_error" {
 					return report, errors.New("report unavailable")
 				}
@@ -183,7 +189,7 @@ func TestCloudReviewReaderRequiresCurrentFormalApprovalAndFreshCapability(t *tes
 				if err != nil {
 					t.Fatal(result, err)
 				}
-				if result.Decision.Approved != (mode == "approved") {
+				if result.Decision.Approved != (mode == "approved" || mode == "initial_timeout") {
 					t.Fatal("native approval misclassified", mode, result.Decision)
 				}
 				if reads != 2 || api.pulls != 2 || api.metadata != 2 {
