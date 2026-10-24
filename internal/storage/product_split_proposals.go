@@ -198,6 +198,13 @@ func loadProductSplitProposal(ctx context.Context, tx *sql.Tx, r ProductSplitPro
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_request' AND work_item_id=? AND json_extract(payload,'$.head_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children','product_split_children_history','product_split_child_intent','product_split_child_intent_history','product_split_allocation','product_split_allocation_history') AND json_extract(payload,'$.value.parent_head_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children_admission','product_split_child_intent_admission','product_split_allocation_admission','product_split_work_item_seat') AND json_extract(payload,'$.parent_head_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_children' AND json_extract(payload,'$.value.parent_head_id')=?)", head, head, r.Target.WaveID, head, head, head, head).Scan(&known); err != nil {
 			return saved, err
 		}
+		if !known {
+			var witnessErr error
+			known, witnessErr = splitCreationWitnessTx(ctx, tx, r.Target.WaveID, head)
+			if witnessErr != nil {
+				return saved, witnessErr
+			}
+		}
 		if known {
 			return saved, ErrProductSplitHeld
 		}

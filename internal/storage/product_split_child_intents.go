@@ -140,6 +140,13 @@ func loadProductSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitCh
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_children_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children_history','product_split_child_intent','product_split_child_intent_history','product_split_child_intent_admission') AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_allocation','product_split_allocation_admission') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_allocation_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_work_item_seat' AND json_extract(payload,'$.proposal_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_children' AND operation_key=?)", r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return plan, err
 		}
+		if !known {
+			var witnessErr error
+			known, witnessErr = splitCreationWitnessTx(ctx, tx, r.Target.WaveID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID}))
+			if witnessErr != nil {
+				return plan, witnessErr
+			}
+		}
 		if known {
 			return plan, ErrProductSplitHeld
 		}
