@@ -146,4 +146,5 @@ func checkFinalPlanner(t *testing.T, k *storage.KernelStore, target contract.Tar
 	if err := k.Put(ctx, "product_merged_work_item", receipt.Value.MergeID, target.WaveID, receipt); err != nil {
 		t.Fatal(err)
 	}
+	checkFinalRunner(t, k, target, receipt)
 }

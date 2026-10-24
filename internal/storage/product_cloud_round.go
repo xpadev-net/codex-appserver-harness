@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"reflect"
 	"time"
@@ -39,7 +38,7 @@ func (k *KernelStore) ReadProductCloudRound(ctx context.Context, id string) (Pro
 	return round, tx.Commit()
 }
 
-func (k *KernelStore) productCloudRoundTx(ctx context.Context, tx *sql.Tx, id string) (ProductCloudRound, error) {
+func (k *KernelStore) productCloudRoundTx(ctx context.Context, tx queryer, id string) (ProductCloudRound, error) {
 	var round ProductCloudRound
 	intent, state, err := prIntentTx(ctx, tx, id)
 	if err != nil {

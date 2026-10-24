@@ -257,7 +257,7 @@ func (k *KernelStore) mergePreflightTx(ctx context.Context, tx *sql.Tx, round Pr
 	}
 	return ready, seat, nil
 }
-func (k *KernelStore) readProductMergeTx(ctx context.Context, tx *sql.Tx, id string) (ProductMerge, error) {
+func (k *KernelStore) readProductMergeTx(ctx context.Context, tx queryer, id string) (ProductMerge, error) {
 	job, found, err := lookupProductMerge(ctx, tx, id)
 	if err != nil {
 		return job, err
