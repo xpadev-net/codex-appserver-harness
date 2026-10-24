@@ -43,3 +43,17 @@ ReserveProductSplitChildren は、外部作成の前提として集合内の全�
 head/history/admission/seat/ledger の独立した証拠を列挙して全体を照合するため、一つを失っても空き枠とはみなさない。残った予約証拠は proposal・子集合の再生成も止める。登録 head の喪失も、immutable version や初期 admission に残る同じ ID の新規登録で修復しない。
 
 この予約だけでは HTTP 送信・WorkItem 登録・Task 実行・親退役を許可しない。物理送信者と停止証拠、不明応答の再照合、子の part scope を接続する段階でも予約の証拠を再照合する必要がある。
+
+## 子 Issue 作成の registered HTTP journal
+
+PrepareProductSplitCreate は、予約済み集合の子一件について安定した作成 intent と mutation lease を保存する。元の子 ID・body・marker・repository・allocation を固定し、同じ intent を別 owner や別 request へ上書きしない。prepared → unknown → stopped → observed、または prepared → aborted の有界な経路だけを扱う。head と immutable な各 event を同時に書き、過去の全 event と元 value/admission を照合する。古い head への巻き戻し、記録の欠落、後続 lease の誤解放を拒否する。
+
+ObserveProductSplitCreateGate は fresh source GET を行った trusted host 専用で、現在の source ID/digest と短い有効期限を固定する。direct は保存済み request を照合する。Github source は ready の head/history・policy pin・現在 scope/要求を照合する。同じ内容の GET は source snapshot の ObservedAt を更新しないため、この専用 gate を fresh GET の時点として用いる。model はこの記録を作れない。gate の head/history 喪失を新しい鮮度の証拠で自動修復しない。
+
+ActivateProductSplitCreateHTTP は、実際に動く process group leader 自身だけが一度勝てる送信許可である。送信直前に現在の pause/方向修正/期限/親候補/source と未失効の gate、元 allocation/子集合を再照合し、process identity・spec digest・gate digest と unknown を同じ transaction で保存する。wrapper は Start=false なら送信できない。AbortUnactivatedProductSplitCreate は未起動 intent を原子的に封鎖し、遅れた wrapper も拒否する。
+
+FinishProductSplitCreateHTTP は保存された process group の実停止を host が確認してから stopped を記録し、同じ lease generation だけを返却する。停止が確認できても結果は不明のままである。RecordProductSplitCreatedIssue は、その後の trusted GET で repository・非 PR・open・title/body/marker が一致した一件だけを関連付ける。重複・編集・不明応答・GET の一時的な不在を POST の再送許可へ変換しない。外部資源 binding の喪失も再生成を保留する。
+
+outbox の head/history/admission/event/gate/資源 binding、および孤立した mutation lease は、上流 proposal・子集合・allocation と lifetime 枠の喪失時にも独立した禁止の証拠になる。
+
+この単位は送信 journal と認可/停止/GET 結果の trusted storage port であり、HTTP adapter/worker はまだ呼び出さない。実プロセスの group 登録・一度だけの権限・遅延封鎖・停止前照合拒否・再起動・喪失/復旧・transaction rollback を Go/SQLite subprocess fixture で検査する。fixture は HTTP を送らず、source GET の証拠も host fixture と区別する。実 HTTP wrapper/検索・再照合、子の登録/part scope、depth 系譜、親退役と gateway は引き続き必要である。

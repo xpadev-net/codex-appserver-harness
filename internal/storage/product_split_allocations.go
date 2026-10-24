@@ -40,6 +40,13 @@ func loadProductSplitAllocation(ctx context.Context, tx *sql.Tx, r ProductSplitC
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_allocation_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_allocation_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_work_item_seat' AND json_extract(payload,'$.proposal_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE operation_key=? AND kind='split_children')", r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
+		if !known {
+			var witnessErr error
+			known, witnessErr = splitCreationWitnessTx(ctx, tx, r.Target.WaveID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID}))
+			if witnessErr != nil {
+				return saved, witnessErr
+			}
+		}
 		if known {
 			return saved, ErrProductSplitHeld
 		}
@@ -104,10 +111,21 @@ func loadProductSplitAllocation(ctx context.Context, tx *sql.Tx, r ProductSplitC
 // Reads the union of independent witnesses. Loss of one budget/index record
 // cannot free a seat or permit a replacement allocation.
 func splitAllocationIDsTx(ctx context.Context, tx *sql.Tx, waveID string) ([]string, error) {
+	var orphan bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))", waveID).Scan(&orphan); err != nil {
+		return nil, err
+	}
+	if orphan {
+		return nil, ErrProductSplitHeld
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM records WHERE work_item_id=? AND kind IN ('product_split_allocation','product_split_allocation_admission')
  UNION SELECT work_item_id FROM records WHERE kind='product_split_allocation_history' AND json_extract(payload,'$.value.request.target.wave_id')=?
  UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE work_item_id=? AND kind='product_split_work_item_seat'
- UNION SELECT operation_key FROM kernel_budget_ledger WHERE wave_id=? AND kind='split_children' LIMIT ?`, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
+ UNION SELECT operation_key FROM kernel_budget_ledger WHERE wave_id=? AND kind='split_children'
+ UNION SELECT json_extract(payload,'$.request.proposal_id') FROM records WHERE kind='product_split_create_history' AND json_extract(payload,'$.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind IN ('product_split_create_admission','product_split_created_resource') AND work_item_id=?
+ UNION SELECT json_extract(payload,'$.value.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.request.target.wave_id')=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
 	if err != nil {
 		return nil, err
 	}
