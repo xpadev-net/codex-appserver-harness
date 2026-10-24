@@ -232,6 +232,9 @@ func checkMergeDispatchWorker(t *testing.T, g KernelMergeGate, saved storage.Pro
 			if err != nil || currentErr != nil || receipt.Value.Projection == nil || current.Value.WorkItem.Phase != domain.Merged || current.Value.Candidate != saved.Value.Candidate {
 				t.Fatal("native result not reflected into original WorkItem", receipt, current, err, currentErr)
 			}
+			if mode == "alias" {
+				checkFinalPlanner(t, k, saved.Value.Target)
+			}
 		} else if _, err := os.Stat(filepath.Join(bin, "calls")); !os.IsNotExist(err) {
 			t.Fatal("recovery/cleanup launched a native client", err)
 		}

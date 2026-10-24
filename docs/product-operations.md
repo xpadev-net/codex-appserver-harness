@@ -808,3 +808,11 @@ ledgerは受入ではなく、coverage事実と未完了一覧である。これ
 本文は既存のscoped manifest referenceで渡し、inline wakeへ全merge情報を展開しない。Taskには親全体のledgerを渡さない。保存済みinputは元bytes/digestのまま保持し、新しいmerge後は新しいmanifest/referenceを作る。1 Waveあたりmerge metadataとregistration版それぞれ1024件、ledger JSON 1 MiBを参照境界とし、超過時は`unavailable_product_coverage`を表示して保留し、履歴を削除/切り詰めない。
 
 fixtureでpending→保存済みcoverage、元identity/criterion対応、旧scope/policy/sourceの非再利用、plan targetの保持、新候補の残作業、未知/欠落/破損、reopen、親だけのreference入力、旧inputの不変性、metadata上限とモデルreadinessの保留維持を確認する。native Cloud/P受入には数えない。
+
+### merge後の最終検証計画
+
+`product.FinalPlanner`は全criterionのmerge coverageが揃ったWaveについて、明示的なsource/capability gateの前後照合とGitHubのrepository/refの再読込を行う。元の全merge SHAが現在のdefault branch HEADの祖先であることをcompare APIで確認し、repository ID/name/base branch・固定HEAD SHAを保存する。30秒・2048 GET・合計16 MiB・単一応答4 MiBの上限を持ち、read失敗、移動したHEAD、別repository、祖先関係不明は保留する。
+
+`PrepareProductFinalPlan`は同じtransactionで現在target・pause/cancel/deadline・coverageを再照合し、残作業・未merge・pending・unavailableが一つでもあれば保存しない。各repositoryのホスト必須profileと、元の独立検証計画が要求/criterionに使用したprofileの和集合、policy ID/digest、merge receipt ID/digest、全体coverage digest、実HEADのcandidateを不変の計画へ固定する。元の観測時刻は30秒以内を必要とし、再観測で同じ内容なら元のID/時刻を再利用する。HEADが変われば別計画を保存し、過去の計画を上書きしない。元の計画へ戻る場合もcurrent参照を更新する。head/history/admissionや元receipt/policyの欠落は復元せず保留する。
+
+このportは検証入力の保存までで、daemonの自動実行、runner起動、pass結果、予算予約、親最終受入はまだ接続しない。保存済み計画を現在の実行許可にせず、実行/受入時の最新baseと要求の再照合が別途必要である。実SQLite/registered mergeと実Git/runner/独立reviewのfixtureで入力固定・拒否・replay・reopen・rollbackを確認し、native P合格には数えない。
