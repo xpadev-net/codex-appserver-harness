@@ -93,10 +93,10 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 	if err := contract.DecodeStrict([]byte(run.Final), &result); err != nil {
 		return value, fmt.Errorf("%w: invalid structured final", ErrTaskEvidence)
 	}
-	if err := result.Validate(); err != nil {
+	if err := result.ValidateAssignment(task.Target(), task.ID, task.PhaseID, task.Spec.Criteria); err != nil {
 		return value, fmt.Errorf("%w: invalid product output contract", ErrTaskEvidence)
 	}
-	if (UsesProductChangeOutput(w, task) && result.SchemaVersion != 2 || UsesProductVerificationOutput(w, task) && result.SchemaVersion != 3) || result.Target != task.Target() || result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Outcome != "result" {
+	if (UsesProductChangeOutput(w, task) && result.SchemaVersion != 2 || UsesProductVerificationOutput(w, task) && result.SchemaVersion != 3) || result.Outcome != "result" {
 		return value, fmt.Errorf("%w: output assignment mismatch", ErrTaskEvidence)
 	}
 	ready, err := k.productChangeReferenceTx(ctx, tx, b, w, task, result.ProductChanges[0])
