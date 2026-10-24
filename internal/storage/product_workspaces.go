@@ -173,7 +173,7 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 		return w, task, b, err
 	}
 	if inputs != task.InputDigest {
-		captured, err := k.captureProductTemplateFixInputTx(ctx, tx, w, task, value)
+		captured, err := k.captureProductTemplateWriterInputTx(ctx, tx, w, task, value)
 		if err != nil {
 			return w, task, b, err
 		}
