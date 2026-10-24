@@ -26,7 +26,7 @@ func checkKernelReviewGate(t *testing.T, e Executor, old storage.ProductTargetSn
 	report.RepositoryID, report.DefaultBranch = current.Value.WorkItem.RepositoryID, current.Value.BaseBranch
 	report.Capabilities["cloud_request"] = contract.Capability{State: contract.Verified, Evidence: "fixture observed request comment"}
 	reads := 0
-	route := CloudReviewRoute{Trigger: "@review please review", RequesterID: 71, ReadReport: func(context.Context) (contract.Report, error) { reads++; return report, nil }}
+	route := CloudReviewRoute{CloudReviewerIDs: []int64{91}, Trigger: "@review please review", RequesterID: 71, ReadReport: func(context.Context) (contract.Report, error) { reads++; return report, nil }}
 	g := KernelReviewGate{Publication: e.PublicationGate, Routes: map[int64]CloudReviewRoute{report.RepositoryID: route}, API: func(_ storage.ProductTarget, before func(context.Context, string, string) error) ReviewAPI {
 		return &fakeReviewAPI{fakeAPI: api, guard: before}
 	}}
@@ -171,4 +171,5 @@ func checkKernelReviewGate(t *testing.T, e Executor, old storage.ProductTargetSn
 	if _, err = r.Request(ctx, reply.OperationID, "other-owner"); err != nil || requestAPI.requestWrites != 1 {
 		t.Fatal("review replay wrote again", err)
 	}
+	checkKernelMergeWithQuality(t, e, current, reply.OperationID, requestAPI)
 }
