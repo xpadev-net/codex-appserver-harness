@@ -267,6 +267,10 @@ func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.Product
 	if _, err := e.Store.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "merge-gate-resume", Target: saved.Value.Target, Action: "resume", Reason: "restore fixture"}); err != nil {
 		t.Fatal(err)
 	}
+	if httpMode == "partial_continuation" {
+		checkPartialMergeContinuation(t, e, g, saved, id)
+		return
+	}
 	if httpMode != "" {
 		checkMergeHTTPWrapper(t, g, saved, id, httpMode)
 		return
