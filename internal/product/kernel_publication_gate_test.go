@@ -11,7 +11,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
-func checkKernelPublicationGate(t *testing.T, executor Executor, plan storage.ProductVerificationPlanSnapshot) {
+func checkKernelPublicationGate(t *testing.T, executor Executor, plan storage.ProductVerificationPlanSnapshot, mode string) {
 	t.Helper()
 	ctx := context.Background()
 	k := executor.Store
@@ -72,6 +72,9 @@ func checkKernelPublicationGate(t *testing.T, executor Executor, plan storage.Pr
 	again, err := executor.PublicationGate(ctx, saved.Value.Product)
 	if err != nil || !reflect.DeepEqual(publication, again) {
 		t.Fatal("publication body was not stable", again, err)
+	}
+	if mode != "publication" {
+		checkBranchPublisher(t, executor, saved.Value.Product, mode)
 	}
 	repo := executor.Repositories[saved.Value.Product.Value.WorkItem.RepositoryID]
 	profile := repo.Policy.Verification.Profiles["unit"]

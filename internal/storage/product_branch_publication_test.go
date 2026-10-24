@@ -39,7 +39,7 @@ func branchStopFixture(k *KernelStore, job ProductBranchPublication, started tim
 	if published {
 		head = job.Value.Source.SHA
 	}
-	return ProductBranchStop{PublicationID: job.ID, ProofID: job.ID + ":stopped", Reason: "fixture trusted Git owner joined", StartedAt: started, FinishedAt: k.clock(), Observation: workspace.BranchPublication{Source: job.Value.Source, Remote: job.Value.Remote.URL, Branch: job.Value.Branch, RemoteSHA: head, Attempted: attempted}}
+	return ProductBranchStop{RemoteVerified: published, PublicationID: job.ID, ProofID: job.ID + ":stopped", Reason: "fixture trusted Git owner joined", StartedAt: started, FinishedAt: k.clock(), Observation: workspace.BranchPublication{Source: job.Value.Source, Remote: job.Value.Remote.URL, Branch: job.Value.Branch, RemoteSHA: head, Attempted: attempted}}
 }
 
 func TestProductBranchPublicationBindsCanonicalSourceAndClaimsBothBoundariesOnce(t *testing.T) {
