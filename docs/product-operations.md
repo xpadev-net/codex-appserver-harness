@@ -575,3 +575,28 @@ storage fixtureはclaim/送信の二重実行拒否、source/metadata/owner/時�
 `KernelReviewGate.Check` は新journalのpublication quality、確定したPR番号・WorkItem marker・同一repositoryのhead/base ref・固定head/base SHA・open/non-draftを検査する。PRの関連付けでprojectionが変わった場合は、host workerによる同じ候補の公開準備更新を待つ。ホスト設定の`CloudReviewRoute.ReadReport`は毎回信頼できるcapability reportを再読込し、同じrepository ID/name/default branchの`cloud_request=verified`と取得可能な証拠を要求する。取得不能・unknown・unsupportedは依頼を保留する。remote/report read後にも品質を再検査し、`ReviewRequester`はHTTP送信直前にgateを再実行するため、準備後の依頼能力取消ではwriteしない。
 
 依頼gateは`cloud_native_approval`の確認・正式APPROVED・CI/rules・merge許可を生成しない。実checkout/seal/runner/local reviewに注入したpublication/review transportとreportを使い、PR関連付け後の品質更新、identity/head/base/marker/状態の変更、report欠落・取消、送信前の再評価、未送信retryと一回だけの依頼を確認する。daemonへの公開/review worker結線、実Cloud能力とP受入、部分公開とmerge後の後続は引き続き未接続であり、このfixtureをその合格には数えない。
+
+
+### daemonのPR公開worker
+
+privateな`--product-executor`のschema 1設定へ、次の`publication`項目を追加すると、local実行workerと独立したPR dispatcherを同じcontroller ownerで起動する。省略時はGitHubへ書き込まない。`every_seconds`をstartup/restart後の照合周期とし、`workers`は1..8、source policyとreview routeは各128件まで、対象repositoryは同じexecutor設定へ登録した一意なID/nameに限る。`review_routes`は空でも`[]`と記す。
+
+```json
+{
+  "publication": {
+    "workers": 2,
+    "source_policies": [
+      {"repository": "OWNER/REPOSITORY", "repository_id": 12345, "ready_label": "harness-ready", "hold_label": "harness-hold"}
+    ],
+    "review_routes": [
+      {"repository_id": 12345, "trigger": "@CONFIGURED_REVIEWER review", "requester_id": 67890, "capabilities_path": "/absolute/private/capabilities.json"}
+    ]
+  }
+}
+```
+
+これは既存executor設定へ追加する部分であり、repository/policy/runner等の必須設定を省略できない。review routeなしでも公開を設定できるが、Cloud依頼は保留する。reportは既存のcanonical絶対pathにあるprivate same-user通常file（hardlink/symlink不可）、1 MiB以内の厳密な`contract.Report`で、各gateが再読込する。report pathは全runnerの保護pathへ追加し、DB・認証・Git metadata等と合わせた既存上限を維持する。unknownなreportはdaemonを起動できるが依頼許可にはならない。
+
+direct依頼は保存した現行版を使う。Issue由来の公開には採用時と同じ`source_policies`が必要で、公開準備・Git push・PR HTTP送信・review依頼のgateでrepositoryとIssueを再取得し、内容/label/状態/policyの変化・取得不能を保存済み禁止へ反映する。送信前のreadとGitHub writeを外部のatomic transactionにはできないが、定期pollのreadyだけで送信しない。設定済みsourceをstartup/周期でも順番に再照合するため、取得失敗等の保留が回復すればdispatch preflightへ再び進める。scope編集は明示的な版付き同期まで保留し、手動pauseを解除しない。
+
+local実行・PR dispatcher・source照合はmodel loopの外で動き、終了/異常時は他workerをcancelして全てjoinする。同期Git/HTTPの停止確認中にcontroller lock/Storeを解放せず、停止不明を成功や未送信へ変換しない。private設定/route境界、reportの差替え・権限変更、sourceのfresh readと既存readyの失効、実`gh` argvを模したGET subprocess、commit後hint、worker間の異常伝播・daemon lock保持をfixtureで検証する。global製品model readiness、正式APPROVED/CI/rules/merge、部分公開・versioned continuation、native P/M受入は引き続き未接続である。
