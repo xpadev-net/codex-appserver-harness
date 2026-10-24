@@ -63,8 +63,8 @@ func stoppedProductWriterRunFixture(t *testing.T, k *storage.KernelStore, ready 
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.ThreadID, b.PreparationID = "test-product-thread", "test-product-preparation"
-	run := contract.SessionRun{ID: "test-product-run", ThreadID: b.ThreadID, TurnID: "test-product-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
+	b.ThreadID, b.PreparationID = "test-product-thread-"+task.ID, "test-product-preparation-"+task.ID
+	run := contract.SessionRun{ID: "test-product-run-" + task.ID, ThreadID: b.ThreadID, TurnID: "test-product-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
 	for _, apply := range configure {
 		apply(&run)
 	}

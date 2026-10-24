@@ -18,7 +18,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
-func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID, mode string) {
+func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID, mode string, responseSHA ...string) {
 	t.Helper()
 	ctx := context.Background()
 	k := g.Cloud.Store
@@ -105,6 +105,20 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 	if err := os.WriteFile(filepath.Join(bin, "repository.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	mergeSHA := strings.Repeat("e", 40)
+	if len(responseSHA) > 1 {
+		t.Fatal("one merge response SHA required")
+	}
+	if len(responseSHA) == 1 {
+		mergeSHA = responseSHA[0]
+	}
+	mergeResponse, err := json.Marshal(map[string]any{"merged": true, "sha": mergeSHA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "merge-response.json"), mergeResponse, 0600); err != nil {
+		t.Fatal(err)
+	}
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$HTTP_WRAPPER_DATA/calls"
 case "$*" in
@@ -118,7 +132,7 @@ case "$*" in
      cancel) /bin/sleep 30 ;;
      group) /bin/sleep 30 & ;;
    esac
-   printf '%s' '{"merged":true,"sha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}' ;;
+   /bin/cat "$HTTP_WRAPPER_DATA/merge-response.json" ;;
  *) exit 49 ;;
 esac
 `
