@@ -665,6 +665,6 @@ fixtureでは257件超のページ、破損した先頭依頼の後の正常処�
 
 `KernelMergeGate.Check`はcanonical publication qualityとsource gateを前後に実行し、元の確定review依頼のProduct snapshotが現在の候補と一致すること、保存済みproviderによる現在SHAの正式APPROVED、未解消feedbackなしを要求する。host reportの全`MergeRequirements`（Cloud正式承認、CI mapping、rules等）が証拠付きverifiedでなければ判定しない。request-only能力やローカルreviewを正式承認に変換しない。
 
-CIはhost指定の名前・App ID・success条件の最新checkを選び、完了時刻も確認する。`head`と`test_merge`を明示設定し、後者はtest-merge commitの二親が現在head/baseと一致することを実APIで照合する。check/inline feedbackとrulesのCLEANを取得し、Cloud/PR/repositoryおよびCI/feedback/rulesを再取得して変化を拒否する。全体30秒・共有16 MiB、collection/API要求数も各readerで制限する。rules取得用`ResourceConditions`はboundedなread-only gh subprocessを使う。
+必須CI設定は1〜128件を要求し、CIはhost指定の名前・App ID・success条件の最新checkを選び、完了時刻も確認する。`head`と`test_merge`を明示設定し、後者はtest-merge commitの二親が現在head/baseと一致することを実APIで照合する。check/inline feedbackとrulesのCLEANを取得し、Cloud/PR/repositoryおよびCI/feedback/rulesを再取得して変化を拒否する。全体30秒・共有16 MiB、collection/API要求数も各readerで制限する。rules取得用`ResourceConditions`はboundedなread-only gh subprocessを使う。
 
-返す`MergeAssessment`は観測値であり、永続grant・送信許可・WorkItem/Wave完了ではない。daemon merge送信、専用journal、expected-head付きの一回限りの送信fenceとunknown復旧は後続実装で、この判定だけで自動mergeを有効にしない。fixtureでは現候補のAPPROVED、CIの発行元/最新性/二親、能力取消、読み取り中の変更、feedbackとoperator holdを確認する。実SQLite/Git/runnerと独立reviewで作った品質証拠を使う統合fixtureでも本gateを通すが、native Cloud/P実受入には数えない。
+返す`MergeAssessment`は観測値であり、永続grant・送信許可・WorkItem/Wave完了ではない。daemon merge送信、専用journal、expected-head付きの一回限りの送信fenceとunknown復旧は後続実装で、この判定だけで自動mergeを有効にしない。fixtureでは現候補のAPPROVED、CIの発行元/最新性/二親、能力取消、読み取り中の変更、feedbackとoperator holdを確認する。実SQLite/Git/runnerと独立reviewで作った品質証拠を使う統合fixture（sourceは版確認のfixture）でも本gateを通すが、native Cloud/P実受入には数えない。

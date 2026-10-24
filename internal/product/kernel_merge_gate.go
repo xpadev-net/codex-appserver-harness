@@ -55,7 +55,7 @@ func (g KernelMergeGate) Check(ctx context.Context, saved storage.ProductTargetS
 	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	p := saved.Value
 	host, ok := g.Repositories[p.WorkItem.RepositoryID]
-	if !ok || host.ReadReport == nil || host.CIRefMode != "head" && host.CIRefMode != "test_merge" || len(host.RequiredChecks) > 128 {
+	if !ok || host.ReadReport == nil || host.CIRefMode != "head" && host.CIRefMode != "test_merge" || len(host.RequiredChecks) < 1 || len(host.RequiredChecks) > 128 {
 		return empty, errors.New("explicit bounded merge policy required")
 	}
 	// Freeze caller-owned slices and reject ambiguous or permissive check rules.
@@ -103,7 +103,7 @@ func (g KernelMergeGate) Check(ctx context.Context, saved storage.ProductTargetS
 	if err != nil {
 		return empty, err
 	}
-	if !reflect.DeepEqual(cloud.Round.Product, saved) || !cloud.Decision.Approved || cloud.Decision.Blocking || len(cloud.Round.Packet.CloudReviewerIDs) == 0 {
+	if !reflect.DeepEqual(cloud.Round.Product, saved) || !cloud.Decision.Approved || cloud.Decision.Blocking || len(cloud.Decision.ReviewIDs) == 0 || len(cloud.Round.Packet.CloudReviewerIDs) == 0 {
 		return empty, errors.New("current assigned Cloud round lacks formal approval")
 	}
 	for _, id := range cloud.Decision.ReviewIDs {

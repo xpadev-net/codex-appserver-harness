@@ -95,7 +95,7 @@ func mergeGateFixture(t *testing.T) (KernelMergeGate, storage.ProductTargetSnaps
 }
 
 func TestKernelMergeGateRequiresCurrentApprovalCIAndAllCapabilities(t *testing.T) {
-	for _, mode := range []string{"head", "test_merge", "unknown_capability", "blank_evidence", "future_report", "wrong_report_repository", "commented", "dismissed", "changes_requested", "old_review", "wrong_actor", "unassigned_approval", "feedback", "inline_feedback", "missing_ci", "wrong_ci_app", "wrong_ci_sha", "new_pending_ci", "ci_failure", "future_ci", "duplicate_ci", "missing_ci_time", "unknown_rules", "bad_parents", "changed_head", "changed_approval", "changed_ci", "changed_comments", "changed_rules", "revoked_report", "source_hold", "quality_hold", "quality_changed", "stale_product", "invalid_check_policy"} {
+	for _, mode := range []string{"head", "test_merge", "unknown_capability", "blank_evidence", "future_report", "wrong_report_repository", "commented", "dismissed", "changes_requested", "old_review", "wrong_actor", "unassigned_approval", "feedback", "inline_feedback", "missing_ci", "wrong_ci_app", "wrong_ci_sha", "new_pending_ci", "ci_failure", "future_ci", "duplicate_ci", "missing_ci_time", "unknown_rules", "bad_parents", "changed_head", "changed_approval", "changed_ci", "changed_comments", "changed_rules", "revoked_report", "source_hold", "quality_hold", "quality_changed", "stale_product", "invalid_check_policy", "empty_check_policy", "mixed_assigned_approval"} {
 		t.Run(mode, func(t *testing.T) {
 			g, saved, api, id, report := mergeGateFixture(t)
 			host := g.Repositories[17]
@@ -183,6 +183,17 @@ func TestKernelMergeGateRequiresCurrentApprovalCIAndAllCapabilities(t *testing.T
 				}
 			case "stale_product":
 				saved.Digest = "other"
+			case "empty_check_policy":
+				host.RequiredChecks = nil
+			case "mixed_assigned_approval":
+				next := api.reviews[0]
+				next.ID++
+				next.User.ID = 92
+				api.reviews = append(api.reviews, next)
+				route := g.Cloud.Repositories[17]
+				route.Policy.TrustedReviewerIDs = []int64{91, 92}
+				route.Policy.RequiredApprovals = 2
+				g.Cloud.Repositories[17] = route
 			case "invalid_check_policy":
 				host.RequiredChecks[0].AllowedConclusions = []string{"neutral"}
 			}
@@ -227,11 +238,23 @@ func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.Product
 	check.App.ID = 9
 	api := &mergeReadFixture{cloudReadAPI: native, checks: []github.Check{check}, conditions: "CLEAN"}
 	cloud := CloudReviewReader{Store: e.Store, API: func(storage.ProductTarget) ResourceAPI { return native }, Repositories: map[int64]CloudReviewPolicy{report.RepositoryID: {ReadReport: readReport, Policy: review.Policy{VerifiedRequest: true, VerifiedNativeApproval: true, VerifiedSHAMapping: true, TrustedReviewerIDs: []int64{91}, RequiredApprovals: 1}}}}
-	source := KernelSourceGate{Store: e.Store}
-	g := KernelMergeGate{Publication: e.PublicationGate, Source: source.Check, Cloud: cloud, API: func(storage.ProductTarget) MergeReadAPI { return api }, Repositories: map[int64]KernelMergePolicy{report.RepositoryID: {CIRefMode: "head", RequiredChecks: []gate.RequiredCheck{{Name: "unit", AppID: 9, AllowedConclusions: []string{"success"}}}, ReadReport: readReport}}}
+	// The sealer fixture predates Issue admission. Supply a version-only
+	// source fixture here; actual live Issue source behavior is independently
+	// covered by KernelSourceGate tests. Local quality below is production.
+	source := func(ctx context.Context, p storage.ProductTargetSnapshot) error {
+		w, err := e.Store.Wave(ctx, p.Value.Target.WaveID)
+		if err != nil {
+			return err
+		}
+		if w.Target() != p.Value.Target {
+			return storage.ErrProductQualityHeld
+		}
+		return nil
+	}
+	g := KernelMergeGate{Publication: e.PublicationGate, Source: source, Cloud: cloud, API: func(storage.ProductTarget) MergeReadAPI { return api }, Repositories: map[int64]KernelMergePolicy{report.RepositoryID: {CIRefMode: "head", RequiredChecks: []gate.RequiredCheck{{Name: "unit", AppID: 9, AllowedConclusions: []string{"success"}}}, ReadReport: readReport}}}
 	assessment, err := g.Check(ctx, saved, id)
 	if err != nil || assessment.RoundDigest != round.Digest {
-		t.Fatal("canonical quality/source not connected to merge assessment", assessment, err)
+		t.Fatal("canonical quality not connected to merge assessment", assessment, err)
 	}
 	// A fresh operator hold after the successful read must invalidate the next
 	// assessment despite the same previously observed approval/check results.
