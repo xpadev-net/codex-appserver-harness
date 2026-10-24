@@ -46,6 +46,23 @@ func (k *KernelStore) productBaseInputTx(ctx context.Context, tx *sql.Tx, taskID
 	if !UsesProductChangeOutput(w, prep.Task) {
 		return out, ErrProductWorkspaceHeld
 	}
+	// Workspace materialization adds the fixed checkout to Task input. Keep
+	// the base plan anchored to its original preparation input, after proving
+	// that the materialized current input is still exactly derivable.
+	fixed, err := k.fixedProductWorkspaceInputTx(ctx, tx, w, prep.Task.Spec)
+	if err != nil {
+		return out, err
+	}
+	if fixed != nil && fixed.Value.Request.BasePlanID != "" {
+		actual, err := k.taskInputDigestTx(ctx, tx, w, prep.Task.Spec)
+		if err != nil {
+			return out, err
+		}
+		if prep.Task.InputDigest != actual {
+			return out, ErrTaskEvidence
+		}
+		prep.Task.InputDigest = fixed.Value.InputDigest
+	}
 	pinned, err := loadProductVerificationPolicy(ctx, tx, w.ID, w.Policy.Revision, prep.Registration.Value.Definition.RepositoryID)
 	if err != nil {
 		return out, err
