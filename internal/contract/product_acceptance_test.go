@@ -51,7 +51,35 @@ func TestProductAcceptanceContractKeepsGenericAndProductEvidenceExclusive(t *tes
 	if fields["criterion_ids"].(map[string]any)["maxItems"] != 256 {
 		t.Fatal("schema/validation mismatch")
 	}
-	if MainResultSchema()["properties"] == nil {
-		t.Fatal("product acceptance not in main schema")
+	mainFields := MainResultSchema()["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	field, ok := mainFields["product_acceptance"].(map[string]any)
+	if !ok {
+		t.Fatal("product acceptance field absent")
+	}
+	alternatives, ok := field["anyOf"].([]any)
+	if !ok || len(alternatives) != 2 {
+		t.Fatal("product acceptance must permit typed evidence or null")
+	}
+	object, ok := alternatives[0].(map[string]any)
+	if !ok {
+		t.Fatal("product acceptance object schema absent")
+	}
+	properties, ok := object["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("product acceptance properties absent")
+	}
+	criteria, ok := properties["criterion_ids"].(map[string]any)
+	if !ok || criteria["minItems"] != 1 || criteria["maxItems"] != 256 {
+		t.Fatal("main output lost criterion bounds")
+	}
+	for _, name := range []string{"coverage_digest", "final_plan_digest", "final_verification_digest"} {
+		digest, ok := properties[name].(map[string]any)
+		if !ok || digest["pattern"] != "^[0-9a-f]{64}$" {
+			t.Fatal("main output lost digest constraint", name)
+		}
+	}
+	null, ok := alternatives[1].(map[string]any)
+	if !ok || null["type"] != "null" {
+		t.Fatal("main output cannot omit product acceptance for generic decisions")
 	}
 }
