@@ -14,11 +14,11 @@ import (
 // ExecutionRepository is private host configuration. Repository identity, fixed
 // initial SHA and base branch are resolved by the host, never Issue/model data.
 type ExecutionRepository struct {
-	Name       string
-	BaseBranch string
-	InitialSHA string
-	Policy     storage.ProductVerificationPolicy
-	Runner     storage.ProductRunnerRuntime
+	Name       string                            `json:"name"`
+	BaseBranch string                            `json:"base_branch"`
+	InitialSHA string                            `json:"initial_sha"`
+	Policy     storage.ProductVerificationPolicy `json:"policy"`
+	Runner     storage.ProductRunnerRuntime      `json:"runner"`
 }
 
 // Executor composes synchronous Git owners and detached runner owners. The

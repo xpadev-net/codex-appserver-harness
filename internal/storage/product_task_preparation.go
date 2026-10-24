@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
@@ -31,7 +32,7 @@ func (k *KernelStore) ReadProductTaskPreparation(ctx context.Context, taskID str
 	if err != nil {
 		return out, err
 	}
-	if !UsesProductChangeOutput(w, task) && !usesProductSubject(w, task.Spec) || task.Target() != w.Target() || task.Paused {
+	if !UsesProductChangeOutput(w, task) && !usesProductSubject(w, task.Spec) || task.Target() != w.Target() || task.Paused || w.State == domain.WaveBlocked {
 		return out, ErrProductWorkspaceHeld
 	}
 	set, _, drain, err := k.activePhaseTx(ctx, tx, w.Target())
@@ -58,6 +59,9 @@ func (k *KernelStore) ReadProductTaskPreparation(ctx context.Context, taskID str
 		}
 		if err := currentObservedTaskTx(ctx, tx, w, prior); err != nil {
 			return out, err
+		}
+		if prior.State != contract.TaskCompleted {
+			return out, ErrProductWorkspaceHeld
 		}
 		if _, err := k.completedTaskResultTx(ctx, tx, w, prior); err != nil {
 			return out, err

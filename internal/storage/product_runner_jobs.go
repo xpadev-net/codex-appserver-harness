@@ -27,6 +27,8 @@ type ProductRunnerRuntime struct {
 	ForbiddenPaths   []string `json:"forbidden_paths"`
 }
 
+func (runtime ProductRunnerRuntime) Validate() error { return validateProductRunnerRuntime(runtime) }
+
 type ProductRunnerJobValue struct {
 	RetryOf      string      `json:"retry_of,omitempty"`
 	PlanID       string      `json:"plan_id"`

@@ -528,3 +528,13 @@ validation job と既存 retry lineage の予算、実行枠、workspace lease�
 `Apply` は保存した正常停止runのIDとworkspaceを照合し、work/fixとschema v3 verificationを別のhost adopterへ、review/入力要求を通常のTask result適用へ送る。modelから結果本文・SHA・pass Booleanを受け取らない。`AdvanceVerification`はcanonical profile集合を一度ずつ走査し、保存jobを起動/照合して最新の機械証拠を再読込する。実行枠待ち・実際のjob待機を区別し、unknown launchの再起動、完了profileの再課金を行わない。
 
 これらのGit処理はmodel dispatch loopの外で呼び出し、Storeの所有者は処理のjoinまで保持する。実temp Gitのwriter seal/採用とverification準備/採用/runner、未完了runner・pause・先のPhase・未設定repository・停止未確認runの拒否をfixtureで確認する。daemonの購読ループ・モデル起動との最終接続、公開/Cloud/mergeは後続であり、`product_readiness_unavailable`を解除する権限はこのportから生成しない。
+
+### daemonの製品実行worker
+
+`wave run --runtime runtime.json --product-executor product-executor.json` で、private same-user schema 1設定に保存したrepository集合・固定初回SHA・base branch・検証policy・隔離runnerを明示的に有効にする。`isolation_verified: true`、`every_seconds: 1..3600`、1..128件の一意なrepository IDを要求し、launcher/repositoryは既存のcanonical絶対pathとする。`runner.forbidden_paths` は空でも `[]` と記し、controller DB/WAL/socket、Codex/gh認証、承認済みGit metadata、元repositoryのパスを通常コードが追加する。runtime/model設定や認証本文をIssue/modelへ渡さない。
+
+controller-owned workerは現行planのTaskを安定cursorで走査し、新規workspace準備、保存された正常停止runのhost採用、verificationの全profile開始/照合/retryをmodel dispatch loopの外で処理する。別cursorで全launching runnerを照合し、scope/Candidateやpauseが変わった後も古い物理ownerの停止と枠解放を記録する。起動時と再起動時に走査し、未開始のprepared Git intentだけを一度Claimする。launching/unknownを未実行と推測して再起動しない。
+
+IPC/runner hintとruntimeのcommit後hintはworkerとmodel loopへ配送し、永続状態を再読込する。hint自体は結果/成功/Task作成の権限を持たない。取りこぼしは設定周期で照合し、変更がない完了Taskを再課金しない。shutdownでは同期Git処理のjoinまでcontroller lock/Storeを保持し、独立runnerの未確定ownerはDBに残す。startup/restartの実Git準備、保存run採用、停止時join、model run増加ゼロ、cursor・pause後のrunner発見、private設定とIPC配送をfixtureで検査する。
+
+このworkerのopt-inはPのモデルdispatch/正式承認能力を宣言しない。`product_readiness_unavailable`、新journalからの公開/Cloud/merge、versioned post-merge continuation、P/M受入の残件は別の接続で解消する。

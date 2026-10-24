@@ -44,6 +44,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	sourceObserverFile := fs.String("issue-source-observer", "", "optional private admitted Issue source observer JSON (run)")
 	observerFile := fs.String("pr-observer", "", "optional private PR read-observer JSON (run)")
 	webhookFile := fs.String("pr-webhook", "", "optional private PR webhook ingress JSON (run)")
+	executorFile := fs.String("product-executor", "", "optional private product execution policy JSON (run)")
 	file := fs.String("file", "", "direct request or versioned operator JSON")
 	id := fs.String("id", "", "stored Wave, Artifact, message, observation, or run ID")
 	after := fs.String("after", "", "last Wave/Task ID from a previous page")
@@ -101,6 +102,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["pr-webhook"] = true
 		allowed["issue-pool"] = true
 		allowed["issue-source-observer"] = true
+		allowed["product-executor"] = true
 	case "watch":
 		allowed["cursor"], allowed["once"], allowed["limit"] = true, true, true
 	}
@@ -225,11 +227,19 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		executor, hintExecution, err := loadProductExecutor(*executorFile, k, config)
+		if err != nil {
+			return err
+		}
 		runtime, err := control.NewIsolatedRuntime(k, config)
 		if err != nil {
 			return err
 		}
+		runtime.OnMutation = hintExecution
 		var background []daemonWorker
+		if executor != nil {
+			background = append(background, executor)
+		}
 		if pool != nil {
 			background = append(background, pool)
 		}
@@ -242,7 +252,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if webhook != nil {
 			background = append(background, webhook)
 		}
-		return runDaemon(ctx, k, runtime, errOut, background...)
+		return runDaemonWithHint(ctx, k, runtime, errOut, hintExecution, background...)
 	case "watch":
 		return watchEvents(ctx, k, *root, *cursor, *limit, *once, out)
 	case "pause", "resume", "cancel", "steer", "interrupt", "reject-main", "associate-turn", "retry-task", "recover-thread", "retire-thread":

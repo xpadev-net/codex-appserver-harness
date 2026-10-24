@@ -46,6 +46,11 @@ type ProductVerificationPolicyInput struct {
 	AvailableProfiles []string `json:"available_profiles"`
 }
 
+func (value ProductVerificationPolicy) Validate() error {
+	_, err := normalizeProductVerificationPolicy(value)
+	return err
+}
+
 func productVerificationPolicyID(waveID string, revision int, repositoryID int64) string {
 	return structureID("product-verification-policy-", waveID, fmt.Sprintf("%d:%d", revision, repositoryID))
 }

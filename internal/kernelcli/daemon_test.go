@@ -24,7 +24,7 @@ func (f neverStartFactory) Open(ctx context.Context, l control.Launch) (control.
 	}
 	return nil, control.ErrNotStarted
 }
-func startTestDaemon(t *testing.T, root string, launches chan control.Launch) func() {
+func startTestDaemon(t *testing.T, root string, launches chan control.Launch, hints ...func()) func() {
 	t.Helper()
 	k, _, err := openKernel(context.Background(), root)
 	if err != nil {
@@ -32,8 +32,12 @@ func startTestDaemon(t *testing.T, root string, launches chan control.Launch) fu
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	var onMutation func()
+	if len(hints) > 0 {
+		onMutation = hints[0]
+	}
 	go func() {
-		done <- runDaemon(ctx, k, control.Runtime{Store: k, Factory: neverStartFactory{launches}}, io.Discard)
+		done <- runDaemonWithHint(ctx, k, control.Runtime{Store: k, Factory: neverStartFactory{launches}, OnMutation: onMutation}, io.Discard, onMutation)
 	}()
 	stop := func() {
 		cancel()
@@ -65,6 +69,22 @@ func startTestDaemon(t *testing.T, root string, launches chan control.Launch) fu
 			called = true
 			cancel()
 		}
+	}
+}
+
+func TestKernelDaemonIPCHintAlsoWakesProductExecution(t *testing.T) {
+	hints := make(chan struct{}, 1)
+	stop := startTestDaemon(t, cliRoot(t), make(chan control.Launch, 1), func() {
+		select {
+		case hints <- struct{}{}:
+		default:
+		}
+	})
+	defer stop()
+	select {
+	case <-hints:
+	case <-time.After(time.Second):
+		t.Fatal("IPC startup notification did not reach execution worker")
 	}
 }
 func TestKernelDaemonEmptyIdleAndExclusiveController(t *testing.T) {
