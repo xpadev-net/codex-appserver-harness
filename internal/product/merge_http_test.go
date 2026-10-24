@@ -22,6 +22,11 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 	t.Helper()
 	ctx := context.Background()
 	k := g.Cloud.Store
+	driverMode := ""
+	if strings.HasPrefix(mode, "driver_") {
+		driverMode = strings.TrimPrefix(mode, "driver_")
+		mode = "group"
+	}
 	transportMode := ""
 	if strings.HasPrefix(mode, "transport_") {
 		transportMode = strings.TrimPrefix(mode, "transport_")
@@ -37,16 +42,18 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.ClaimProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest); err != nil {
-		t.Fatal(err)
-	}
-	gate, err := g.Check(ctx, saved, requestID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, err = k.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, gate)
-	if err != nil {
-		t.Fatal(err)
+	if driverMode == "" {
+		if _, err := k.ClaimProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest); err != nil {
+			t.Fatal(err)
+		}
+		gate, err := g.Check(ctx, saved, requestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		job, err = k.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, gate)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	var authCalls atomic.Int64
 	if mode != "no_authority" {
@@ -103,6 +110,10 @@ esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
+	}
+	if driverMode != "" {
+		checkMergeDriver(t, g, job, bin, mode, driverMode)
+		return
 	}
 	if transportMode != "" {
 		checkMergeHTTPTransport(t, k, job, bin, mode, transportMode)
