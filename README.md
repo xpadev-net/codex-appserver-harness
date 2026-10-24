@@ -385,4 +385,6 @@ PR の `MERGED` / 分割元の `SPLIT` と親全体の完了は別に保存し�
 
 `wave run --runtime runtime.json --product-executor product-executor.json` で、ホストが保存した private schema 1 設定の実行workerを有効にします。設定にはrepository、固定初回SHA、base branch、検証policy、隔離runnerが必要です。さらに `publication` を明示した場合だけ、固定候補のbranch公開、PR作成/更新、確認済み経路からのCloud review依頼をdaemonが処理します。PR更新の観測workerも自動起動し、`--pr-observer`指定時はそちらの設定を使います。未設定のCloud能力は保留し、正式承認やmerge許可を生成しません。
 
-[設定と公開時の照合](docs/product-operations.md#daemonのpr公開worker)を参照してください。製品モデルdispatchの `product_readiness_unavailable`、正式承認/CI/merge、部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。
+`publication.merge`をさらに明示すると、private authorityと永続merge queueを接続します。保存済み候補の正式Cloud承認・CI・rulesと検証済みcapabilityがすべて揃うまで送信しません。unknownを承認へ変換しません。
+
+[公開設定](docs/product-operations.md#daemonのpr公開worker)と[merge設定](docs/product-operations.md#daemonの明示的なmerge設定)を参照してください。製品モデルdispatchの `product_readiness_unavailable`、WorkItem/親最終受入、部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。

@@ -53,6 +53,14 @@ func loadProductExecutorWithObserver(path string, k *storage.KernelStore, runtim
 	if err != nil {
 		return nil, nil, err
 	}
+	var mergeConfig *ProductMergeConfig
+	if c.Publication != nil {
+		mergeConfig = c.Publication.Merge
+	}
+	mergePolicies, err := mergeConfig.policies(c.Repositories, routes)
+	if err != nil {
+		return nil, nil, err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, nil, err
@@ -147,6 +155,10 @@ func loadProductExecutorWithObserver(path string, k *storage.KernelStore, runtim
 		}
 		if len(sources) > 0 {
 			workers = append(workers, func(ctx context.Context) error { return runPublicationSources(ctx, k, sources, every, wake, report) })
+		}
+		if mergeConfig != nil {
+			driver := productMergeDriver(executor, mergePolicies, sources, exe)
+			return runProductMergePipeline(ctx, driver, mergePolicies.methods, mergeConfig.Workers, every, wake, report, workers...)
 		}
 		return runProductPipeline(ctx, workers...)
 	}, w.Hint, nil
