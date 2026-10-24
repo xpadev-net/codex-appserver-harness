@@ -609,3 +609,8 @@ local実行・PR dispatcher・source照合はmodel loopの外で動き、終了/
 採用済み`WaveOperationLimits.branch_retries`はWave全体で共有し、新Waveの既定は1、許可範囲は0..32とする。旧記録で項目がない場合は0として自動retryを有効にしない。これは互換性方針であり、新Waveの既定値を既存Waveへoverlayして新たな実行権限を付与しない。後続の予約・Git枠・予算ledgerとreceipt・historyは同一transactionで保存し、並行予約/再送/再openで二重計上しない。予算の集計は残存ledgerだけに依存せず、後続のhead/history/receipt/dispatch admissionも照合する。欠落証拠で予算を復活させず、古い停止結果へ戻らない。
 
 送信fenceを通った操作、push実行済み、物理停止不明、公開済み、pause/Candidate等の変更はこのretry許可を得ない。送信後の不明結果は保存済み停止後に固定remote SHAを読んで照合し、未確定なら保留する。実fixtureでキャンセルによる未送信停止→後続→公開、並行予約と一回だけのclaim、既存履歴保持、再open後の上限、transaction rollback、証拠/ledger欠落、禁止状態を確認する。送信後の外部quiescenceやnative P受入の証拠は生成しない。
+
+
+`publication`を有効にしたdaemonはPR観測workerも同じ周期/worker上限で起動し、保存済みPR bindingと自動購読からコメント・review・reaction・CI・状態更新を取得する。resource snapshotと通知outboxのcommit後にmodel loopへhintを送り、外部本文を命令や正式承認へ変換しない。`--pr-observer`を明示した場合は、その独立設定のworkerを使い、publication側では二重起動しない。公開設定なしのlocal実行だけではPR観測を暗黙に追加しない。観測workerも他のpipeline workerと共にshutdownまでjoinする。
+
+実subprocessのfake `gh` GET経路で、確定済みPR→コメント取得→snapshot/通知outbox保存→hint、standalone設定時のGET重複なし、model run増加ゼロを確認する。publicationの固定候補品質や正式APPROVED/CI/mergeの判定を観測snapshotで置き換えず、実GitHub/Cloud/native P受入は別途必要である。

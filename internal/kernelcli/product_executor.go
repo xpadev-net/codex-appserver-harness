@@ -25,6 +25,12 @@ type ProductExecutorConfig struct {
 }
 
 func loadProductExecutor(path string, k *storage.KernelStore, runtime control.IsolatedConfig) (daemonWorker, func(), error) {
+	return loadProductExecutorWithObserver(path, k, runtime, false)
+}
+
+// An explicitly configured standalone observer supplies its own worker count
+// and cadence. Otherwise publication includes PR observation automatically.
+func loadProductExecutorWithObserver(path string, k *storage.KernelStore, runtime control.IsolatedConfig, externalObserver bool) (daemonWorker, func(), error) {
 	if path == "" {
 		return nil, nil, nil
 	}
@@ -131,9 +137,14 @@ func loadProductExecutor(path string, k *storage.KernelStore, runtime control.Is
 		}
 		dispatcher := productPublicationDispatcher(executor, routes, sources, c.Publication.Workers, every)
 		dispatcher.OnMutation, dispatcher.Report = wake, report
-		if len(sources) == 0 {
-			return runProductPipeline(ctx, w.Run, dispatcher.Run)
+		workers := []func(context.Context) error{w.Run, dispatcher.Run}
+		if !externalObserver {
+			observer := product.Observer{Store: k, API: product.GitHubResourceAPI, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
+			workers = append(workers, observer.Run)
 		}
-		return runProductPipeline(ctx, w.Run, dispatcher.Run, func(ctx context.Context) error { return runPublicationSources(ctx, k, sources, every, wake, report) })
+		if len(sources) > 0 {
+			workers = append(workers, func(ctx context.Context) error { return runPublicationSources(ctx, k, sources, every, wake, report) })
+		}
+		return runProductPipeline(ctx, workers...)
 	}, w.Hint, nil
 }
