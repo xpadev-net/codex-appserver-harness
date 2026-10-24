@@ -548,3 +548,11 @@ IPC/runner hintとruntimeのcommit後hintはworkerとmodel loopへ配送し、�
 `Executor.PublicationGate` は旧service Storeに依存せず、公開準備のhead/history、現在の投影、品質、host設定と固定verification policyを読み直す。既存`Publisher`のGate portに渡し、payload保存前とHTTP送信直前の両方で呼ぶためのread-only portである。本文にはscope/policy版、固定SHAと比較base、評価したcriterion、machine/reviewのproof digestを安定順で載せる。argv/認証本文/modelの成功要約を公開せず、Issueを自動closeする文章を拒否する。
 
 現時点ではWorkItemがWaveの全criterionを持つ公開を扱い、部分公開の残作業・親Issue ledgerは専用の証拠接続まで保留する。公開準備はCloud/native承認へ変換せず、candidate branchのpush、daemonのPR送信、正式review/CI/merge、versioned post-merge continuation、P/M総合受入は後続である。実Gitの実装→verification→runner→独立reviewからworkerの公開準備/gateまで、履歴欠落、pause/merge hold、rollback、host policy変更の拒否と再送の不変性をfixtureで確認する。
+
+### 固定Candidateのbranch push primitive
+
+`workspace.PublishPinned` はhostのseal済み`FrozenCheckout`、明示remote、固定`harness/...` branch、送信直前のauthority callbackを要求する。実linked git-dir/common-dir/branch/base ancestry、HEAD==Candidate SHA、clean状態を照合し、既存remote headが異なる場合はCandidateの祖先であることを要求する。通常のfast-forward pushだけを使い、実remote headが固定SHAになるまで成功proofを返さない。既に同じSHAならpushとcallbackを繰り返さない。
+
+origin/暗黙refspec/forceに依存せず、URL rewriteと設定されたpush optionを拒否し、hook・push署名・follow-tags・mirror・submoduleの追加送信を抑止する。authority callback後もsourceとURL policyを再確認する。HTTPS URLの埋込credentialを拒否し、offline fixtureにはcanonicalなbare repository pathを使える。全Git subprocessは同期ownerとしてprocess groupをjoinする。error時の返値は部分的な観測で、`Attempted`だけから送信成功や未送信を推測しない。停止未確認ではcallerのintent/leaseを保持する。
+
+実bare repositoryへの初回push/fast-forward/同じSHAの再送、別originを使わないこと、diverged branchをforce更新しないこと、署名/hook/tagの抑止、権限とsource/URL policy変更時の拒否を検査する。これは物理Git portであり、永続publication intent/unknown応答照合、daemon PR送信と正式承認を結ぶ処理は後続である。
