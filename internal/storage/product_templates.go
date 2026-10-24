@@ -18,6 +18,7 @@ import (
 // ProductTemplateBinding identifies the old reports and every replacement role.
 // The immutable expansion history authenticates this structure with the plan.
 type ProductTemplateBinding struct {
+	FutureClones  map[string]string                `json:"future_clones,omitempty"`
 	WorkItemID    string                           `json:"work_item_id"`
 	Candidate     runner.Candidate                 `json:"candidate"`
 	SourceReviews map[string]string                `json:"source_reviews"`
@@ -144,15 +145,21 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 			position = i
 		}
 	}
-	if position < 0 || position != len(current.Plan.Phases)-1 {
-		return receipt, fmt.Errorf("%w: intermediate product Phase remapping requires parent", ErrTemplateNeedsMain)
+	if position < 0 {
+		return receipt, ErrTaskEvidence
 	}
-	// Keep every source Phase complete and immutable before a controller replan.
-	for _, phase := range current.Plan.Phases {
+	// Prior barriers must be complete; later consumers must be entirely unused.
+	for index, phase := range current.Plan.Phases {
 		for _, spec := range phase.Tasks {
 			task, err := loadTask(ctx, tx, structureID("task-", w.ID, spec.ID))
 			if err != nil {
 				return receipt, err
+			}
+			if index > position {
+				if err := k.productFutureTaskUnusedTx(ctx, tx, w, task); err != nil {
+					return receipt, err
+				}
+				continue
 			}
 			if _, err := k.completedTaskResultTx(ctx, tx, w, task); err != nil {
 				return receipt, fmt.Errorf("%w: required source Phase incomplete", ErrTemplateNeedsMain)
@@ -334,7 +341,7 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 		return receipt, err
 	}
 	binding := &ProductTemplateBinding{WorkItemID: workID, Candidate: p.Value.Candidate, SourceReviews: reportDigests, Verification: *verificationSource.Value.VerificationPlan, MachineDigest: machine.Digest, Repairs: []string{}, Replacements: map[string][]string{}}
-	plan, lineages, err := k.buildProductTemplatePlanTx(ctx, tx, w, current.Plan, key, sourceResults, reviews, reports, ownerList, verificationTask, binding)
+	plan, lineages, err := k.buildProductTemplatePlanTx(ctx, tx, w, current.Plan, position, key, sourceResults, reviews, reports, ownerList, verificationTask, binding)
 	if err != nil {
 		return receipt, err
 	}
@@ -365,7 +372,7 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 	}
 	for local, lineage := range lineages {
 		definitions := []contract.FixReviewTemplate{}
-		for _, template := range current.Plan.Templates {
+		for _, template := range plan.Templates {
 			if template.InputTaskID == lineage.RootReviewLocalID {
 				definitions = append(definitions, template)
 			}
@@ -374,7 +381,10 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 		if err != nil {
 			return receipt, err
 		}
-		lineage.Round, lineage.ExpansionKey = round, key
+		if lineage.Round < round {
+			lineage.Round = round
+		}
+		lineage.ExpansionKey = key
 		if err := kernelRecordTx(ctx, tx, "product_template_review_lineage", structureID("task-", w.ID, local), w.ID, lineage); err != nil {
 			return receipt, err
 		}

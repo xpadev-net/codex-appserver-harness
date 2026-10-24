@@ -509,4 +509,4 @@ adopted plan、product targetの明示CAS更新、生成Task/lineage/receipt/his
 
 後続の生成fixは、直前のCandidateが変わった場合に限り、未使用session・attemptゼロ・thread/run未作成・全依存完了・元の生成spec/history・現在Candidate SHAを検査して、workspace予約と同じtransactionで入力を固定する。既存workspaceや使用済みsnapshotを再束縛しない。
 
-現段階のP自動展開は末尾reviewと独立review役割を対象とする。中間Phaseやpeer review出力の明示依存の再配置は理由付き親再計画とし、後続のP接続で拡張する。daemonの製品dispatch/readiness、実model/隔離launcher/Cloudを含むP受入、環境障害のrunner retryとmerge経路は引き続き未接続である。fixtureは実行factsを明示し、Kのtemplate回帰と共に分類、複数owner/role、修復→再検証→再review→品質、rollback/history欠落、繰返し上限、main/worker run増加ゼロを検証する。
+P自動展開は中間review Phaseも扱い、後続の未使用Taskを新ID/sessionへ複製し、依存と将来templateのrootを更新する。peer reviewの暗黙出力依存と元のPhase境界を再reviewへ保持する。使用済みTask/process、roleの自己依存・統合、旧Artifact IDを特定する明示selectorの再配置は理由付き親再計画とし、権限を黙って広げない。daemonの製品dispatch/readiness、実model/隔離launcher/Cloudを含むP受入、環境障害のrunner retryとmerge経路は引き続き未接続である。fixtureは実行factsを明示し、Kのtemplate回帰と共に分類、複数owner/role、修復→再検証→再review→品質、rollback/history欠落、繰返し上限、main/worker run増加ゼロを検証する。
