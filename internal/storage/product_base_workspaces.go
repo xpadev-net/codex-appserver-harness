@@ -38,7 +38,16 @@ func (k *KernelStore) baseWorkspacePlanTx(ctx context.Context, q queryer, v Prod
 	}
 	input := plan.Value.Input.Value
 	task := input.Preparation.Task
-	if plan.Digest != r.BasePlanDigest || task.ID != r.TaskID || plan.Value.Head.HeadSHA != r.BaseSHA || input.Policy.Value.RepositoryID != r.RepositoryID || input.Policy.Value.Repository != r.Repository || input.Preparation.Product != nil || task.Spec.Kind != "work" && task.Spec.Kind != "fix" {
+	base := plan.Value.Head.HeadSHA
+	if current := input.Preparation.Product; current != nil {
+		base = current.Value.Candidate.SHA
+		if v.Target.Valid() && v.ComparisonBaseSHA != plan.Value.Head.HeadSHA {
+			return plan, ErrProductWorkspaceHeld
+		}
+	} else if v.ComparisonBaseSHA != "" {
+		return plan, ErrProductWorkspaceHeld
+	}
+	if plan.Digest != r.BasePlanDigest || task.ID != r.TaskID || base != r.BaseSHA || input.Policy.Value.RepositoryID != r.RepositoryID || input.Policy.Value.Repository != r.Repository || task.Spec.Kind != "work" && task.Spec.Kind != "fix" {
 		return plan, ErrProductWorkspaceHeld
 	}
 	if v.Target.Valid() && (task.Target() != v.Target || task.SessionID != v.SessionID || input.Preparation.Registration.Digest != v.RegistrationDigest || task.InputDigest != v.InputDigest) {
@@ -69,7 +78,7 @@ func (k *KernelStore) baseWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v Pr
 }
 func (k *KernelStore) validateBaseWorkspaceEvidenceTx(ctx context.Context, q queryer, s ProductWorkspace) (retErr error) {
 	if s.Value.Request.BasePlanID == "" {
-		if s.Value.Request.BasePlanDigest != "" || s.BaseClaim != nil || !baseWorkspaceFetchTime(s).IsZero() || s.Proof != nil && s.Proof.Fetch != nil {
+		if s.Value.Request.BasePlanDigest != "" || s.BaseClaim != nil || !baseWorkspaceFetchTime(s).IsZero() || s.BaseMergeAt != nil || s.Proof != nil && (s.Proof.Fetch != nil || s.Proof.BaseMerge != nil) {
 			return ErrTaskEvidence
 		}
 		return nil
@@ -88,15 +97,15 @@ func (k *KernelStore) validateBaseWorkspaceEvidenceTx(ctx context.Context, q que
 	if err := taskEvidenceRecord(ctx, q, "product_base_workspace_admission", s.ID, &admission); err != nil {
 		return err
 	}
-	if admission.ID != s.ID || admission.Digest != s.Digest || !reflect.DeepEqual(admission.Value, s.Value) || admission.CreatedAt != s.CreatedAt || admission.State != "prepared" || !admission.ClaimedAt.IsZero() || admission.BaseClaim != nil || !baseWorkspaceFetchTime(admission).IsZero() || admission.Proof != nil || !admission.FinishedAt.IsZero() {
+	if admission.ID != s.ID || admission.Digest != s.Digest || !reflect.DeepEqual(admission.Value, s.Value) || admission.CreatedAt != s.CreatedAt || admission.State != "prepared" || !admission.ClaimedAt.IsZero() || admission.BaseClaim != nil || !baseWorkspaceFetchTime(admission).IsZero() || admission.BaseMergeAt != nil || admission.Proof != nil || !admission.FinishedAt.IsZero() {
 		return ErrTaskEvidence
 	}
 	if s.ClaimedAt.IsZero() {
-		if s.BaseClaim != nil || !baseWorkspaceFetchTime(s).IsZero() {
+		if s.BaseClaim != nil || !baseWorkspaceFetchTime(s).IsZero() || s.BaseMergeAt != nil {
 			return ErrTaskEvidence
 		}
 		var claimed bool
-		if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_base_workspace_claim','product_workspace_fetch_send'))", s.ID).Scan(&claimed); err != nil {
+		if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_base_workspace_claim','product_workspace_fetch_send','product_workspace_base_merge_send'))", s.ID).Scan(&claimed); err != nil {
 			return err
 		}
 		if claimed {
@@ -150,6 +159,9 @@ func (k *KernelStore) validateBaseWorkspaceEvidenceTx(ctx context.Context, q que
 			return ErrTaskEvidence
 		}
 	}
+	if err := k.validateWorkspaceBaseMergeTx(ctx, q, s, plan); err != nil {
+		return err
+	}
 	if s.Proof != nil {
 		var terminal ProductWorkspace
 		if err := taskEvidenceRecord(ctx, q, "product_base_workspace_terminal", s.ID, &terminal); err != nil {
@@ -171,7 +183,7 @@ func (k *KernelStore) validateBaseWorkspaceEvidenceTx(ctx context.Context, q que
 }
 func (k *KernelStore) validateBaseWorkspaceProofTx(ctx context.Context, q queryer, s ProductWorkspace) error {
 	if s.Value.Request.BasePlanID == "" {
-		if s.Proof != nil && s.Proof.Fetch != nil {
+		if s.Proof != nil && (s.Proof.Fetch != nil || s.Proof.BaseMerge != nil) {
 			return ErrTaskEvidence
 		}
 		return nil
@@ -182,6 +194,9 @@ func (k *KernelStore) validateBaseWorkspaceProofTx(ctx context.Context, q querye
 	}
 	if s.Proof == nil {
 		return ErrTaskEvidence
+	}
+	if err := k.validateWorkspaceBaseMergeTx(ctx, q, s, plan); err != nil {
+		return err
 	}
 	fetch := s.Proof.Fetch
 	if fetch == nil {
@@ -234,7 +249,7 @@ func (k *KernelStore) MarkProductWorkspaceFetchMaySend(ctx context.Context, task
 	if err != nil {
 		return err
 	}
-	if saved.State != "launching" || saved.Digest != digest || saved.BaseClaim == nil || !baseWorkspaceFetchTime(saved).IsZero() || source.Repository != saved.Value.Request.Repository {
+	if saved.State != "launching" || saved.Digest != digest || saved.BaseClaim == nil || saved.BaseMergeAt != nil || !baseWorkspaceFetchTime(saved).IsZero() || source.Repository != saved.Value.Request.Repository {
 		return ErrProductWorkspaceHeld
 	}
 	selection, err := k.checkProductWorkspaceBaseFetchTx(ctx, tx, saved, source)
@@ -275,6 +290,15 @@ func (k *KernelStore) productModelBaseSelectionTx(ctx context.Context, tx *sql.T
 	original := plan.Value.Input.Value.Preparation.Task
 	if original.Target() != task.Target() || original.SessionID != task.SessionID || original.ParentSessionID != task.ParentSessionID || original.InputDigest != s.Value.InputDigest || !reflect.DeepEqual(original.Spec, task.Spec) {
 		return nil, ErrProductWorkspaceHeld
+	}
+	current, currentErr := loadProductTargetTx(ctx, tx, task.Target(), s.Value.WorkItemID)
+	old := plan.Value.Input.Value.Preparation.Product
+	if old == nil {
+		if currentErr != sql.ErrNoRows {
+			return nil, errors.Join(ErrProductWorkspaceHeld, currentErr)
+		}
+	} else if currentErr != nil || current.Digest != old.Digest || !reflect.DeepEqual(current, *old) {
+		return nil, errors.Join(ErrProductWorkspaceHeld, currentErr)
 	}
 	selection, _, err := k.readProductBaseSelectionTx(ctx, tx, task.ID)
 	if err != nil {

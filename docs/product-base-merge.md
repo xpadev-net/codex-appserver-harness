@@ -49,3 +49,13 @@ CLI の publication 設定がある場合、実 `KernelSourceGate` と GitHub re
 既知の準備失敗、未解決 owner、証拠の欠落、準備後の base 変更は、Task・計画・SHA・停止結果の安全な要約を親通知へ保存する。private path、取得先、資格情報、command、raw log は親入力に渡さない。同一の原因と証拠は ACK や定期照合で追加通知せず、通知の利用時にも原因が現在有効か再照合する。親 turn、新しい Task/session、Git の再実行を定期照合だけで生成しない。
 
 実 Git/SQLite の統合検査は、自動選択した新 SHA の取得、fresh な準備済み workspace の無操作、同じ HEAD の時刻更新、変更後の起動保留と一度の通知、未着手 profile の停止・capacity 解放、通知改変と古い原因の拒否を確認する。GitHub HEAD/ancestry と model は fixture であり、native P の受入ではない。旧候補への通常 merge と新 fix Task への競合引渡しは後続へ残る。
+
+## 旧候補を取り込む workspace の保存契約
+
+既存候補を参照する新しい work/fix Task では、固定 base 計画付き workspace の元 SHA を旧候補へ固定し、比較 base は観測した新 HEAD へ固定できる。通常 merge の実行前に、claim と別の `product_workspace_base_merge_send` を保存する。現在の source/入力/候補/計画、pause、Git/worktree lease の実 owner と generation を再照合し、一度だけ消費する。取得の送信記録と merge の送信記録は別であり、merge 後の取得送信は拒否する。
+
+停止証拠は元 checkout・旧候補・旧比較 base・新 HEAD と `merged` / `already_current` / `conflict`、または既知の部分変更の観測を保持する。成功した merge commit の SHA と workspace の実 HEAD を一致させ、candidate の比較 base は新 HEAD とする。停止未確認の launching は capacity を保持し、terminal の保存失敗では解放も rollback する。競合は failed のまま保存し、model admission を許可しない。journal の一部喪失を再構成や再送の根拠にしない。
+
+model admission は元候補の現在の projection が計画時と一致することも照合し、保存済みの merge 結果を別候補へ流用しない。任意の merge 結果だけで品質・検証・正式承認を継承しない。新 field は使用時だけ JSON に保存し、旧 workspace の checksum を保つ。
+
+この節は実 SQLite の保存/admission component である。physical facts は trusted fixture として注入し、実 Git の merge は冒頭の port 検査に分ける。daemon の旧候補用 adapter、新候補の検証工程、競合から新 fix Task/session への引渡しは次の接続に残る。

@@ -45,7 +45,7 @@ func (k *KernelStore) productVerificationSealInputTx(ctx context.Context, tx *sq
 	if err != nil {
 		return nil, err
 	}
-	p, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, saved.Value)
+	p, err := k.productWorkspaceVerificationPolicyTx(ctx, tx, w, task, saved.Value)
 	if err != nil {
 		return nil, err
 	}

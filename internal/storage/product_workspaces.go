@@ -49,6 +49,7 @@ type ProductWorkspaceValue struct {
 
 // Only the synchronous Git owner submits physical-stop and filesystem facts.
 type ProductWorkspaceProof struct {
+	BaseMerge *workspace.BaseMerge   `json:"base_merge,omitempty"`
 	Fetch     *workspace.CommitFetch `json:"fetch,omitempty"`
 	CWD       string                 `json:"cwd,omitempty"`
 	Branch    string                 `json:"branch,omitempty"`
@@ -61,6 +62,7 @@ type ProductWorkspaceProof struct {
 	Clean     bool                   `json:"clean"`
 }
 type ProductWorkspace struct {
+	BaseMergeAt *time.Time                 `json:"base_merge_at,omitempty"`
 	BaseClaim   *ProductBaseWorkspaceClaim `json:"base_claim,omitempty"`
 	BaseFetchAt *time.Time                 `json:"base_fetch_at,omitempty"`
 	ID          string                     `json:"id"`
@@ -97,7 +99,7 @@ func (k *KernelStore) productWorkspaceTx(ctx context.Context, q queryer, id stri
 	if err := taskEvidenceRecord(ctx, q, "product_workspace", id, &record); err != nil {
 		if err == sql.ErrNoRows {
 			var known bool
-			if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_workspace_history','product_base_workspace_admission','product_base_workspace_claim','product_workspace_fetch_send','product_base_workspace_terminal')) OR EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE run_id=?)", id, id).Scan(&known); err != nil {
+			if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_workspace_history','product_base_workspace_admission','product_base_workspace_claim','product_workspace_fetch_send','product_workspace_base_merge_send','product_base_workspace_terminal')) OR EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE run_id=?)", id, id).Scan(&known); err != nil {
 				return record.Workspace, err
 			}
 			if known {
@@ -194,7 +196,7 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 	if _, err := k.productWorkspaceSubjectTx(ctx, tx, w, task, value); err != nil {
 		return w, task, b, err
 	}
-	if _, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, value); err != nil {
+	if _, err := k.productWorkspaceVerificationPolicyTx(ctx, tx, w, task, value); err != nil {
 		return w, task, b, err
 	}
 	inputs, err := k.taskInputDigestTx(ctx, tx, w, task.Spec)
@@ -290,6 +292,15 @@ func (k *KernelStore) ReserveProductWorkspace(ctx context.Context, request Produ
 	value.ParentSessionID = w.OrchestratorSessionID
 	value.Target, value.WorkItemID, value.RegistrationDigest, value.InputDigest = w.Target(), task.Spec.WorkItemIDs[0], registration.Digest, task.InputDigest
 	value.SessionID, value.CWD, value.Branch = b.ID, b.CWD, "harness/"+b.ID
+	if request.BasePlanID != "" {
+		plan, err := k.baseWorkspacePlanTx(ctx, tx, ProductWorkspaceValue{Request: request})
+		if err != nil {
+			return saved, err
+		}
+		if plan.Value.Input.Value.Preparation.Product != nil {
+			value.ComparisonBaseSHA = plan.Value.Head.HeadSHA
+		}
+	}
 	if task.Spec.Kind == "review" || task.Spec.Kind == "verification" {
 		subject, err := k.fixedProductSubjectInputTx(ctx, tx, w, task.Spec)
 		if err != nil {
@@ -300,7 +311,7 @@ func (k *KernelStore) ReserveProductWorkspace(ctx context.Context, request Produ
 		}
 		value.SubjectID, value.SubjectDigest = subject.ID, subject.Digest
 		if task.Spec.Kind == "verification" {
-			p, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, ProductWorkspaceValue{Request: request})
+			p, err := k.productWorkspaceVerificationPolicyTx(ctx, tx, w, task, ProductWorkspaceValue{Request: request})
 			if err != nil {
 				return saved, err
 			}
@@ -432,7 +443,11 @@ func (k *KernelStore) FinishProductWorkspace(ctx context.Context, taskID string,
 				common = strings.TrimPrefix(lease.Resource, "repository_git:")
 			}
 		}
-		if proof.CWD != saved.Value.CWD || proof.Branch != saved.Value.Branch || proof.HeadSHA != saved.Value.Request.BaseSHA || !proof.Clean || !filepath.IsAbs(proof.GitDir) || filepath.Clean(proof.GitDir) != proof.GitDir || !strings.HasPrefix(proof.GitDir, common+string(filepath.Separator)+"worktrees"+string(filepath.Separator)) || proof.CommonDir != common {
+		expectedHead := saved.Value.Request.BaseSHA
+		if proof.BaseMerge != nil {
+			expectedHead = proof.BaseMerge.HeadSHA
+		}
+		if proof.CWD != saved.Value.CWD || proof.Branch != saved.Value.Branch || !fixedSHA(expectedHead) || proof.HeadSHA != expectedHead || !proof.Clean || !filepath.IsAbs(proof.GitDir) || filepath.Clean(proof.GitDir) != proof.GitDir || !strings.HasPrefix(proof.GitDir, common+string(filepath.Separator)+"worktrees"+string(filepath.Separator)) || proof.CommonDir != common {
 			return saved, errors.New("workspace proof does not match pinned Git resources/base")
 		}
 		_, task, b, ownerErr := k.productWorkspaceOwnerTx(ctx, tx, saved.Value)
