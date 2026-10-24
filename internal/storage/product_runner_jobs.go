@@ -30,26 +30,28 @@ type ProductRunnerRuntime struct {
 func (runtime ProductRunnerRuntime) Validate() error { return validateProductRunnerRuntime(runtime) }
 
 type ProductRunnerJobValue struct {
-	RetryOf      string      `json:"retry_of,omitempty"`
-	PlanID       string      `json:"plan_id"`
-	PlanDigest   string      `json:"plan_digest"`
-	PolicyID     string      `json:"policy_id"`
-	PolicyDigest string      `json:"policy_digest"`
-	SessionID    string      `json:"session_id"`
-	Spec         runner.Spec `json:"spec"`
+	Final        *ProductFinalRunnerSource `json:"final,omitempty"`
+	RetryOf      string                    `json:"retry_of,omitempty"`
+	PlanID       string                    `json:"plan_id"`
+	PlanDigest   string                    `json:"plan_digest"`
+	PolicyID     string                    `json:"policy_id"`
+	PolicyDigest string                    `json:"policy_digest"`
+	SessionID    string                    `json:"session_id"`
+	Spec         runner.Spec               `json:"spec"`
 }
 
 // A launching intent survives restart and cannot be claimed a second time.
 // Absence of a result is not proof that launching did not start a process.
 type ProductRunnerJob struct {
-	Completion *runner.Completion    `json:"completion,omitempty"`
-	FinishedAt *time.Time            `json:"finished_at,omitempty"`
-	ID         string                `json:"id"`
-	Value      ProductRunnerJobValue `json:"value"`
-	Digest     string                `json:"digest"`
-	State      string                `json:"state"`
-	CreatedAt  time.Time             `json:"created_at"`
-	ClaimedAt  time.Time             `json:"claimed_at"`
+	FinalClaim *ProductFinalRunnerClaim `json:"final_claim,omitempty"`
+	Completion *runner.Completion       `json:"completion,omitempty"`
+	FinishedAt *time.Time               `json:"finished_at,omitempty"`
+	ID         string                   `json:"id"`
+	Value      ProductRunnerJobValue    `json:"value"`
+	Digest     string                   `json:"digest"`
+	State      string                   `json:"state"`
+	CreatedAt  time.Time                `json:"created_at"`
+	ClaimedAt  time.Time                `json:"claimed_at"`
 }
 
 type ProductRunnerClaim struct {
@@ -96,6 +98,12 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 		return job, err
 	}
 	expectedID := productRunnerJobID(job.Value.PlanID, job.Value.Spec.ProfileID)
+	if job.Value.Final != nil {
+		expectedID = productFinalRunnerJobID(job.Value.PlanID, job.Value.Final.RepositoryID, job.Value.Spec.ProfileID)
+		if job.Value.RetryOf != "" {
+			return job, ErrTaskEvidence
+		}
+	}
 	if job.Value.RetryOf != "" {
 		expectedID = productRunnerRetryID(job.Value.RetryOf)
 	}
@@ -138,6 +146,12 @@ func loadProductRunnerJob(ctx context.Context, q queryer, id string) (job Produc
 		if !productRunnerRetryValueMatches(previous, job.Value) {
 			return job, ErrTaskEvidence
 		}
+	}
+	if job.Value.Final == nil && job.FinalClaim != nil {
+		return job, ErrTaskEvidence
+	}
+	if job.Value.Final != nil {
+		return job, validateProductFinalRunnerSource(ctx, q, job)
 	}
 	plan, err := loadProductVerificationPlan(ctx, q, job.Value.PlanID)
 	if err != nil {
@@ -355,6 +369,9 @@ func (k *KernelStore) ClaimProductRunnerJob(ctx context.Context, id, digest stri
 	}
 	if job.State != "prepared" {
 		return claim, tx.Commit()
+	}
+	if job.Value.Final != nil {
+		return k.claimProductFinalRunnerTx(ctx, tx, job)
 	}
 	plan, err := loadProductVerificationPlan(ctx, tx, job.Value.PlanID)
 	if err != nil {

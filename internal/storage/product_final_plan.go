@@ -55,7 +55,7 @@ func productFinalPlanID(value ProductFinalPlanValue) (string, string, error) {
 	return structureID("product-final-plan-", value.Target.WaveID, digest), digest, err
 }
 
-func (k *KernelStore) readProductFinalPlanTx(ctx context.Context, q *sql.Tx, id string) (ProductFinalPlan, error) {
+func (k *KernelStore) readProductFinalPlanTx(ctx context.Context, q queryer, id string) (ProductFinalPlan, error) {
 	var plan, history ProductFinalPlan
 	err := taskEvidenceRecord(ctx, q, "product_final_plan", id, &plan)
 	if err == sql.ErrNoRows {
@@ -270,7 +270,7 @@ func (k *KernelStore) PrepareProductFinalPlan(ctx context.Context, target contra
 		if !reflect.DeepEqual(old.Value, plan.Value) {
 			return plan, ErrTaskEvidence
 		}
-		if err := kernelRecordTx(ctx, tx, "product_final_plan_current", target.WaveID, target.WaveID, ProductVerificationPlanReference{ID: old.ID, Digest: old.Digest}); err != nil {
+		if err := k.saveProductFinalSelectionTx(ctx, tx, old, heads); err != nil {
 			return plan, err
 		}
 		return old, tx.Commit()
@@ -282,7 +282,7 @@ func (k *KernelStore) PrepareProductFinalPlan(ctx context.Context, target contra
 			return plan, err
 		}
 	}
-	if err := kernelRecordTx(ctx, tx, "product_final_plan_current", target.WaveID, target.WaveID, ProductVerificationPlanReference{ID: plan.ID, Digest: plan.Digest}); err != nil {
+	if err := k.saveProductFinalSelectionTx(ctx, tx, plan, heads); err != nil {
 		return plan, err
 	}
 	return plan, tx.Commit()

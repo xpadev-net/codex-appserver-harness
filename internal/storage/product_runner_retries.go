@@ -53,6 +53,9 @@ func (k *KernelStore) ReserveProductRunnerRetry(ctx context.Context, previousID 
 	if err != nil {
 		return job, err
 	}
+	if previous.Value.Final != nil {
+		return job, ErrProductRunnerHeld
+	}
 	value := previous.Value
 	value.RetryOf, value.Spec.JobID = previous.ID, productRunnerRetryID(previous.ID)
 	if !productRunnerRetryValueMatches(previous, value) {
