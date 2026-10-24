@@ -74,7 +74,28 @@ func checkProductRunnerRetryExecution(t *testing.T, k *storage.KernelStore, plan
 	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexec \"$@\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	retry, err := r.StartRetry(ctx, first.ID)
+	workspace, err := k.ProductWorkspace(ctx, plan.Value.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := executorRepositoryFixture(workspace.Value.Request)
+	repo.Runner = runtime
+	repo.Runner.ForbiddenPaths = append([]string{"/new-protected-host-path"}, runtime.ForbiddenPaths...)
+	executor := Executor{Store: k, Repositories: map[int64]ExecutionRepository{repo.Policy.RepositoryID: repo}, Runner: r}
+	if _, err := executor.AdvanceVerification(ctx, plan.ID); !errors.Is(err, storage.ErrProductRunnerHeld) {
+		t.Fatal("changed host runtime reused old retry inputs", err)
+	}
+	unchanged, err := k.WaveOperationBudget(ctx, plan.Value.Target.WaveID)
+	if err != nil || unchanged.ValidationJobs != 1 || unchanged.RunnerRetries != 0 {
+		t.Fatal("held runtime spent retry budget", unchanged, err)
+	}
+	repo.Runner = runtime
+	executor.Repositories[repo.Policy.RepositoryID] = repo
+	pending, err := executor.AdvanceVerification(ctx, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := k.ReadProductRunnerJob(ctx, pending.Value.Jobs[0].JobID)
 	if err != nil || retry.ID == first.ID || retry.Value.RetryOf != first.ID || retry.Value.Spec.Candidate != first.Value.Spec.Candidate {
 		t.Fatal(retry, err)
 	}

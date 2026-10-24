@@ -538,3 +538,5 @@ controller-owned workerは現行planのTaskを安定cursorで走査し、新規w
 IPC/runner hintとruntimeのcommit後hintはworkerとmodel loopへ配送し、永続状態を再読込する。hint自体は結果/成功/Task作成の権限を持たない。取りこぼしは設定周期で照合し、変更がない完了Taskを再課金しない。shutdownでは同期Git処理のjoinまでcontroller lock/Storeを保持し、独立runnerの未確定ownerはDBに残す。startup/restartの実Git準備、保存run採用、停止時join、model run増加ゼロ、cursor・pause後のrunner発見、private設定とIPC配送をfixtureで検査する。
 
 このworkerのopt-inはPのモデルdispatch/正式承認能力を宣言しない。`product_readiness_unavailable`、新journalからの公開/Cloud/merge、versioned post-merge continuation、P/M受入の残件は別の接続で解消する。
+
+二つのqueueはそれぞれ最終pageまで一回ずつ進め、完了した短いqueueを他方の継続中に再走査しない。読取エラーが起きたqueueは次のhint/tickまで待ち、最終pageの後は両cursorを先頭へ戻す。128/129/256/257件と二回の走査を境界fixtureで確認する。runner retryは保存したruntimeと現在のhost設定（launcher/保護path/root）が一致する場合だけ開始し、設定が変わった後に旧保護pathで再起動しない。

@@ -92,6 +92,7 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 	ticker := time.NewTicker(w.Every)
 	defer ticker.Stop()
 	var tasksAfter, jobsAfter string
+	tasksPending, jobsPending := true, true
 	var stoppingErr error
 	defer func() { runErr = errors.Join(runErr, stoppingErr) }()
 	report := func(err error) {
@@ -106,39 +107,45 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		jobs, err := w.Executor.Store.ProductRunningJobs(ctx, jobsAfter, 128)
-		if err != nil {
-			report(err)
-		} else {
-			jobsAfter = jobs.NextAfter
-			for _, id := range jobs.IDs {
-				job, err := w.Executor.Runner.Reconcile(ctx, id)
-				if errors.Is(err, runner.ErrJobBusy) || errors.Is(err, runner.ErrCompletionUnconfirmed) || os.IsNotExist(err) {
-					continue
-				}
+		if jobsPending {
+			jobs, err := w.Executor.Store.ProductRunningJobs(ctx, jobsAfter, 128)
+			if err != nil {
+				jobsAfter, jobsPending = "", false
 				report(err)
-				if err == nil && job.State == "completed" && w.OnMutation != nil {
-					w.OnMutation()
+			} else {
+				jobsAfter, jobsPending = jobs.NextAfter, jobs.NextAfter != ""
+				for _, id := range jobs.IDs {
+					job, err := w.Executor.Runner.Reconcile(ctx, id)
+					if errors.Is(err, runner.ErrJobBusy) || errors.Is(err, runner.ErrCompletionUnconfirmed) || os.IsNotExist(err) {
+						continue
+					}
+					report(err)
+					if err == nil && job.State == "completed" && w.OnMutation != nil {
+						w.OnMutation()
+					}
 				}
 			}
 		}
-		page, err := w.Executor.Store.ProductExecutionTasks(ctx, tasksAfter, 128)
-		if err != nil {
-			report(err)
-		} else {
-			tasksAfter = page.NextAfter
-			for _, id := range page.IDs {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				changed, err := w.task(ctx, id)
+		if tasksPending {
+			page, err := w.Executor.Store.ProductExecutionTasks(ctx, tasksAfter, 128)
+			if err != nil {
+				tasksAfter, tasksPending = "", false
 				report(err)
-				if changed && w.OnMutation != nil {
-					w.OnMutation()
+			} else {
+				tasksAfter, tasksPending = page.NextAfter, page.NextAfter != ""
+				for _, id := range page.IDs {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					changed, err := w.task(ctx, id)
+					report(err)
+					if changed && w.OnMutation != nil {
+						w.OnMutation()
+					}
 				}
 			}
 		}
-		if tasksAfter != "" || jobsAfter != "" {
+		if tasksPending || jobsPending {
 			continue
 		}
 		select {
@@ -147,5 +154,9 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 		case <-w.wake:
 		case <-ticker.C:
 		}
+		// Each new reconciliation starts both queues at the beginning, including
+		// newly created IDs that sort before the preceding scan's final cursor.
+		tasksAfter, jobsAfter = "", ""
+		tasksPending, jobsPending = true, true
 	}
 }

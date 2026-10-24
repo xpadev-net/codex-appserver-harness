@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -63,5 +64,56 @@ func TestProductExecutionQueuesPageTasksAndRetainPausedRunnerOwnership(t *testin
 	stopped, err := k.ProductRunningJobs(ctx, "", 1)
 	if err != nil || len(stopped.IDs) != 0 {
 		t.Fatal("stopped owner remained queued", stopped, err)
+	}
+}
+
+func TestProductExecutionPageBoundariesAndFreshScan(t *testing.T) {
+	for _, count := range []int{0, 1, 128, 129, 256, 257} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			ctx := context.Background()
+			k, _ := waveStoreFixture(t)
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < count; i++ {
+				id := fmt.Sprintf("queue-%04d", i)
+				if err := kernelRecordTx(ctx, tx, "test_execution_queue", id, "", map[string]string{"id": id}); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			query := `SELECT id FROM records WHERE kind='test_execution_queue' AND id>? ORDER BY id LIMIT ?`
+			for scan := 0; scan < 2; scan++ {
+				seen := map[string]bool{}
+				cursor, pages := "", 0
+				for {
+					page, err := k.productExecutionPage(ctx, cursor, 128, query)
+					if err != nil || len(page.IDs) > 128 {
+						t.Fatal(page, err)
+					}
+					pages++
+					for _, id := range page.IDs {
+						if seen[id] {
+							t.Fatal("page repeated an ID", id)
+						}
+						seen[id] = true
+					}
+					if page.NextAfter == "" {
+						break
+					}
+					if page.NextAfter <= cursor {
+						t.Fatal("cursor did not advance")
+					}
+					cursor = page.NextAfter
+				}
+				if len(seen) != count || pages != max(1, (count+127)/128) {
+					t.Fatal("scan lost/repeated a page", scan, len(seen), pages)
+				}
+			}
+		})
 	}
 }

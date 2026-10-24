@@ -31,6 +31,8 @@ func (k *KernelStore) productExecutionPage(ctx context.Context, after string, li
 		return out, err
 	}
 	defer tx.Rollback()
+	// The extra row is a sentinel: a full final page has no continuation,
+	// while a non-final page returns its last included ID as the next cursor.
 	ids, err := inputIDsTx(ctx, tx, query, after, limit+1)
 	if err != nil {
 		return out, err

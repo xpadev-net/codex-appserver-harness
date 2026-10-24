@@ -54,7 +54,8 @@ func loadProductExecutor(path string, k *storage.KernelStore, runtime control.Is
 	if err != nil {
 		return nil, nil, err
 	}
-	hidden := []string{filepath.Join(k.Root, "state.db"), filepath.Join(k.Root, "state.db-wal"), filepath.Join(k.Root, "state.db-shm"), filepath.Join(k.Root, ipc.SocketName), filepath.Join(home, ".config", "gh"), filepath.Join(home, ".git-credentials"), filepath.Join(controllerHome, "auth.json")}
+	database := filepath.Join(k.Root, databaseName)
+	hidden := []string{database, database + "-wal", database + "-shm", filepath.Join(k.Root, ipc.SocketName), filepath.Join(home, ".config", "gh"), filepath.Join(home, ".git-credentials"), filepath.Join(controllerHome, "auth.json")}
 	for _, p := range []string{runtime.WorkerCodexHome, runtime.SessionAuthFile, os.Getenv("GH_CONFIG_DIR")} {
 		if p != "" {
 			absolute, err := filepath.Abs(p)
