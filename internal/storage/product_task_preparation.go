@@ -46,8 +46,14 @@ func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, 
 	if set.State != "active" || set.PhaseID != task.PhaseID || drain {
 		return out, ErrProductWorkspaceHeld
 	}
-	if err := k.productFutureTaskUnusedTx(ctx, tx, w, task); err != nil {
-		return out, err
+	if unusedErr := k.productFutureTaskUnusedTx(ctx, tx, w, task); unusedErr != nil {
+		readable, err := k.preparedBaseTaskReadableTx(ctx, tx, w, task)
+		if err != nil {
+			return out, err
+		}
+		if !readable {
+			return out, unusedErr
+		}
 	}
 	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
 	if err != nil {

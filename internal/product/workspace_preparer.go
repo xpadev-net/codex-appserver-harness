@@ -17,7 +17,10 @@ import (
 // WorkspacePreparer is the synchronous local Git owner. Its caller retains the
 // store until it returns, including bounded stopping-proof persistence on cancel.
 // Host configuration maps RepositoryID to the canonical local repository.
-type WorkspacePreparer struct{ Store *storage.KernelStore }
+type WorkspacePreparer struct {
+	Store       *storage.KernelStore
+	RefreshBase func(context.Context, string) (storage.ProductBasePlan, error)
+}
 
 func sameUserDirectory(path string, private bool) error {
 	info, err := os.Lstat(path)
@@ -75,6 +78,9 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 	if p.Store == nil {
 		return storage.ProductWorkspace{}, errors.New("configured product workspace store required")
 	}
+	if request.BasePlanID != "" && p.RefreshBase == nil {
+		return storage.ProductWorkspace{}, errors.New("fixed-base workspace requires the host source/head reader")
+	}
 	saved, err := p.Store.ReserveProductWorkspace(ctx, request)
 	if err != nil {
 		return saved, err
@@ -82,6 +88,14 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 	if saved.State == "ready" {
 		return saved, nil
 	} // Historical read-only replay grants no start.
+	if saved.State != "prepared" {
+		return saved, storage.ErrProductWorkspaceHeld
+	}
+	if request.BasePlanID != "" {
+		if err := p.refreshBase(ctx, request); err != nil {
+			return saved, err
+		}
+	}
 	claim, err := p.Store.ClaimProductWorkspace(ctx, request.TaskID, saved.Digest)
 	if err != nil {
 		return saved, err
@@ -95,6 +109,7 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 	// filters/drivers, fsmonitor, auto maintenance and recursive submodules.
 	// A missing final receipt leaves the launching intent/leases held; a replay
 	// never runs these commands a second time.
+	var fetched *workspace.CommitFetch
 	createErr := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -104,6 +119,40 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 		}
 		if err := sameUserDirectory(saved.Value.Request.Repository, false); err != nil {
 			return err
+		}
+		if request.BasePlanID != "" {
+			if err := p.refreshBase(ctx, request); err != nil {
+				return err
+			}
+			plan, err := p.Store.ReadProductBasePlan(ctx, request.BasePlanID)
+			if err != nil {
+				return err
+			}
+			pin, err := workspace.PinRepository(ctx, request.Repository)
+			if err != nil {
+				return err
+			}
+			for _, dir := range []string{pin.GitDir, pin.CommonDir} {
+				if err := sameUserDirectory(dir, false); err != nil {
+					return err
+				}
+			}
+			if err := p.Store.CheckProductWorkspaceBaseFetch(ctx, request.TaskID, saved.Digest, pin); err != nil {
+				return err
+			}
+			observation, err := workspace.FetchPinnedCommit(ctx, pin, plan.Value.Head.Remote, request.BaseSHA, func(ctx context.Context) error {
+				if err := p.refreshBase(ctx, request); err != nil {
+					return err
+				}
+				return p.Store.MarkProductWorkspaceFetchMaySend(ctx, request.TaskID, saved.Digest, pin)
+			})
+			fetched = &observation
+			if err != nil {
+				return err
+			}
+			if err := p.refreshBase(ctx, request); err != nil {
+				return err
+			}
 		}
 		parent := filepath.Join(p.Store.Root, "workspaces")
 		if err := os.Mkdir(parent, 0700); err != nil && !errors.Is(err, os.ErrExist) {
@@ -133,10 +182,17 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 			proof = verified
 		}
 	}
+	if createErr == nil && request.BasePlanID != "" {
+		createErr = p.refreshBase(ctx, request)
+		if createErr != nil {
+			proof = storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "failed", Reason: "fixed base changed after checkout owner stopped"}
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		createErr = errors.Join(createErr, err)
 		proof = storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "failed", Reason: "canceled workspace owner stopped"}
 	}
+	proof.Fetch = fetched
 	if errors.Is(createErr, workspace.ErrGitStopUnconfirmed) {
 		return saved, createErr
 	}
@@ -152,4 +208,15 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 		return finished, storage.ErrProductWorkspaceHeld
 	}
 	return finished, createErr
+}
+
+func (p WorkspacePreparer) refreshBase(ctx context.Context, r storage.ProductWorkspaceRequest) error {
+	plan, err := p.RefreshBase(ctx, r.TaskID)
+	if err != nil {
+		return err
+	}
+	if plan.ID != r.BasePlanID || plan.Digest != r.BasePlanDigest || plan.Value.Head.HeadSHA != r.BaseSHA || plan.Value.Input.Value.Policy.Value.Repository != r.Repository {
+		return storage.ErrProductWorkspaceHeld
+	}
+	return nil
 }

@@ -240,6 +240,9 @@ func (k *KernelStore) CurrentProductBasePlan(ctx context.Context, taskID string)
 		return ProductBasePlan{}, err
 	}
 	defer tx.Rollback()
+	return k.currentProductBasePlanTx(ctx, tx, taskID)
+}
+func (k *KernelStore) currentProductBasePlanTx(ctx context.Context, tx *sql.Tx, taskID string) (ProductBasePlan, error) {
 	selected, plan, err := k.readProductBaseSelectionTx(ctx, tx, taskID)
 	if err != nil {
 		return plan, err

@@ -27,3 +27,17 @@ P の work/fix Task が `depends_on` で別 WorkItem の work/fix/verification/r
 計画は入力 digest・repository・branch・初期 SHA・HEAD・取得先・祖先集合で固定する。同じ HEAD の再観測は元計画の履歴を変えず、現在の選択と観測時刻を別に保存する。HEAD が変われば別計画を作る。effect 前の保存済み選択確認は30秒を超える観測、Task/source の変化、先行証拠の喪失、pause を保留する。plan/head/history/admission/current selection の欠落を、新しい HEAD の再観測で作り直さない。保存途中の失敗は計画と選択を共に rollback する。
 
 これは read-only 外部観測と DB への host 計画保存の component であり、Git の取得・workspace への適用・候補の採用や model/runner 起動を許可しない。実 Git の取得と model readiness への接続は後続 PR で扱う。テストの GitHub HEAD/ancestry は fixture として扱い、native P の受入には含めない。
+
+## 固定 base の取得と workspace 証拠
+
+host が `ProductWorkspaceRequest` に base plan の ID/digest を渡すと、workspace の予約・claim・取得送信・停止証拠がその固定計画を参照する。現在の入力と30秒以内の選択を照合し、fresh な work/fix の作業開始だけを許可する。claim と送信は一度限りで、共通 Git directory・worktree の実 lease と generation を取得前にも確認する。plan/admission/claim/send/terminal の欠落は再生成や再送へ進めない。
+
+`WorkspacePreparer.RefreshBase` に host reader を明示した場合、取得直前にも source/default HEAD を再観測し、固定 SHA の object を `FetchPinnedCommit` で取り込んでから private linked checkout を作る。元 repository の branch/checkout を動かさず、checkout の SHA・clean 状態・Git metadata と process group の停止を検査する。ローカルに object があれば送信 fence を消費しない。停止未確認では terminal 証拠と capacity 解放を保存しない。取得後の HEAD 変更や既知の失敗は、元の取得事実を保持して workspace 成功と model 起動を保留する。
+
+準備時の元 Task 入力と、固定 workspace を追加した後の入力 digest の対応を保つ。同じ HEAD の観測更新で元計画を作り直さない。初回 turn は fresh な選択を必要とし、thread 作成後でも model run 前なら read-only の再観測を行える。開始済みの未完了 Task の通常再開は元の計画を参照し、scope/policy/入力/先行 merge と現在の制御を再確認する。run admission に base selection と実 snapshot/workspace の対応を保存する。
+
+旧形式で計画参照がない workspace の JSON/checksum は変更しない。新しい証拠 field は使用時だけ保存する。
+
+実 temp Git/SQLite の検査では、新 SHA の実取得・同じ SHA の checkout、既存 object の無送信、送信直前の source 保留、取得後の HEAD 変更、replay、停止未確認の claim/capacity 保持を確認する。DB の起動検査では初回 turn の時刻失効、thread 作成後の再観測、同じ未完了 Task の waiting→入力通知→再開、run/snapshot の監査対応、journal 喪失を検査する。HTTP/ancestry と model 実行は fixture で、native P の証拠には含めない。
+
+この adapter は host が明示的に呼ぶ契約である。daemon/CLI の自動 base 選択、失敗時の親通知、旧候補への通常 merge と新 fix Task への競合引渡しは後続へ残る。

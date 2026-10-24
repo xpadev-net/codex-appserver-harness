@@ -156,8 +156,16 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 	if host == nil || host.Name != registration.Value.Definition.Repository || host.Policy.Repository != saved.Value.Request.Repository {
 		return "product_repository_unavailable", nil
 	}
+	if saved.Value.Request.BasePlanID != "" {
+		if _, err := k.productModelBaseSelectionTx(ctx, tx, task, *saved, *host); err != nil {
+			return productReadinessError("product_base_unavailable", err)
+		}
+	}
 	current, err := loadProductTargetTx(ctx, tx, w.Target(), saved.Value.WorkItemID)
 	if err == nil {
+		if saved.Value.Request.BasePlanID != "" {
+			return "product_base_source_changed", nil
+		}
 		if current.Value.Repository != host.Name || current.Value.BaseBranch != host.BaseBranch {
 			return "product_repository_changed", nil
 		}
@@ -166,7 +174,7 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 		}
 	} else if err != sql.ErrNoRows {
 		return productReadinessError("product_candidate_unavailable", err)
-	} else if !usesProductSubject(w, task.Spec) && saved.Value.Request.BaseSHA != host.InitialSHA {
+	} else if !usesProductSubject(w, task.Spec) && saved.Value.Request.BasePlanID == "" && saved.Value.Request.BaseSHA != host.InitialSHA {
 		return "product_base_changed", nil
 	}
 	policy, err := loadProductVerificationPolicy(ctx, tx, w.ID, w.Policy.Revision, host.Policy.RepositoryID)
@@ -232,20 +240,21 @@ func productReadinessError(reason string, err error) (string, error) {
 // ProductModelAdmission records which live host configuration admitted a turn.
 // It contains references only; private runtime paths/argv are not model input.
 type ProductModelAdmission struct {
-	HostConfigDigest string          `json:"host_config_digest"`
-	RunID            string          `json:"run_id"`
-	SessionID        string          `json:"session_id"`
-	Target           contract.Target `json:"target"`
-	Epoch            string          `json:"epoch"`
-	RuntimeDigest    string          `json:"runtime_digest"`
-	Model            string          `json:"model"`
-	ToolProfile      string          `json:"tool_profile"`
-	RepositoryID     int64           `json:"repository_id"`
-	WorkspaceID      string          `json:"workspace_id"`
-	WorkspaceDigest  string          `json:"workspace_digest"`
-	InputDigest      string          `json:"input_digest"`
-	SnapshotID       string          `json:"snapshot_id"`
-	SnapshotDigest   string          `json:"snapshot_digest"`
+	BaseSelection    *ProductBaseSelection `json:"base_selection,omitempty"`
+	HostConfigDigest string                `json:"host_config_digest"`
+	RunID            string                `json:"run_id"`
+	SessionID        string                `json:"session_id"`
+	Target           contract.Target       `json:"target"`
+	Epoch            string                `json:"epoch"`
+	RuntimeDigest    string                `json:"runtime_digest"`
+	Model            string                `json:"model"`
+	ToolProfile      string                `json:"tool_profile"`
+	RepositoryID     int64                 `json:"repository_id"`
+	WorkspaceID      string                `json:"workspace_id"`
+	WorkspaceDigest  string                `json:"workspace_digest"`
+	InputDigest      string                `json:"input_digest"`
+	SnapshotID       string                `json:"snapshot_id"`
+	SnapshotDigest   string                `json:"snapshot_digest"`
 }
 
 func (k *KernelStore) recordProductModelAdmissionTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, snapshot contract.InputSnapshot, run contract.SessionRun) error {
@@ -274,6 +283,20 @@ func (k *KernelStore) recordProductModelAdmissionTx(ctx context.Context, tx *sql
 		return err
 	}
 	value := ProductModelAdmission{HostConfigDigest: catalogDigest, RunID: run.ID, SessionID: task.SessionID, Target: task.Target(), Epoch: epoch, RuntimeDigest: config.RuntimeDigest, Model: config.Model, ToolProfile: config.ToolProfile, RepositoryID: workspace.Value.Request.RepositoryID, WorkspaceID: workspace.ID, WorkspaceDigest: workspace.Digest, InputDigest: task.InputDigest, SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest}
+	if workspace.Value.Request.BasePlanID != "" {
+		var host ProductModelRepository
+		for _, repo := range config.Repositories {
+			if repo.Policy.RepositoryID == workspace.Value.Request.RepositoryID {
+				host = repo
+				break
+			}
+		}
+		selected, err := k.productModelBaseSelectionTx(ctx, tx, task, *workspace, host)
+		if err != nil {
+			return err
+		}
+		value.BaseSelection = selected
+	}
 	return kernelRecordTx(ctx, tx, "product_model_admission", run.ID, w.ID, value)
 }
 

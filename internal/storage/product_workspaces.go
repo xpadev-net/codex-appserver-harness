@@ -14,6 +14,7 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 var ErrProductWorkspaceHeld = errors.New("product workspace preparation requires owner reconciliation")
@@ -22,10 +23,12 @@ var ErrProductWorkspaceHeld = errors.New("product workspace preparation requires
 // Repository is the canonical local repository mapped to RepositoryID by host
 // configuration; BaseSHA is a fixed local commit, not a branch-name guess.
 type ProductWorkspaceRequest struct {
-	TaskID       string `json:"task_id"`
-	RepositoryID int64  `json:"repository_id"`
-	Repository   string `json:"repository"`
-	BaseSHA      string `json:"base_sha"`
+	BasePlanID     string `json:"base_plan_id,omitempty"`
+	BasePlanDigest string `json:"base_plan_digest,omitempty"`
+	TaskID         string `json:"task_id"`
+	RepositoryID   int64  `json:"repository_id"`
+	Repository     string `json:"repository"`
+	BaseSHA        string `json:"base_sha"`
 }
 type ProductWorkspaceValue struct {
 	VerificationPolicyID     string                  `json:"verification_policy_id,omitempty"`
@@ -46,26 +49,29 @@ type ProductWorkspaceValue struct {
 
 // Only the synchronous Git owner submits physical-stop and filesystem facts.
 type ProductWorkspaceProof struct {
-	CWD       string `json:"cwd,omitempty"`
-	Branch    string `json:"branch,omitempty"`
-	ProofID   string `json:"proof_id"`
-	Outcome   string `json:"outcome"` // prepared or failed; both require a stopped owner
-	Reason    string `json:"reason"`
-	HeadSHA   string `json:"head_sha,omitempty"`
-	GitDir    string `json:"git_dir,omitempty"`
-	CommonDir string `json:"common_dir,omitempty"`
-	Clean     bool   `json:"clean"`
+	Fetch     *workspace.CommitFetch `json:"fetch,omitempty"`
+	CWD       string                 `json:"cwd,omitempty"`
+	Branch    string                 `json:"branch,omitempty"`
+	ProofID   string                 `json:"proof_id"`
+	Outcome   string                 `json:"outcome"` // prepared or failed; both require a stopped owner
+	Reason    string                 `json:"reason"`
+	HeadSHA   string                 `json:"head_sha,omitempty"`
+	GitDir    string                 `json:"git_dir,omitempty"`
+	CommonDir string                 `json:"common_dir,omitempty"`
+	Clean     bool                   `json:"clean"`
 }
 type ProductWorkspace struct {
-	ID         string                 `json:"id"`
-	Value      ProductWorkspaceValue  `json:"value"`
-	Digest     string                 `json:"digest"`
-	State      string                 `json:"state"` // prepared, launching, ready, failed, stale
-	Reason     string                 `json:"reason,omitempty"`
-	CreatedAt  time.Time              `json:"created_at"`
-	ClaimedAt  time.Time              `json:"claimed_at"`
-	FinishedAt time.Time              `json:"finished_at"`
-	Proof      *ProductWorkspaceProof `json:"proof,omitempty"`
+	BaseClaim   *ProductBaseWorkspaceClaim `json:"base_claim,omitempty"`
+	BaseFetchAt *time.Time                 `json:"base_fetch_at,omitempty"`
+	ID          string                     `json:"id"`
+	Value       ProductWorkspaceValue      `json:"value"`
+	Digest      string                     `json:"digest"`
+	State       string                     `json:"state"` // prepared, launching, ready, failed, stale
+	Reason      string                     `json:"reason,omitempty"`
+	CreatedAt   time.Time                  `json:"created_at"`
+	ClaimedAt   time.Time                  `json:"claimed_at"`
+	FinishedAt  time.Time                  `json:"finished_at"`
+	Proof       *ProductWorkspaceProof     `json:"proof,omitempty"`
 }
 type ProductWorkspaceClaim struct {
 	Workspace ProductWorkspace `json:"workspace"`
@@ -89,6 +95,15 @@ func productWorkspaceID(taskID string) string { return structureID("product-work
 func (k *KernelStore) productWorkspaceTx(ctx context.Context, q queryer, id string) (ProductWorkspace, error) {
 	var record productWorkspaceRecord
 	if err := taskEvidenceRecord(ctx, q, "product_workspace", id, &record); err != nil {
+		if err == sql.ErrNoRows {
+			var known bool
+			if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_workspace_history','product_base_workspace_admission','product_base_workspace_claim','product_workspace_fetch_send','product_base_workspace_terminal')) OR EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE run_id=?)", id, id).Scan(&known); err != nil {
+				return record.Workspace, err
+			}
+			if known {
+				return record.Workspace, ErrTaskEvidence
+			}
+		}
 		return record.Workspace, err
 	}
 	saved := record.Workspace
@@ -131,10 +146,18 @@ func (k *KernelStore) productWorkspaceTx(ctx context.Context, q queryer, id stri
 	default:
 		return saved, ErrTaskEvidence
 	}
+	if err := k.validateBaseWorkspaceEvidenceTx(ctx, q, saved); err != nil {
+		return saved, err
+	}
 	return saved, nil
 }
 func (k *KernelStore) ProductWorkspace(ctx context.Context, taskID string) (ProductWorkspace, error) {
-	return k.productWorkspaceTx(ctx, k.DB, productWorkspaceID(taskID))
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductWorkspace{}, err
+	}
+	defer tx.Rollback()
+	return k.productWorkspaceTx(ctx, tx, productWorkspaceID(taskID))
 }
 func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, value ProductWorkspaceValue) (domain.Wave, domain.Task, contract.SessionBinding, error) {
 	var b contract.SessionBinding
@@ -163,6 +186,9 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 		return w, task, b, ErrProductWorkspaceHeld
 	}
 	if err := k.productMergeDependenciesTx(ctx, tx, w, task); err != nil {
+		return w, task, b, err
+	}
+	if err := k.baseWorkspaceOwnerTx(ctx, tx, value); err != nil {
 		return w, task, b, err
 	}
 	if _, err := k.productWorkspaceSubjectTx(ctx, tx, w, task, value); err != nil {
@@ -294,6 +320,11 @@ func (k *KernelStore) ReserveProductWorkspace(ctx context.Context, request Produ
 		return saved, err
 	}
 	saved = ProductWorkspace{ID: id, Value: value, Digest: digest, State: "prepared", CreatedAt: k.clock()}
+	if request.BasePlanID != "" {
+		if err := kernelRecordTx(ctx, tx, "product_base_workspace_admission", saved.ID, w.ID, saved); err != nil {
+			return saved, err
+		}
+	}
 	if err := saveProductWorkspaceTx(ctx, tx, "product_workspace", saved); err != nil {
 		return saved, err
 	}
@@ -335,6 +366,16 @@ func (k *KernelStore) ClaimProductWorkspace(ctx context.Context, taskID, digest 
 		return result, ErrProductWorkspaceHeld
 	}
 	saved.State, saved.ClaimedAt = "launching", k.clock()
+	if saved.Value.Request.BasePlanID != "" {
+		selection, _, err := k.readProductBaseSelectionTx(ctx, tx, taskID)
+		if err != nil {
+			return result, err
+		}
+		saved.BaseClaim = &ProductBaseWorkspaceClaim{Selection: selection, ClaimedAt: saved.ClaimedAt}
+		if err := kernelRecordTx(ctx, tx, "product_base_workspace_claim", saved.ID, w.ID, *saved.BaseClaim); err != nil {
+			return result, err
+		}
+	}
 	if err := saveProductWorkspaceTx(ctx, tx, "product_workspace", saved); err != nil {
 		return result, err
 	}
@@ -420,6 +461,9 @@ func (k *KernelStore) FinishProductWorkspace(ctx context.Context, taskID string,
 		}
 	}
 	saved.Proof, saved.FinishedAt = &proof, k.clock()
+	if err := k.validateBaseWorkspaceProofTx(ctx, tx, saved); err != nil {
+		return saved, err
+	}
 	disposition := "process_stopped"
 	if proof.Outcome == "not_started" {
 		disposition = "not_started"
@@ -429,6 +473,11 @@ func (k *KernelStore) FinishProductWorkspace(ctx context.Context, taskID string,
 	}
 	if err := saveProductWorkspaceTx(ctx, tx, "product_workspace", saved); err != nil {
 		return saved, err
+	}
+	if saved.Value.Request.BasePlanID != "" {
+		if err := kernelRecordTx(ctx, tx, "product_base_workspace_terminal", saved.ID, saved.Value.Target.WaveID, saved); err != nil {
+			return saved, err
+		}
 	}
 	if err := saveProductWorkspaceTx(ctx, tx, "product_workspace_history", saved); err != nil {
 		return saved, err
