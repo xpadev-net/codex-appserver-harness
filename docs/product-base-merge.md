@@ -80,3 +80,13 @@ model 入力には元候補 SHA と、準備済み HEAD・新比較 base の固�
 新入力の digest は参照先の停止証拠に結び付き、固定 base 計画は元の競合 base も ancestry の必須集合に加える。再起動後も証拠欠落・改変・未停止 owner・候補更新・scope/policy 変更は保留する。optional field を未使用の旧 plan/input/通知は従来の JSON/checksum を保持する。
 
 この節は実 SQLite の親通知・新 Task/session・入力/admission component である。競合中の checkout を新 fix の model に開放する physical adapter と解消後の sealing 接続は後続へ残り、この参照だけでは model 起動や Git の再実行を許可しない。native P の受入には含めない。
+
+## 競合解消の物理 sealing port
+
+`workspace.FreezeResolvedBase` は正常停止した fix のファイルを controller が stage/commit する Go port である。worker の Git metadata は読み取り専用のままとする。呼出し側は一度限りの永続 claim と Git/worktree lease を持ち、直前の permission check を明示する。この port 単体は Task/session 作成、model admission、候補の採用、品質・正式承認を行わない。
+
+元候補の ancestry、canonical metadata、partial clone の不在、固定した MERGE_HEAD（既に commit 済みなら新 base の ancestry）、他の Git operation の不在を照合する。Git の leftover conflict marker 検査を行い、whitespace style は追加 gate にしない。permission check 後にも同じ HEAD/MERGE_HEAD と状態を照合する。host が stage して未解決 index がなくなったことを確かめ、tree が ours と同じ場合も merge commit を作る。両親・新 base の ancestry・clean 状態・operation 解消を保存する。hook・外部 diff/textconv・filter/merge driver・署名を実行しない。
+
+既知の実停止後に失敗した場合は、変更開始の事実と HEAD/MERGE_HEAD・clean・未解決 path の有界な観測を返す。取消しでも3秒以内の照合だけを行い、停止未確認では成功や停止観測を返さない。これらの失敗は自動再試行や lease 解放を許可しない。
+
+実 temp Git の検査は両変更/両親、ours と削除の解消、既に commit 済みの読取、未解決 marker、abort・別 operation・新 base/HEAD の変更、partial clone、permission 保留、取消し、hook/diff/署名抑止、stage 後の commit 失敗の保持を確認する。解消内容の意味や品質は独立検証・review に委ねる。この port と新 fix workspace/admission/停止証拠の接続は後続へ残る。

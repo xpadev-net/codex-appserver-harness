@@ -38,7 +38,14 @@ type BaseMerge struct {
 }
 
 func mergeIdle(p PinnedCheckout) error {
+	return mergeIdleExceptPendingMerge(p, false)
+}
+
+func mergeIdleExceptPendingMerge(p PinnedCheckout, allowMerge bool) error {
 	for _, name := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply", "sequencer"} {
+		if allowMerge && name == "MERGE_HEAD" {
+			continue
+		}
 		if _, err := os.Lstat(filepath.Join(p.GitDir, name)); err == nil {
 			return errors.New("checkout already has an unresolved Git operation")
 		} else if !errors.Is(err, os.ErrNotExist) {
