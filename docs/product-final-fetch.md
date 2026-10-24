@@ -8,7 +8,7 @@ host の Git は固定 SHA の object だけを明示した credential-free HTTP
 
 同期 Git 所有者は子 process group を join してから停止証拠を保存する。停止未確認では lease を保持する。claim/send/terminal/history の欠落は証拠喪失として再実行を保留する。再openや再呼出しは unknown な command を再開しない。停止が確認できた結果は、cancel や HEAD 変更後も元の操作の履歴として保存し、同じ証拠の replay は副作用を繰り返さない。実際の fetch と送信権の消費がないことを停止証拠で確認できる場合は、`not_started` と `not_started` dispositionを保存する。同じ計画が現在も有効なら、`RetryUnstartedProductFinalFetch`が別IDのattemptを1回だけ作り、controllerの次の呼出しで進められる。元のclaim/terminalを保持し、既存attemptをpreparedへ戻さない。unknown・送信済み・通常failedは自動再試行しない。再試行上限に達した場合は保留し、運用者が新しい版の計画で判断する。
 
-この変更は固定 commit の取得と `FinalRunner.Start` への接続である。daemon の最終工程 dispatch、親結果適用直前の source/HEAD 照合、正式 Cloud APPROVED と P 全体受入は後続へ残る。取得できたことはテスト成功・公開・merge・Wave 完了の証拠ではない。
+固定 commit の取得は `FinalRunner.Start` と[daemon の最終工程](product-final-daemon.md)に接続している。正式 Cloud APPROVED と P 全体受入は未達である。取得できたことはテスト成功・公開・merge・Wave 完了の証拠ではない。
 
 検査:
 

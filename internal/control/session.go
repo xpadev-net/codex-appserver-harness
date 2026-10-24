@@ -318,7 +318,9 @@ func (o *owner) Close() error {
 }
 
 type Runtime struct {
-	ConfigurationDigest string
+	ProductFinalConfigDigest string
+	ProductFinalGate         func(context.Context, contract.Target) error
+	ConfigurationDigest      string
 
 	ProductTools       bool // trusted opt-in; each thread's tool profile is pinned
 	ProductToolProfile string
