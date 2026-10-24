@@ -33,17 +33,28 @@ type ProductCoveragePending struct {
 	RecordID   string `json:"record_id,omitempty"`
 	Reason     string `json:"reason"`
 }
+
+// Retirement removes only an authenticated older contributor from current
+// obligations. Its merge remains historical and supplies no current coverage.
+type ProductCoverageRetirement struct {
+	WorkItemID         string `json:"work_item_id"`
+	RegistrationDigest string `json:"registration_digest"`
+	CurrentWorkItemID  string `json:"current_work_item_id"`
+	ContinuationID     string `json:"continuation_id"`
+	ContinuationDigest string `json:"continuation_digest"`
+}
 type ProductCoverageValue struct {
-	Target            contract.Target          `json:"target"`
-	Source            string                   `json:"source"`
-	SourceID          string                   `json:"source_id"`
-	Criteria          []domain.WaveCriterion   `json:"criteria"`
-	Merged            []ProductCoverageFact    `json:"merged"`
-	Historical        []ProductCoverageFact    `json:"historical"`
-	Residual          []string                 `json:"residual"`
-	Pending           []ProductCoveragePending `json:"pending"`
-	Unavailable       []ProductCoveragePending `json:"unavailable"`
-	UnmergedWorkItems []string                 `json:"unmerged_work_items"`
+	Retired           []ProductCoverageRetirement `json:"retired,omitempty"`
+	Target            contract.Target             `json:"target"`
+	Source            string                      `json:"source"`
+	SourceID          string                      `json:"source_id"`
+	Criteria          []domain.WaveCriterion      `json:"criteria"`
+	Merged            []ProductCoverageFact       `json:"merged"`
+	Historical        []ProductCoverageFact       `json:"historical"`
+	Residual          []string                    `json:"residual"`
+	Pending           []ProductCoveragePending    `json:"pending"`
+	Unavailable       []ProductCoveragePending    `json:"unavailable"`
+	UnmergedWorkItems []string                    `json:"unmerged_work_items"`
 }
 
 // Coverage describes known merges, not parent criterion acceptance. Every fact
@@ -122,12 +133,45 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 	registrations := map[string]string{}
 	workCriteria := map[string][]string{}
 	mergedWork := map[string]bool{}
+	heads := map[string]ProductWorkItemRegistrationSnapshot{}
+	retirements := map[string]ProductCoverageRetirement{}
+	retiredWork := map[string]bool{}
 	for _, id := range workIDs {
 		r, err := loadProductWorkItemRegistration(ctx, tx, id)
 		if ctx.Err() != nil {
 			return ledger, ctx.Err()
 		}
-		if err != nil || !productRegistrationScope(r, w) {
+		if err != nil {
+			continue // Classified below; missing heads never authorize retirement.
+		}
+		heads[id] = r
+		if !productRegistrationScope(r, w) {
+			continue
+		}
+		lineage, err := k.productContinuationInputsTx(ctx, tx, w, id)
+		if err != nil {
+			if !readinessHoldError(err) {
+				return ledger, err
+			}
+			unknownRegistration = true
+			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{WorkItemID: id, Reason: "continuation_evidence_unavailable"})
+			continue
+		}
+		for _, node := range lineage {
+			parentID := node.Value.ParentWorkItemID
+			if _, exists := retirements[parentID]; !exists {
+				retirements[parentID] = ProductCoverageRetirement{WorkItemID: parentID, RegistrationDigest: node.Value.ParentRegistrationDigest, CurrentWorkItemID: id, ContinuationID: node.ID, ContinuationDigest: node.Digest}
+			}
+		}
+	}
+	for _, id := range workIDs {
+		r, present := heads[id]
+		if retired, ok := retirements[id]; ok && present && !productRegistrationScope(r, w) && r.Digest == retired.RegistrationDigest {
+			ledger.Value.Retired = append(ledger.Value.Retired, retired)
+			retiredWork[id] = true
+			continue
+		}
+		if !present || !productRegistrationScope(r, w) {
 			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{WorkItemID: id, Reason: "source_registration_unavailable"})
 			unknownRegistration = true
 			continue
@@ -235,6 +279,9 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 	}
 	blockedCriteria := map[string]bool{}
 	for _, id := range workIDs {
+		if retiredWork[id] {
+			continue
+		}
 		if !mergedWork[id] {
 			ledger.Value.UnmergedWorkItems = append(ledger.Value.UnmergedWorkItems, id)
 			for _, criterion := range workCriteria[id] {
