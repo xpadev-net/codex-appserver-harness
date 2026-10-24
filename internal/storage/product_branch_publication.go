@@ -30,6 +30,8 @@ type ProductBranchRemote struct {
 }
 
 type ProductBranchValue struct {
+	RetryOf         string                           `json:"retry_of,omitempty"`
+	Attempt         int                              `json:"attempt,omitempty"`
 	OperationID     string                           `json:"operation_id"`
 	OwnerID         string                           `json:"owner_id"`
 	Product         ProductTargetSnapshot            `json:"product"`
@@ -147,7 +149,7 @@ func loadProductBranch(ctx context.Context, q queryer, id string) (job ProductBr
 	if err != nil {
 		return job, err
 	}
-	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || id != productBranchID(job.Value.OperationID) || job.CreatedAt.IsZero() {
+	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || !validProductBranchAttempt(job) || job.CreatedAt.IsZero() {
 		return job, ErrTaskEvidence
 	}
 	var history ProductBranchValue
@@ -167,6 +169,11 @@ func loadProductBranch(ctx context.Context, q queryer, id string) (job ProductBr
 	}
 	if plan.Digest != job.Value.Plan.Digest || plan.Value.Candidate != job.Value.Product.Value.Candidate || *seal.Proof.Frozen != job.Value.Source || job.Value.Source.SHA != plan.Value.Candidate.SHA || job.Value.Source.CWD != job.Value.Product.Value.WorkItem.Worktree || job.Value.Branch != job.Value.Product.Value.WorkItem.Branch {
 		return job, ErrTaskEvidence
+	}
+	if job.Value.RetryOf != "" {
+		if err := validateProductBranchRetryBudget(ctx, q, job); err != nil {
+			return job, err
+		}
 	}
 	r, err := loadOperationReservationTx(ctx, q, id)
 	if err != nil {
@@ -264,7 +271,16 @@ func loadProductBranch(ctx context.Context, q queryer, id string) (job ProductBr
 }
 
 func (k *KernelStore) ProductBranchPublication(ctx context.Context, operationID string) (ProductBranchPublication, error) {
-	return loadProductBranch(ctx, k.DB, productBranchID(operationID))
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductBranchPublication{}, err
+	}
+	defer tx.Rollback()
+	job, err := latestProductBranch(ctx, tx, operationID)
+	if err != nil {
+		return job, err
+	}
+	return job, tx.Commit()
 }
 
 func (k *KernelStore) branchDispatchTx(ctx context.Context, tx *sql.Tx, operationID, ownerID string) (PRDispatchClaim, ProductPublicationReadiness, error) {
@@ -352,8 +368,9 @@ func (k *KernelStore) ReserveProductBranchPublication(ctx context.Context, opera
 	}
 	value.SessionID = w.OrchestratorSessionID
 	id := productBranchID(operationID)
-	job, err = loadProductBranch(ctx, tx, id)
+	job, err = latestProductBranch(ctx, tx, operationID)
 	if err == nil {
+		value.RetryOf, value.Attempt = job.Value.RetryOf, job.Value.Attempt
 		if !reflect.DeepEqual(value, job.Value) {
 			return job, ErrProductBranchHeld
 		}
@@ -397,7 +414,7 @@ func (k *KernelStore) ClaimProductBranchPublication(ctx context.Context, operati
 		return claim, err
 	}
 	defer tx.Rollback()
-	job, err := loadProductBranch(ctx, tx, productBranchID(operationID))
+	job, err := latestProductBranch(ctx, tx, operationID)
 	if err != nil {
 		return claim, err
 	}
@@ -450,7 +467,7 @@ func (k *KernelStore) MarkProductBranchMayHaveSent(ctx context.Context, operatio
 		return job, err
 	}
 	defer tx.Rollback()
-	job, err = loadProductBranch(ctx, tx, productBranchID(operationID))
+	job, err = latestProductBranch(ctx, tx, operationID)
 	if err != nil {
 		return job, err
 	}

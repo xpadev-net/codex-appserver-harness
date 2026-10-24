@@ -80,7 +80,7 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 		if mode == "publication_metadata" {
 			api.repository.CloneURL = "https://other.invalid/" + saved.Value.Repository + ".git"
 		}
-		if mode == "publication_cancel" {
+		if mode == "publication_cancel" && pushes == 1 {
 			cancelPublish()
 			return o, publishCtx.Err()
 		}
@@ -158,6 +158,14 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 		if _, err = p.Publish(ctx, id, owner); err != nil || pushes != 1 || api.writes != 1 {
 			t.Fatal("known stop did not reconcile by read", pushes, api.writes, err)
 		}
+	} else if mode == "publication_cancel" {
+		if _, err = p.Publish(ctx, id, owner); err != nil || pushes != 2 || api.writes != 1 {
+			t.Fatal("known-unsent branch did not retry once", pushes, api.writes, err)
+		}
+		latest, err := k.ProductBranchPublication(ctx, id)
+		if err != nil || latest.Value.RetryOf != job.ID || latest.State != "published" {
+			t.Fatal(latest, err)
+		}
 	} else {
 		if _, err = p.Publish(ctx, id, owner); err == nil || pushes != 1 || api.writes != 0 {
 			t.Fatal("held branch relaunched", pushes, api.writes, err)
@@ -167,7 +175,7 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 	if err = k.Record(ctx, "product_pr_dispatch", id, &httpClaim); err != nil {
 		t.Fatal(err)
 	}
-	if mode != "publication_partial" && httpClaim.State != "prepared" {
+	if mode != "publication_partial" && mode != "publication_cancel" && httpClaim.State != "prepared" {
 		t.Fatal("branch consumed HTTP write permission", httpClaim.State)
 	}
 }

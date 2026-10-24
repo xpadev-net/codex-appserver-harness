@@ -41,7 +41,7 @@ func (k *KernelStore) RecordProductBranchStopped(ctx context.Context, operationI
 		return job, err
 	}
 	defer tx.Rollback()
-	job, err = loadProductBranch(ctx, tx, productBranchID(operationID))
+	job, err = latestProductBranch(ctx, tx, operationID)
 	if err != nil {
 		return job, err
 	}
@@ -91,7 +91,7 @@ func (k *KernelStore) ConfirmProductBranchRemote(ctx context.Context, operationI
 		return job, err
 	}
 	defer tx.Rollback()
-	job, err = loadProductBranch(ctx, tx, productBranchID(operationID))
+	job, err = latestProductBranch(ctx, tx, operationID)
 	if err != nil {
 		return job, err
 	}
