@@ -40,9 +40,18 @@ func validateProductMergeHTTP(ctx context.Context, q queryer, job ProductMerge) 
 	var owner ProductMergeHTTPOwner
 	var abort ProductMergeHTTPAbort
 	ownerErr := taskEvidenceRecord(ctx, q, "product_merge_http_owner", job.ID, &owner)
+	if ownerErr != nil && !errors.Is(ownerErr, sql.ErrNoRows) {
+		return ownerErr
+	}
 	abortErr := taskEvidenceRecord(ctx, q, "product_merge_http_abort", job.ID, &abort)
+	if abortErr != nil && !errors.Is(abortErr, sql.ErrNoRows) {
+		return abortErr
+	}
 	var stopped ProductMergeHTTPStop
 	stopErr := taskEvidenceRecord(ctx, q, "product_merge_http_stop", job.ID, &stopped)
+	if stopErr != nil && !errors.Is(stopErr, sql.ErrNoRows) {
+		return stopErr
+	}
 	if job.HTTPStop != nil {
 		if stopErr != nil || !reflect.DeepEqual(stopped, *job.HTTPStop) || job.HTTP == nil || job.Stop == nil || stopped.MergeID != job.ID || stopped.Process != job.HTTP.Process || stopped.SpecDigest != job.HTTP.SpecDigest || stopped.ProofID != job.Stop.ProofID || stopped.VerifiedAt.IsZero() || stopped.VerifiedAt.Before(job.Stop.FinishedAt) || stopped.VerifiedAt.Before(job.HTTP.ActivatedAt) {
 			return ErrTaskEvidence

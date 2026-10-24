@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 func checkFinalRunner(t *testing.T, k *storage.KernelStore, target contract.Target, receipt storage.ProductMergedWorkItem) {
@@ -77,6 +79,107 @@ func checkFinalRunner(t *testing.T, k *storage.KernelStore, target contract.Targ
 		}
 		if missing.Completion.Result.Status != "infrastructure_failure" {
 			t.Fatal("missing remote commit passed", missing)
+		}
+	})
+	checkFinalCommitFetch(t, k, target, receipt)
+
+}
+
+func checkFinalCommitFetch(t *testing.T, k *storage.KernelStore, target contract.Target, receipt storage.ProductMergedWorkItem) {
+	t.Helper()
+	t.Run("fetched_final_runner", func(t *testing.T) {
+		t.Setenv("PATH", "/usr/bin:/bin")
+		ctx := context.Background()
+		p := receipt.Value.Product.Value
+		policy, err := k.ReadProductVerificationPolicy(ctx, target, p.WorkItem.RepositoryID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		remote := t.TempDir()
+		if _, err := workspace.Git(ctx, policy.Value.Repository, "clone", "--no-local", "--", policy.Value.Repository, remote); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"checkout", "-B", p.BaseBranch, p.Candidate.SHA}, {"config", "user.name", "final fixture"}, {"config", "user.email", "fixture@example.invalid"}} {
+			if _, err := workspace.Git(ctx, remote, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(remote, "after-merge.txt"), []byte("actual remote base advance\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sha, err := workspace.Freeze(workspace.WithStoppedCommands(ctx), remote, "actual remote commit for final runner")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := workspace.Resolve(ctx, policy.Value.Repository, sha); err == nil {
+			t.Fatal("fixture SHA already local")
+		}
+		oldHead, err := workspace.Resolve(ctx, policy.Value.Repository, "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		launcher := filepath.Join(k.Root, "fetch-final-launcher")
+		if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexec \"$@\"\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		api := &finalReadFixture{repository: Repository{ID: p.WorkItem.RepositoryID, Name: p.Repository, DefaultBranch: p.BaseBranch}, head: sha, merge: receipt.Value.MergeSHA}
+		gates := 0
+		temporary := errors.New("fixture source read temporarily unavailable")
+		f := FinalRunner{Planner: FinalPlanner{Store: k, Gate: func(context.Context, contract.Target) error {
+			gates++
+			if gates == 5 {
+				return temporary
+			}
+			return nil
+		}, API: func(storage.ProductTarget) ResourceAPI { return api }}, Runner: Runner{Store: k, Executable: exe}, FetchRemotes: map[int64]string{p.WorkItem.RepositoryID: remote}}
+		runtime := storage.ProductRunnerRuntime{Root: filepath.Join(k.Root, "fetched-final-runners"), LauncherContract: "argv_passthrough_v1", Launcher: []string{launcher}}
+		if _, err := f.Start(ctx, target, p.WorkItem.RepositoryID, "unit", runtime); !errors.Is(err, temporary) {
+			t.Fatal("did not exercise pre-send transient read", err, gates)
+		}
+		if _, err := workspace.Resolve(ctx, policy.Value.Repository, sha); err == nil {
+			t.Fatal("held pre-send attempt fetched the object")
+		}
+		job, err := f.Start(ctx, target, p.WorkItem.RepositoryID, "unit", runtime)
+		if err != nil || job.State != "launching" || job.Value.Spec.Candidate.SHA != sha {
+			t.Fatal("remote commit did not reach trusted runner", job, err)
+		}
+		currentHead, err := workspace.Resolve(ctx, policy.Value.Repository, "HEAD")
+		if err != nil || currentHead != oldHead {
+			t.Fatal("fetch moved host checkout", currentHead, err)
+		}
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			job, err = f.Runner.Reconcile(ctx, job.ID)
+			if err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("fetched final runner did not stop", err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if job.State != "completed" || job.Completion.Result.Status != "passed" || job.Completion.Result.TestedSHA != sha {
+			t.Fatal("runner used old checkout instead of fixed fetched SHA", job)
+		}
+		var id string
+		if err := k.DB.QueryRow("SELECT id FROM records WHERE kind='product_final_fetch' AND json_extract(payload,'$.value.sha')=? AND json_extract(payload,'$.state')='available'", sha).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		fetch, err := k.ReadProductFinalFetch(ctx, id)
+		if err != nil || fetch.State != "available" || fetch.Proof == nil || fetch.Value.RetryOf == "" || !fetch.Proof.Observation.Attempted || fetch.MayHaveSentAt.IsZero() {
+			t.Fatal("fetch lacks physical owner/send/stop receipt", fetch, err)
+		}
+		replay, err := f.Start(ctx, target, p.WorkItem.RepositoryID, "unit", runtime)
+		if err != nil || replay.ID != job.ID || replay.State != "completed" {
+			t.Fatal("replay launched another runner", replay, err)
+		}
+		same, err := k.ReadProductFinalFetch(ctx, id)
+		if err != nil || !reflect.DeepEqual(same, fetch) {
+			t.Fatal("replay repeated fetch", same, err)
 		}
 	})
 }

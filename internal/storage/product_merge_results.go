@@ -96,8 +96,14 @@ func productMergeTerminal(job ProductMerge) bool {
 func validateProductMergeResult(ctx context.Context, q queryer, job ProductMerge) error {
 	var proof ProductMergeStop
 	err := taskEvidenceRecord(ctx, q, "product_merge_stop", job.ID, &proof)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	var observed ProductMergeReconciliation
 	observedErr := taskEvidenceRecord(ctx, q, "product_merge_reconciliation", job.ID, &observed)
+	if observedErr != nil && !errors.Is(observedErr, sql.ErrNoRows) {
+		return observedErr
+	}
 	if job.Stop == nil {
 		if !errors.Is(err, sql.ErrNoRows) || job.PRLifetimeRelease != nil || job.Reconciliation != nil || !errors.Is(observedErr, sql.ErrNoRows) {
 			return ErrTaskEvidence

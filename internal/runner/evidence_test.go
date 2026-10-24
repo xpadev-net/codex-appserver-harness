@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestUnconfirmedGitStopDuringCancelNeverPublishesTerminalResult(t *testing.T) {
-	for _, stage := range []string{"clone", "checkout", "rev-parse", "status"} {
+	for _, stage := range []string{"clone", "fetch", "checkout", "rev-parse", "status"} {
 		t.Run(stage, func(t *testing.T) {
 			s := spec(t)
 			ctx, cancel := context.WithCancel(context.Background())
