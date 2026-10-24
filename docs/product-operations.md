@@ -660,3 +660,11 @@ fixtureでpause/cancel/別SHAの新候補後の旧結果保存、予約枠だけ
 発見時はopaque operation IDだけを取得し、各readerで保存済みroundを認証する。ある依頼の証拠が破損していても、その巡回の他の依頼は継続する。DB起動時の整合性検査は引き続き適用する。pause/cancel/新候補を発見条件にせず、完了receiptと枠解放のcommit後だけwakeを送る。unknown sendは依頼確定済みに含めず、provider/能力不明や未応答は枠を保持して次の定期巡回を待つ。終了時は全read workerの復帰まで待ち、controller/storeの所有を先に解放しない。
 
 fixtureでは257件超のページ、破損した先頭依頼の後の正常処理、完了済みの再open時の再取得防止、待機中の呼出し抑制と終了joinを確認する。daemon設定から実fake-gh subprocessを使うテストも、cancel後の依頼完了保存・commit後通知・モデル起動なし・承認生成なしを確認する。実Cloudの正式APPROVEDやP受入の代用にはしない。
+
+### 新kernelのmerge事前判定
+
+`KernelMergeGate.Check`はcanonical publication qualityとsource gateを前後に実行し、元の確定review依頼のProduct snapshotが現在の候補と一致すること、保存済みproviderによる現在SHAの正式APPROVED、未解消feedbackなしを要求する。host reportの全`MergeRequirements`（Cloud正式承認、CI mapping、rules等）が証拠付きverifiedでなければ判定しない。request-only能力やローカルreviewを正式承認に変換しない。
+
+必須CI設定は1〜128件を要求し、CIはhost指定の名前・App ID・success条件の最新checkを選び、完了時刻も確認する。`head`と`test_merge`を明示設定し、後者はtest-merge commitの二親が現在head/baseと一致することを実APIで照合する。check/inline feedbackとrulesのCLEANを取得し、Cloud/PR/repositoryおよびCI/feedback/rulesを再取得して変化を拒否する。全体30秒・共有16 MiB、collection/API要求数も各readerで制限する。rules取得用`ResourceConditions`はboundedなread-only gh subprocessを使う。
+
+返す`MergeAssessment`は観測値であり、永続grant・送信許可・WorkItem/Wave完了ではない。daemon merge送信、専用journal、expected-head付きの一回限りの送信fenceとunknown復旧は後続実装で、この判定だけで自動mergeを有効にしない。fixtureでは現候補のAPPROVED、CIの発行元/最新性/二親、能力取消、読み取り中の変更、feedbackとoperator holdを確認する。実SQLite/Git/runnerと独立reviewで作った品質証拠を使う統合fixture（sourceは版確認のfixture）でも本gateを通すが、native Cloud/P実受入には数えない。
