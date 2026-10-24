@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -29,14 +30,8 @@ type KernelMergePolicy struct {
 
 // MergeAssessment is a fresh observation, never a durable send grant. A merge
 // dispatcher must repeat Check immediately before its independent send fence.
-type MergeAssessment struct {
-	ProductDigest               string
-	OperationID                 string
-	RoundDigest                 string
-	HeadSHA, BaseSHA, TestedSHA string
-	ReviewIDs, CheckIDs         []int64
-	ObservedAt                  time.Time
-}
+type MergeAssessment = storage.ProductMergeGateObservation
+
 type KernelMergeGate struct {
 	Publication  PublicationGate
 	Source       func(context.Context, storage.ProductTargetSnapshot) error
@@ -70,6 +65,7 @@ func (g KernelMergeGate) Check(ctx context.Context, saved storage.ProductTargetS
 		}
 		seenNames[req.Name] = true
 	}
+	var measuredReport contract.Report
 	report := func() error {
 		r, err := host.ReadReport(ctx)
 		if err != nil {
@@ -87,6 +83,8 @@ func (g KernelMergeGate) Check(ctx context.Context, saved storage.ProductTargetS
 				return errors.New("merge capability evidence missing")
 			}
 		}
+		measuredReport = r
+		measuredReport.Capabilities = maps.Clone(r.Capabilities)
 		return nil
 	}
 	if err := report(); err != nil {
@@ -245,5 +243,5 @@ func (g KernelMergeGate) Check(ctx context.Context, saved storage.ProductTargetS
 	if g.Cloud.Store.Now != nil {
 		now = g.Cloud.Store.Now().UTC()
 	}
-	return MergeAssessment{ProductDigest: saved.Digest, OperationID: requestID, RoundDigest: cloud.Round.Digest, HeadSHA: p.Candidate.SHA, BaseSHA: p.Candidate.BaseSHA, TestedSHA: tested, ReviewIDs: slices.Clone(cloud.Decision.ReviewIDs), CheckIDs: checkIDs, ObservedAt: now}, nil
+	return MergeAssessment{ProductDigest: saved.Digest, OperationID: requestID, RoundDigest: cloud.Round.Digest, HeadSHA: p.Candidate.SHA, BaseSHA: p.Candidate.BaseSHA, TestedSHA: tested, ReviewIDs: slices.Clone(cloud.Decision.ReviewIDs), CheckIDs: checkIDs, ObservedAt: now, Report: measuredReport}, nil
 }

@@ -668,3 +668,13 @@ fixtureでは257件超のページ、破損した先頭依頼の後の正常処�
 必須CI設定は1〜128件を要求し、CIはhost指定の名前・App ID・success条件の最新checkを選び、完了時刻も確認する。`head`と`test_merge`を明示設定し、後者はtest-merge commitの二親が現在head/baseと一致することを実APIで照合する。check/inline feedbackとrulesのCLEANを取得し、Cloud/PR/repositoryおよびCI/feedback/rulesを再取得して変化を拒否する。全体30秒・共有16 MiB、collection/API要求数も各readerで制限する。rules取得用`ResourceConditions`はboundedなread-only gh subprocessを使う。
 
 返す`MergeAssessment`は観測値であり、永続grant・送信許可・WorkItem/Wave完了ではない。daemon merge送信、専用journal、expected-head付きの一回限りの送信fenceとunknown復旧は後続実装で、この判定だけで自動mergeを有効にしない。fixtureでは現候補のAPPROVED、CIの発行元/最新性/二親、能力取消、読み取り中の変更、feedbackとoperator holdを確認する。実SQLite/Git/runnerと独立reviewで作った品質証拠を使う統合fixture（sourceは版確認のfixture）でも本gateを通すが、native Cloud/P実受入には数えない。
+
+### Merge journalの準備・claim・送信fence
+
+`PrepareProductMerge`は確定済みのreview依頼から元Product/roundと現在の独立quality/readinessを認証し、PR公開・review依頼と同じWorkItemのmutation leaseを取得する。method/owner/元候補・base/quality/PR予約を固定し、head・不変history・admission digestを同時保存する。元Taskが完了済みでも再開せず、親session、現在Wave版、pause/cancel/deadlineとWorkItem merge holdを確認する。準備自体は正式承認やHTTP送信を許可しない。
+
+`ClaimProductMerge`だけが、同一store epoch/processの物理ownerを一度だけ取得する。`MarkProductMergeMayHaveSent`は別の一回限りのfenceで、現在のcontrols/qualityを再確認する。claim以後・30秒以内にtrusted `KernelMergeGate`が測定したProduct/round/head/base/tested SHA・review/check ID・全merge能力reportを要求し、そのpacket/checksumと送信時刻を同じtransactionで保存する。モデルtoolからpacketを受け付けず、storageがnative approvalを生成することもない。gateの返す型はこのhost専用packetと共通化する。
+
+fence後は`unknown`にし、結果が確定するまではmutation leaseを保持する。preparedは再open後にclaimできるが、launching/unknownは同じowner名でも再claim・再送できず、head/history/claim/send/gateの欠落も権限を再生成しない。`CancelPreparedProductMerge`は物理claim前のpreparedだけを取り消し、leaseのowner/generationを指定して解放する。再送された古い取消は次のownerのleaseを解放しない。claim済み/unknownの取消にnot_startedを推測しない。
+
+この段階ではHTTP merge、物理終了・既知結果の保存、unknownの照合、WorkItem merged/Wave最終受入は未接続で、自動mergeを有効にしない。storage fixtureは外部gate事実を注入してjournalの認証・atomic性・二重実行防止を検証する。実qualityを使う統合fixtureでは、claim前のgate観測を拒否し、claim後に実行したgateのpacketが送信fenceと保存されることを確認する。これらをnative Cloud/P受入に数えない。
