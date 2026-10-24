@@ -33,3 +33,13 @@ ReadProductSplitChildPlan と既存集合の exact replay は、保存された 
 この段階では WorkItem を登録せず、Wave 全体の子数・実行予算も予約しない。外部送信、未知応答の照合、physical stop、子 part scope の実行系への接続、親退役は後続段階で別途認証・予約・照合する必要がある。Task/session/model、HTTP、親状態、既存 lifetime 予算には変更を加えない。
 
 SQLite 検査は、完全な part 対応と依存先、exact replay/reopen、遅い INSERT 失敗の全 rollback、各証拠の喪失と exact 復旧、子 admission だけ残る複合喪失、別 request・改変記録の拒否、pause/方向修正前後の新規作成と監査読取の違いを確認する。
+
+## 子の lifetime 枠予約
+
+ReserveProductSplitChildren は、外部作成の前提として集合内の全子 ID を同一 transaction で予約する。固定 WorkItem bound 128 に、現在の登録だけでなく immutable 登録 version、初期 root admission、既存の分割予約を合わせて照合する。通常の RegisterProductWorkItem も同じ予約を数え、別接続からの同時受付で上限を超えない。予約済みの子 ID は通常登録から流用できず、専用の認証済み child binding が必要になる。
+
+集合の head/history/admission、各 WorkItem seat、split_children lifetime ledger を原子的に保存する。pause・方向修正・再起動・再送で枠を返却せず、別の Task/Phase/main/検証予算を増減しない。新しい予約には現在の未 pause の proposal/子集合を要求し、既存予約は immutable な監査事実として exact replay できる。
+
+head/history/admission/seat/ledger の独立した証拠を列挙して全体を照合するため、一つを失っても空き枠とはみなさない。残った予約証拠は proposal・子集合の再生成も止める。登録 head の喪失も、immutable version や初期 admission に残る同じ ID の新規登録で修復しない。
+
+この予約だけでは HTTP 送信・WorkItem 登録・Task 実行・親退役を許可しない。物理送信者と停止証拠、不明応答の再照合、子の part scope を接続する段階でも予約の証拠を再照合する必要がある。

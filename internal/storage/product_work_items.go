@@ -183,12 +183,22 @@ func (k *KernelStore) registerProductWorkItemSourceTx(ctx context.Context, tx *s
 		if expected != "" {
 			return saved, errors.New("product registration CAS expected an existing definition")
 		}
-		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM records WHERE kind='product_work_item_registration' AND work_item_id=?", w.ID).Scan(&count); err != nil {
+		var reserved bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_work_item_seat' AND id=?)", definition.ID).Scan(&reserved); err != nil {
 			return saved, err
 		}
-		if count >= maxProductWorkItems {
-			return saved, errors.New("product WorkItem registration limit reached")
+		if reserved {
+			return saved, errors.New("split child requires authenticated split registration")
+		}
+		ids, err := productWorkItemLifetimeIDsTx(ctx, tx, w)
+		if err != nil {
+			return saved, err
+		}
+		if ids[definition.ID] {
+			return saved, errors.New("product WorkItem identity already reserved or missing registration evidence")
+		}
+		if len(ids) >= maxProductWorkItems {
+			return saved, errors.New("product WorkItem lifetime registration limit reached")
 		}
 	}
 	// Source verification may be waiting for this exact versioned metadata
