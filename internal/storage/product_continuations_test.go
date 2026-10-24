@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
 func productContinuationFixture(t *testing.T) (*KernelStore, ProductContinuationRequest, ProductMergedWorkItem) {
@@ -246,5 +247,78 @@ func TestProductContinuationRequestKeyCannotCreateDifferentSuccessors(t *testing
 	}
 	if _, err := k.ReadProductWorkItemRegistration(ctx, requests[1-winner].Definition.ID); err == nil {
 		t.Fatal("loser key request left ownership behind")
+	}
+}
+
+func TestProductContinuationMetadataRefreshRetainsSourceHoldAndControls(t *testing.T) {
+	// Exercise the private metadata-refresh boundary with a real GitHub-source
+	// Wave. Receipt authentication is covered by the public-port tests above;
+	// this fixture does not assert a native source observation or merge.
+	ctx := context.Background()
+	k, w, definition := productRegistrationFixture(t, "github")
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), "", definition); err != nil {
+		t.Fatal(err)
+	}
+	d, err := k.RequestWaveDirection(ctx, directionRequest(w))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyWaveDirection(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.SourceHold = &domain.WaveSourceHold{Reason: "source_changed", Digest: strings.Repeat("a", 64), ObservedAt: k.clock()}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWave(ctx, tx, w); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	definition.ID = "work-v2"
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), "", definition); err == nil {
+		t.Fatal("ordinary registration bypassed source hold")
+	}
+	if !productContinuationRegistrationAllowed(w, w.Target(), k.clock()) {
+		t.Fatal("held source metadata could not be refreshed")
+	}
+	for _, mode := range []string{"pause", "direction", "cancel", "deadline"} {
+		blocked := w
+		when := k.clock()
+		switch mode {
+		case "pause":
+			blocked.Paused = true
+		case "direction":
+			blocked.PendingDirectionID = "pending"
+		case "cancel":
+			blocked.State = domain.WaveCanceled
+		case "deadline":
+			when = w.Deadline
+		}
+		if productContinuationRegistrationAllowed(blocked, w.Target(), when) {
+			t.Fatal("continuation bypassed control", mode)
+		}
+	}
+	tx, err = k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.registerProductWorkItemSourceTx(ctx, tx, w.Target(), "", definition, true); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := k.Wave(ctx, w.ID)
+	if err != nil || !reflect.DeepEqual(after, w) || !after.DispatchPaused() {
+		t.Fatal("metadata refresh cleared source prohibition", after, err)
 	}
 }

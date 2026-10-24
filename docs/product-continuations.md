@@ -4,7 +4,7 @@
 
 元作業は、登録された HTTP owner の実停止を含む authenticated merge receipt と、実際に MERGED へ更新された元 projection を必要とする。元 receipt の digest、元 registration/target、candidate SHA、merge SHA、projection digest を保存する。現在の projection が元 receipt と異なる場合は保留する。新しい WorkItem ID を使い、同じ repository/Wave/source の新 scope または新 policy revision を必要とする。古い PR、候補、WorkItem、scope/policy の履歴を変更せず、新作業へ品質・正式承認を継承しない。
 
-新しい registration/membership/version と、lineage の head/history/admission/request-key を一 transaction で保存する。Wave 内の key は別の後続 ID を作る再送に流用できず、同時要求でも一つだけ登録する。完全一致の replay は元の保存結果を返す。head/history/request-key/registration version/元 merge 証拠の欠落は再構成せず保留する。pause/cancel、source/direction hold、期限は新規登録を止める。
+新しい registration/membership/version と、lineage の head/history/admission/request-key を一 transaction で保存する。Wave 内の key は別の後続 ID を作る再送に流用できず、同時要求でも一つだけ登録する。完全一致の replay は元の保存結果を返す。head/history/request-key/registration version/元 merge 証拠の欠落は再構成せず保留する。pause/cancel、方向修正待ち、期限は新規登録を止める。source hold 中は、認証した元 merge と新版に対応する metadata の継続登録だけを許可し、hold は解除しない。通常の新規登録と model/製品操作は引き続き保留する。
 
 この登録は Task/session、候補、model/Git/runner/外部操作を作らず、Wave の期限や累積予算を変更しない。読取は現在の新版 registration と元の merge 証拠を再照合する。旧形式の型・JSON/checksum は変更しない。
 

@@ -79,6 +79,12 @@ func (k *KernelStore) RegisterProductWorkItem(ctx context.Context, target contra
 }
 
 func (k *KernelStore) registerProductWorkItemTx(ctx context.Context, tx *sql.Tx, target contract.Target, expected string, definition ProductWorkItemDefinition) (ProductWorkItemRegistrationSnapshot, error) {
+	return k.registerProductWorkItemSourceTx(ctx, tx, target, expected, definition, false)
+}
+
+// continuationRefresh is private to the receipt-authenticated continuation port.
+// It permits metadata adoption while retaining the source hold, never dispatch.
+func (k *KernelStore) registerProductWorkItemSourceTx(ctx context.Context, tx *sql.Tx, target contract.Target, expected string, definition ProductWorkItemDefinition, continuationRefresh bool) (ProductWorkItemRegistrationSnapshot, error) {
 	var saved ProductWorkItemRegistrationSnapshot
 	w, err := loadWave(ctx, tx, target.WaveID)
 	if err != nil {
@@ -189,6 +195,7 @@ func (k *KernelStore) registerProductWorkItemTx(ctx context.Context, tx *sql.Tx,
 	// refresh. Permit only the CAS-protected existing definition to catch up;
 	// retain the source prohibition and all manual/direction/terminal barriers.
 	sourceRefresh := priorErr == nil && expected == prior.Digest && (prior.Value.ScopeRevision != w.ScopeRevision || prior.Value.PolicyRevision != w.Policy.Revision)
+	sourceRefresh = sourceRefresh || continuationRefresh && errors.Is(priorErr, sql.ErrNoRows) && expected == ""
 	if w.Paused || w.PendingDirectionID != "" || (w.SourceHold != nil && !sourceRefresh) || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
 		return saved, errors.New("product source registration is held")
 	}

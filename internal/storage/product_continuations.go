@@ -172,7 +172,7 @@ func (k *KernelStore) RegisterProductContinuation(ctx context.Context, request P
 	if err != nil {
 		return saved, err
 	}
-	if w.Target() != request.Target || w.Policy.Stage != "P" || !w.Policy.Product || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+	if !productContinuationRegistrationAllowed(w, request.Target, k.clock()) {
 		return saved, ErrProductContinuationHeld
 	}
 	parent, err := k.continuationParentTx(ctx, tx, request, w)
@@ -186,7 +186,7 @@ func (k *KernelStore) RegisterProductContinuation(ctx context.Context, request P
 	if known {
 		return saved, ErrProductContinuationHeld
 	}
-	registration, err := k.registerProductWorkItemTx(ctx, tx, request.Target, "", request.Definition)
+	registration, err := k.registerProductWorkItemSourceTx(ctx, tx, request.Target, "", request.Definition, true)
 	if err != nil {
 		return saved, err
 	}
@@ -214,6 +214,10 @@ func (k *KernelStore) RegisterProductContinuation(ctx context.Context, request P
 		return saved, err
 	}
 	return saved, tx.Commit()
+}
+
+func productContinuationRegistrationAllowed(w domain.Wave, target contract.Target, now time.Time) bool {
+	return w.Target() == target && w.Policy.Stage == "P" && w.Policy.Product && !w.Paused && w.PendingDirectionID == "" && w.State != domain.WaveCompleted && w.State != domain.WaveCanceled && w.State != domain.WaveBlocked && now.Before(w.Deadline)
 }
 
 func (k *KernelStore) checkProductContinuationTx(ctx context.Context, q queryer, saved ProductContinuation) error {
