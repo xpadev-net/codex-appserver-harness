@@ -689,3 +689,9 @@ pause/cancel/新候補の後でも元の終了事実を保存し、現在Product
 
 
 `ConfirmProductMergeObserved`は`stopped_unknown`の保存済み終了receiptを前提に、別のtrusted read adapterが取得した元repository/PR/marker/head/branch/baseに一致するclosed+mergedとmerge SHAだけを記録する。open・closedだが未merge・別head・古い/未来の観測は保持する。再起動したreconcilerも保存済みの実終了proofを使えるが、未保存の物理終了を作れない。元のunknown stop/gateを変更せず、独立したreconciliation receiptとPR枠/mutation lease解放を同じtransactionに保存する。再送や権限の再付与は行わず、現在Productを巻き戻さない。fixtureで不正観測の拒否、cancel後/reopen後の正の結果、rollback、次owner保護とreceipt欠落時の再生成拒否を確認する。
+
+### 実APIによるunknown mergeの正の照合
+
+`MergeReconciler.Reconcile`は保存済みmerge journalを先に認証し、既知のmergedは再取得なしで返す。`stopped_unknown`の実終了receiptがある場合だけ、boundedなread-only APIでrepositoryのID/名前/default branchと元PRの番号・repository・marker・branch・head/base refを確認する。closed+mergedと有効なnative merge commit SHAを要求し、PR/repositoryを前後再取得して途中の変更を拒否する。30秒・共有8 MiBとreaderの要求数制限内で完了した正の事実だけをstorageのreconciliation portへ渡す。
+
+open/未merge/別head/retarget/別repository/marker欠落・取得失敗は保持し、実終了receiptがなければAPI照合で物理終了を推測しない。これは元PRが既にmergeされた事実の記録であり、比較baseの再承認や現在Product/Waveの受入を意味しない。cancel後も旧事実を保存する。実quality/runnerを持つ統合fixtureの注入APIで各拒否・前後照合・commit後のfact・既存receiptのAPI再取得なしを確認する。daemonの周期呼出しと実HTTP mergeは後続とし、このfixtureをnative P受入には数えない。

@@ -286,4 +286,6 @@ func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.Product
 		t.Fatal("actual gate packet not journaled with send fence", sent, err)
 	}
 
+	checkMergeReconciler(t, e.Store, sent, native)
+
 }
