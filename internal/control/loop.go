@@ -143,6 +143,12 @@ func (l *Loop) Run(ctx context.Context) (runErr error) {
 		return errors.New("positive loop durations required")
 	}
 	if _, err := l.Runtime.Store.ExecutionCapacity(ctx); err != nil {
+		// No process has been admitted yet. Cancellation can make database/sql
+		// roll this read transaction back before Commit returns. Normalize only
+		// that exact race result; preserve all other (including joined) failures.
+		if ctx.Err() != nil && err == sql.ErrTxDone {
+			return ctx.Err()
+		}
 		return err
 	}
 	ticker := time.NewTicker(every)
