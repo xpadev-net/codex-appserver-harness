@@ -176,7 +176,7 @@ func (k *KernelStore) ReadProductSourcePolicy(ctx context.Context, target contra
 	return productSourcePolicyTx(ctx, tx, w)
 }
 
-func sourceStatusTx(ctx context.Context, tx *sql.Tx, w domain.Wave, facts ProductSourceFacts) (string, error) {
+func (k *KernelStore) sourceStatusTx(ctx context.Context, tx *sql.Tx, w domain.Wave, facts ProductSourceFacts) (string, error) {
 	switch {
 	case !facts.Available:
 		return "unavailable", nil
@@ -196,7 +196,25 @@ func sourceStatusTx(ctx context.Context, tx *sql.Tx, w domain.Wave, facts Produc
 	if err != nil {
 		return "", err
 	}
-	if !productRegistrationScope(registration, w) || registration.Value.Definition.RepositoryID != facts.RepositoryID {
+	if registration.Value.Definition.RepositoryID != facts.RepositoryID {
+		return "scope_unconfirmed", nil
+	}
+	if !productRegistrationScope(registration, w) {
+		// A versioned successor keeps the original Issue/PR registration old.
+		// Confirm its current ownership from the authenticated retirement, never
+		// refresh the old WorkItem or turn its merge into current quality.
+		coverage, err := k.productCoverageTx(ctx, tx, w)
+		if err != nil {
+			if readinessHoldError(err) || errors.Is(err, ErrProductCoverageHeld) {
+				return "scope_unconfirmed", nil
+			}
+			return "", err
+		}
+		for _, retired := range coverage.Value.Retired {
+			if retired.WorkItemID == w.SourceID && retired.RegistrationDigest == registration.Digest {
+				return "ready", nil
+			}
+		}
 		return "scope_unconfirmed", nil
 	}
 	return "ready", nil
@@ -247,7 +265,7 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 			return k.prohibitInvalidSourceTx(ctx, tx, w, fmt.Errorf("%w: current source observation missing", ErrTaskEvidence))
 		}
 	}
-	status, err := sourceStatusTx(ctx, tx, w, facts)
+	status, err := k.sourceStatusTx(ctx, tx, w, facts)
 	if err != nil {
 		return result, err
 	}

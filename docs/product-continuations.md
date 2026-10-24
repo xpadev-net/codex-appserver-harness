@@ -29,3 +29,9 @@ coverage は現在版の登録から全系譜を照合し、元の登録 digest 
 旧登録自体が現在版へ更新された場合は、新たな現在の義務として残し、系譜を根拠に消さない。元登録 head、どちらかの不変 registration version、系譜の head/history/admission/request-key、元 merge receipt/history/projection の欠落は退役を許可せず、旧作業を unavailable/unmerged、criterion を residual として保留する。系譜がない旧版も自動退役しない。読取と再起動は Wave、予算、元 PR、保存済み入力を変更しない。後続のない既存 JSON では任意の `retired` を省略する。
 
 実 SQLite fixture で、通常の方向修正→後続登録→退役、元 merge の履歴保持、親 manifest、残作業・予算・旧 projection の保持、再起動、各証拠の喪失・復旧、旧登録を現在版へ更新した場合の退役拒否を確認する。これも metadata の component 検査であり、新候補の実 GitHub merge、source 改訂採用、native P の受入を意味しない。
+
+## GitHub source の現在版確認
+
+元 Issue の WorkItem 登録が旧版でも、現在の後続系譜がその登録を認証付きで退役させていれば、source の現在版への所属確認に使える。元登録を現在版へ書き換えない。`ObserveProductSource` は従来どおり host の再読取、repository/Issue、open/ready/hold、元要求 digest、policy pin を照合する。continuation 登録自体は source hold を解除せず、次の正しい source 観測だけが解除する。系譜を失えば `scope_unconfirmed` に戻る。
+
+実 Git・SQLite の統合 fixture は、最初から GitHub Issue として採用した Wave の候補→独立検証/runner/review→登録 HTTP owner の停止→merge receipt→親の停止・archive→通常の方向修正→新 WorkItem 登録→4回の GET bookend による source 確認を通す。元の PR/登録を保持し、新作業を unmerged/residual とする。Issue close、要求変更、系譜の喪失・復旧でも各 read の gate を照合する。正式承認・CI/rules・リモート merge・Issue GET は fixture であり、後続の実候補や native P を合格にしない。変更された Issue 本文の採用は別の明示操作が必要であり、この接続では `request_changed` を維持する。
