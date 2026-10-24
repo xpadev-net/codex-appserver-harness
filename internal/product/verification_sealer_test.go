@@ -79,7 +79,7 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 }
 
 func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "product_change", "missing_test"} {
+	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "product_change", "missing_test"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) { plan.Phases[1].Tasks[0].Kind = "verification" })
@@ -111,7 +111,20 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if _, err := s.Store.RegisterProductVerificationPolicy(ctx, task.Target(), storage.ProductVerificationPolicy{WaveID: task.WaveID, PolicyRevision: task.PolicyRevision, RepositoryID: implementation.Value.Request.RepositoryID, Repository: implementation.Value.Request.Repository, VerifierPaths: []string{"tests/"}, Verification: policy.Verification{Revision: task.PolicyRevision, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"sh", "-c", profileScript}, TimeoutSeconds: 30, SuccessPattern: "PASS"}}}}); err != nil {
 				t.Fatal(err)
 			}
-			ready, err := (WorkspacePreparer{Store: s.Store}).Prepare(ctx, storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: implementation.Value.Request.RepositoryID, Repository: implementation.Value.Request.Repository, BaseSHA: input.Candidate.SHA})
+			var ready storage.ProductWorkspace
+			var host Executor
+			if mode == "host_executor" {
+				repo := executorRepositoryFixture(implementation.Value.Request)
+				pinned, readErr := s.Store.ReadProductVerificationPolicy(ctx, task.Target(), repo.Policy.RepositoryID)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				repo.Policy = pinned.Value
+				host = Executor{Store: s.Store, Repositories: map[int64]ExecutionRepository{repo.Policy.RepositoryID: repo}}
+				ready, err = host.Prepare(ctx, task.ID)
+			} else {
+				ready, err = (WorkspacePreparer{Store: s.Store}).Prepare(ctx, storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: implementation.Value.Request.RepositoryID, Repository: implementation.Value.Request.Repository, BaseSHA: input.Candidate.SHA})
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,7 +186,12 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *input.Candidate {
 				t.Fatal("local sealing bypassed host adoption", p, err)
 			}
-			receipt, err := s.Store.AdoptProductVerificationTaskResult(ctx, task.SessionID, verificationRun.ID, "trunk")
+			var receipt storage.ResultApplication
+			if mode == "host_executor" {
+				receipt, err = host.Apply(ctx, task.ID, verificationRun.ID)
+			} else {
+				receipt, err = s.Store.AdoptProductVerificationTaskResult(ctx, task.SessionID, verificationRun.ID, "trunk")
+			}
 			if err != nil || receipt.State != contract.TaskCompleted {
 				t.Fatal(receipt, err)
 			}
@@ -189,7 +207,9 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *sealed.Candidate || p.Value.WorkItem.Phase != domain.Verifying {
 				t.Fatal("adoption invented runner pass", p, err)
 			}
-			if mode == "runner_retry" {
+			if mode == "host_executor" {
+				checkProductExecutorVerification(t, s.Store, canonical)
+			} else if mode == "runner_retry" {
 				checkProductRunnerRetryExecution(t, s.Store, canonical)
 			} else {
 				checkProductRunnerExecution(t, s.Store, canonical, mode == "runner_cancel")
