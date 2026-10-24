@@ -53,6 +53,16 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 		t.Fatal(err)
 	}
 	id, owner := reply.OperationID, "branch-owner"
+	if mode == "publication_retry_twice" {
+		limits, err := k.WaveOperationLimits(ctx, saved.Value.Target.WaveID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		limits.BranchRetries = 2
+		if err := k.Put(ctx, "wave_operation_limits", saved.Value.Target.WaveID, "controller", limits); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, err = k.PreparePRDispatch(ctx, id, owner)
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +89,9 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 		}
 		if mode == "publication_metadata" {
 			api.repository.CloneURL = "https://other.invalid/" + saved.Value.Repository + ".git"
+		}
+		if mode == "publication_retry_twice" && pushes <= 2 {
+			return o, errors.New("fixture temporary read failure")
 		}
 		if mode == "publication_cancel" && pushes == 1 {
 			cancelPublish()
@@ -158,6 +171,17 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 		if _, err = p.Publish(ctx, id, owner); err != nil || pushes != 1 || api.writes != 1 {
 			t.Fatal("known stop did not reconcile by read", pushes, api.writes, err)
 		}
+	} else if mode == "publication_retry_twice" {
+		if _, err = p.Publish(ctx, id, owner); err == nil || pushes != 2 || api.writes != 0 {
+			t.Fatal("second unsent attempt not recorded", pushes, api.writes, err)
+		}
+		if _, err = p.Publish(ctx, id, owner); err != nil || pushes != 3 || api.writes != 1 {
+			t.Fatal("publisher did not advance latest stopped digest", pushes, api.writes, err)
+		}
+		budget, err := k.WaveOperationBudget(ctx, saved.Value.Target.WaveID)
+		if err != nil || budget.BranchRetries != 2 {
+			t.Fatal(budget, err)
+		}
 	} else if mode == "publication_cancel" {
 		if _, err = p.Publish(ctx, id, owner); err != nil || pushes != 2 || api.writes != 1 {
 			t.Fatal("known-unsent branch did not retry once", pushes, api.writes, err)
@@ -175,7 +199,7 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 	if err = k.Record(ctx, "product_pr_dispatch", id, &httpClaim); err != nil {
 		t.Fatal(err)
 	}
-	if mode != "publication_partial" && mode != "publication_cancel" && httpClaim.State != "prepared" {
+	if mode != "publication_partial" && mode != "publication_cancel" && mode != "publication_retry_twice" && httpClaim.State != "prepared" {
 		t.Fatal("branch consumed HTTP write permission", httpClaim.State)
 	}
 }

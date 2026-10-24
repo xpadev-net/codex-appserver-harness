@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -23,6 +24,76 @@ func stoppedUnsentBranchFixture(t *testing.T) (*KernelStore, string, string, Pro
 		t.Fatal(err)
 	}
 	return k, id, owner, remote, job
+}
+
+func TestProductBranchRetryAncestorReplayAfterMultipleStopsNeverSpendsAgain(t *testing.T) {
+	ctx := context.Background()
+	k, id, owner, _, original := stoppedUnsentBranchFixture(t)
+	limits, err := k.WaveOperationLimits(ctx, original.Value.Product.Value.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits.BranchRetries = 3
+	if err := k.Put(ctx, "wave_operation_limits", original.Value.Product.Value.Target.WaveID, "controller", limits); err != nil {
+		t.Fatal(err)
+	}
+	latest := original
+	for attempt := 1; attempt <= 3; attempt++ {
+		next, err := k.ReserveProductBranchUnsentRetry(ctx, id, owner, latest.Digest)
+		if err != nil || next.Value.Attempt != attempt {
+			t.Fatal(next, err)
+		}
+		if _, err := k.ClaimProductBranchPublication(ctx, id, owner, next.Digest); err != nil {
+			t.Fatal(err)
+		}
+		latest, err = k.RecordProductBranchStopped(ctx, id, owner, next.Digest, branchStopFixture(k, next, k.clock(), false, attempt == 3))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The root digest is now older than the immediate parent. Replay only
+		// acknowledges current history; the next reservation above explicitly
+		// names the latest stopped digest instead.
+		replayed, err := k.ReserveProductBranchUnsentRetry(ctx, id, owner, original.Digest)
+		if err != nil || !reflect.DeepEqual(replayed, latest) {
+			t.Fatal("ancestor replay lost successor", replayed, err)
+		}
+		budget, err := k.WaveOperationBudget(ctx, original.Value.Product.Value.Target.WaveID)
+		if err != nil || budget.BranchRetries != attempt {
+			t.Fatal("replay spent retry", budget, err)
+		}
+	}
+	if latest.State != "published" {
+		t.Fatal(latest)
+	}
+}
+
+func TestProductBranchRetryLegacyMissingLimitStaysDisabled(t *testing.T) {
+	ctx := context.Background()
+	k, id, owner, _, old := stoppedUnsentBranchFixture(t)
+	waveID := old.Value.Product.Value.Target.WaveID
+	current, err := k.WaveOperationLimits(ctx, waveID)
+	if err != nil || current.BranchRetries != 1 {
+		t.Fatal("new Wave default missing", current, err)
+	}
+	raw, err := json.Marshal(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	delete(legacy, "branch_retries")
+	if err := k.Put(ctx, "wave_operation_limits", waveID, "controller", legacy); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := k.WaveOperationLimits(ctx, waveID)
+	if err != nil || decoded.BranchRetries != 0 || decoded.RunnerRetries != current.RunnerRetries || decoded.ValidationJobs != current.ValidationJobs {
+		t.Fatal("legacy limits silently changed", decoded, err)
+	}
+	if _, err := k.ReserveProductBranchUnsentRetry(ctx, id, owner, old.Digest); !errors.Is(err, ErrOperationBudget) {
+		t.Fatal("legacy Wave granted new retry authority", err)
+	}
 }
 
 func TestProductBranchUnsentRetryPreservesHistoryAndClaimsNewIntentOnce(t *testing.T) {

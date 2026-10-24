@@ -150,12 +150,17 @@ func (k *KernelStore) ReserveProductBranchUnsentRetry(ctx context.Context, opera
 		return job, ErrProductBranchHeld
 	}
 	if previous.Digest != previousDigest {
-		if previous.Value.RetryOf != "" {
-			old, err := loadProductBranch(ctx, tx, previous.Value.RetryOf)
+		// A replay of any authenticated ancestor acknowledges the current
+		// successor, including stopped/published successors. It cannot spend
+		// another retry. Only a request naming the latest stopped digest may
+		// reserve another attempt; the publisher always reads that latest head.
+		ancestor := previous
+		for ancestor.Value.RetryOf != "" {
+			ancestor, err = loadProductBranch(ctx, tx, ancestor.Value.RetryOf)
 			if err != nil {
 				return job, err
 			}
-			if old.Digest == previousDigest {
+			if ancestor.Digest == previousDigest {
 				return previous, tx.Commit()
 			}
 		}

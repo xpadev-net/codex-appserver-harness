@@ -34,6 +34,8 @@ func (l WaveOperationLimits) Validate() error {
 	return nil
 }
 func waveOperationLimitsTx(ctx context.Context, q queryer, waveID string) (WaveOperationLimits, error) {
+	// Do not overlay new defaults: a pre-branch-retry record deliberately
+	// retains zero automatic branch retries. Defaults apply at new admission.
 	var l WaveOperationLimits
 	if err := completionRecord(ctx, q, "wave_operation_limits", waveID, &l); err != nil {
 		return l, err
