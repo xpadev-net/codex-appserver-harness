@@ -90,6 +90,9 @@ func (k *KernelStore) checkProductAcceptanceTx(ctx context.Context, tx *sql.Tx, 
 	if w.Target() != target || w.OrchestratorSessionID != b.ID || b.Kind != "orchestrator" || w.Policy.Stage != "P" || !w.Policy.Product {
 		return proof, ErrProductAcceptanceHeld
 	}
+	if !k.clock().Before(w.Deadline) {
+		return proof, ErrProductAcceptanceHeld
+	}
 	if snapshot.Digest != fmt.Sprintf("%x", sha256.Sum256(snapshot.Input)) {
 		return proof, ErrProductAcceptanceHeld
 	}

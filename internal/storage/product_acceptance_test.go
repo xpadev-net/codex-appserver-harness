@@ -143,7 +143,7 @@ func TestProductParentAcceptanceCompletesOnlyNormalStoppedExactInputAndReplays(t
 }
 
 func TestProductParentAcceptanceHoldsChangedInputsUnknownWorkAndRollback(t *testing.T) {
-	for _, mode := range []string{"live", "unknown", "wrong_digest", "criterion", "pause", "stale_observation", "new_candidate", "new_head", "cloud_capacity", "runner_capacity", "pending_operation", "managed_process", "grant_loss", "grant_foreign", "manifest_loss", "manifest_corrupt", "event_failure", "receipt_failure", "proof_failure", "failed_final"} {
+	for _, mode := range []string{"live", "unknown", "wrong_digest", "criterion", "pause", "deadline", "stale_observation", "new_candidate", "new_head", "cloud_capacity", "runner_capacity", "pending_operation", "managed_process", "grant_loss", "grant_foreign", "manifest_loss", "manifest_corrupt", "event_failure", "receipt_failure", "proof_failure", "failed_final"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			status := "passed"
@@ -155,6 +155,24 @@ func TestProductParentAcceptanceHoldsChangedInputsUnknownWorkAndRollback(t *test
 				finishProductCloudForParent(t, k, plan)
 			}
 			target := plan.Value.Target
+			if mode == "deadline" {
+				w, err := k.Wave(ctx, target.WaveID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.Deadline = k.clock().Add(time.Second)
+				tx, err := k.kernelTx(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := saveWave(ctx, tx, w); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			b, run, snapshot := productParentRun(t, k, target)
 			result := productAcceptanceResult(t, k, b, target)
 			if mode == "wrong_digest" {
@@ -178,6 +196,13 @@ func TestProductParentAcceptanceHoldsChangedInputsUnknownWorkAndRollback(t *test
 				if _, err := k.ApplyOperatorControl(ctx, OperatorControl{Key: "pause-final-parent", Target: target, Action: "pause", Reason: "hold final acceptance"}); err != nil {
 					t.Fatal(err)
 				}
+			case "deadline":
+				w, err := k.Wave(ctx, target.WaveID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				now := w.Deadline
+				k.Now = func() time.Time { return now }
 			case "stale_observation":
 				now := k.clock().Add(31 * time.Second)
 				k.Now = func() time.Time { return now }
