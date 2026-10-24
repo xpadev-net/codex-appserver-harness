@@ -643,6 +643,13 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 
 func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec, fixed *ProductWorkspace) (string, error) {
 	references := map[string]string{}
+	requestAdoption, err := k.productSourceRequestTx(ctx, tx, wave)
+	if err != nil {
+		return "", err
+	}
+	if requestAdoption != nil {
+		references["product_source_request:"+requestAdoption.ID] = requestAdoption.Digest
+	}
 	conflict, err := k.productBaseConflictInputTx(ctx, tx, wave, spec)
 	if err != nil {
 		return "", err

@@ -35,3 +35,13 @@ coverage は現在版の登録から全系譜を照合し、元の登録 digest 
 元 Issue の WorkItem 登録が旧版でも、現在の後続系譜がその登録を認証付きで退役させていれば、source の現在版への所属確認に使える。元登録を現在版へ書き換えない。`ObserveProductSource` は従来どおり host の再読取、repository/Issue、open/ready/hold、元要求 digest、policy pin を照合する。continuation 登録自体は source hold を解除せず、次の正しい source 観測だけが解除する。系譜を失えば `scope_unconfirmed` に戻る。
 
 実 Git・SQLite の統合 fixture は、最初から GitHub Issue として採用した Wave の候補→独立検証/runner/review→登録 HTTP owner の停止→merge receipt→親の停止・archive→通常の方向修正→新 WorkItem 登録→4回の GET bookend による source 確認を通す。元の PR/登録を保持し、新作業を unmerged/residual とする。Issue close、要求変更、系譜の喪失・復旧でも各 read の gate を照合する。正式承認・CI/rules・リモート merge・Issue GET は fixture であり、後続の実候補や native P を合格にしない。変更された Issue 本文の採用は別の明示操作が必要であり、この接続では `request_changed` を維持する。
+
+## 変更された Issue 本文の明示採用
+
+`AdoptProductSourceRequest` は trusted operator/source controller 専用の metadata port であり、model tool ではない。現在の scope/policy に適用済みの方向修正全文を、新しい Issue の `title + "\n\n" + body` と一致させる。保存済み host 観測の head/history、open/ready/hold、policy head/history、現在の後続系譜と元 Issue の退役を照合し、一致した要求 digest だけを採用する。対象 ID/digest を明示し、観測後に別の観測が入れば旧 CAS で採用しない。
+
+一つの scope/policy 版につき head/history/admission を一 transaction で保存し、同じ要求は同じ記録を返す。その版の別本文を採用するには新たな方向修正が必要である。元要求、旧 PR、旧 scope/policy、旧入力、予算は変更しない。保存だけで source hold を解除せず、新しい host GET の成功後に新 plan/Task を採用する。Task 入力 digest、準備、manifest には採用 ID/digest と根拠の要約を結び付ける。後の scope/policy でも変更本文を使う場合は、その版の方向修正と観測で改めて明示採用する。
+
+採用記録の head/history/admission、方向修正、元観測、policy、系譜を失えば原要求へ fallback せず保留する。source 観測は `state_invalid` を保存し、Task の入力・準備も保留する。記録がない旧形式の JSON/digest は変更しない。この port は Issue 本文を policy として実行せず、品質・正式承認・候補や新 model run を作らない。
+
+実 Git/SQLite fixture は、元 Issue の merge と方向修正後、新本文の `request_changed`、明示採用、採用だけでは hold 維持、次の4 GETで ready、新 plan の新 Task 入力、途中失敗の全 rollback、exact replay、各証拠の喪失・復旧、reopen を確認する。親 tool/CLI による呼出しと、後続の実候補・正式 GitHub gate の受入は別途必要である。

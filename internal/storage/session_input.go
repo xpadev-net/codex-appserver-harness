@@ -64,6 +64,8 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductSourceRequest                  *ProductSourceRequestAdoption    `json:"product_source_request,omitempty"`
+	UnavailableProductSourceRequest       string                           `json:"unavailable_product_source_request,omitempty"`
 	ProductContinuations                  []ProductContinuationInput       `json:"product_continuations,omitempty"`
 	UnavailableProductContinuations       []UnavailableProductWorkItem     `json:"unavailable_product_continuations,omitempty"`
 	ProductMachineVerification            *ProductMachineVerificationInput `json:"product_machine_verification,omitempty"`
@@ -347,6 +349,12 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 		return m, err
 	}
 	m.Budget = WaveRunBudget{WaveID: w.ID, ObservedTokens: tokens, UnobservedRuns: unknown, Saturated: saturated, TokenLimit: w.Policy.Limits.Tokens, MainTurns: w.MainTurns, MainTurnLimit: w.Policy.Limits.MainTurns, Deadline: w.Deadline, DeadlineExceeded: !k.clock().Before(w.Deadline)}
+	m.ProductSourceRequest, err = k.productSourceRequestTx(ctx, tx, w)
+	if readinessHoldError(err) {
+		m.UnavailableProductSourceRequest = "source_request_evidence_unavailable"
+	} else if err != nil {
+		return m, err
+	}
 	m.ProductWorkItems, m.UnavailableProductWorkItems, err = k.productWorkItemInputsTx(ctx, tx, b, w)
 	if err != nil {
 		return m, err

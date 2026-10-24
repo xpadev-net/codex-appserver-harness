@@ -10,6 +10,7 @@ import (
 )
 
 type ProductTaskPreparation struct {
+	SourceRequest *ProductSourceRequestAdoption       `json:"source_request,omitempty"`
 	Continuations []ProductContinuation               `json:"continuations,omitempty"`
 	Task          domain.Task                         `json:"task"`
 	Registration  ProductWorkItemRegistrationSnapshot `json:"registration"`
@@ -87,6 +88,10 @@ func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, 
 	}
 	if !productRegistrationScope(registration, w) {
 		return out, ErrTaskEvidence
+	}
+	out.SourceRequest, err = k.productSourceRequestTx(ctx, tx, w)
+	if err != nil {
+		return out, err
 	}
 	lineage, err := k.productContinuationInputsTx(ctx, tx, w, task.Spec.WorkItemIDs[0])
 	if err != nil {
