@@ -10,9 +10,10 @@ import (
 )
 
 type ProductTaskPreparation struct {
-	Task         domain.Task                         `json:"task"`
-	Registration ProductWorkItemRegistrationSnapshot `json:"registration"`
-	Product      *ProductTargetSnapshot              `json:"product,omitempty"`
+	Continuations []ProductContinuation               `json:"continuations,omitempty"`
+	Task          domain.Task                         `json:"task"`
+	Registration  ProductWorkItemRegistrationSnapshot `json:"registration"`
+	Product       *ProductTargetSnapshot              `json:"product,omitempty"`
 }
 
 // ReadProductTaskPreparation derives local host work from the active Phase.
@@ -87,6 +88,11 @@ func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, 
 	if !productRegistrationScope(registration, w) {
 		return out, ErrTaskEvidence
 	}
+	lineage, err := k.productContinuationInputsTx(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	if err != nil {
+		return out, err
+	}
+	out.Continuations = lineage
 	out.Task, out.Registration = task, registration
 	product, err := loadProductTargetTx(ctx, tx, w.Target(), task.Spec.WorkItemIDs[0])
 	if err == nil {

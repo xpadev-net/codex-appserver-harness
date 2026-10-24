@@ -196,6 +196,15 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
 		return w, task, b, err
 	}
+	if UsesProductChangeOutput(w, task) {
+		lineage, err := k.productContinuationInputsTx(ctx, tx, w, task.Spec.WorkItemIDs[0])
+		if err != nil {
+			return w, task, b, err
+		}
+		if len(lineage) > 0 && value.Request.BasePlanID == "" {
+			return w, task, b, ErrProductBasePlanHeld
+		}
+	}
 	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
 	if err != nil {
 		return w, task, b, err

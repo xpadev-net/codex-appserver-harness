@@ -683,6 +683,13 @@ func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, 
 		references[id] = artifact.Digest
 	}
 	for _, id := range spec.WorkItemIDs {
+		lineage, err := k.productContinuationInputsTx(ctx, tx, wave, id)
+		if err != nil {
+			return "", err
+		}
+		for _, node := range lineage {
+			references["product_continuation:"+node.ID] = node.Digest
+		}
 		var binding struct {
 			Target      contract.Target `json:"target"`
 			CandidateID string          `json:"candidate_id"`

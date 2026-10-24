@@ -225,12 +225,20 @@ func (k *KernelStore) checkProductContinuationTx(ctx context.Context, q queryer,
 	if err != nil {
 		return err
 	}
+	return k.checkProductContinuationInWaveTx(ctx, q, saved, w, true)
+}
+
+func (k *KernelStore) checkProductContinuationInWaveTx(ctx context.Context, q queryer, saved ProductContinuation, w domain.Wave, active bool) error {
 	r, err := loadProductWorkItemRegistration(ctx, q, saved.Value.Request.Definition.ID)
 	if err != nil {
 		return err
 	}
 	original := saved.Value.Registration
-	if !productRegistrationScope(r, w) || r.Value.WaveID != original.Value.WaveID || r.Value.Source != original.Value.Source || r.Value.SourceID != original.Value.SourceID || r.Value.ScopeRevision < original.Value.ScopeRevision || r.Value.PolicyRevision < original.Value.PolicyRevision || r.Value.Definition.ID != original.Value.Definition.ID || r.Value.Definition.Repository != original.Value.Definition.Repository || r.Value.Definition.RepositoryID != original.Value.Definition.RepositoryID {
+	scope := r.Value.WaveID == w.ID && r.Value.Source == w.Source && r.Value.SourceID == w.SourceID && r.Value.ScopeRevision <= w.ScopeRevision && r.Value.PolicyRevision <= w.Policy.Revision
+	if active {
+		scope = productRegistrationScope(r, w)
+	}
+	if !scope || r.Value.WaveID != original.Value.WaveID || r.Value.Source != original.Value.Source || r.Value.SourceID != original.Value.SourceID || r.Value.ScopeRevision < original.Value.ScopeRevision || r.Value.PolicyRevision < original.Value.PolicyRevision || r.Value.Definition.ID != original.Value.Definition.ID || r.Value.Definition.Repository != original.Value.Definition.Repository || r.Value.Definition.RepositoryID != original.Value.Definition.RepositoryID {
 		return ErrProductContinuationHeld
 	}
 	var version ProductWorkItemRegistrationSnapshot
@@ -246,7 +254,9 @@ func (k *KernelStore) checkProductContinuationTx(ctx context.Context, q queryer,
 	if !reflect.DeepEqual(version, original) {
 		return ErrTaskEvidence
 	}
-	parent, err := k.continuationParentTx(ctx, q, saved.Value.Request, w)
+	origin := w
+	origin.ScopeRevision, origin.Policy.Revision = original.Value.ScopeRevision, original.Value.PolicyRevision
+	parent, err := k.continuationParentTx(ctx, q, saved.Value.Request, origin)
 	if err != nil {
 		return err
 	}

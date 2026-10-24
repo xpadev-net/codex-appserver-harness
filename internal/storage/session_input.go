@@ -64,6 +64,8 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductContinuations                  []ProductContinuationInput       `json:"product_continuations,omitempty"`
+	UnavailableProductContinuations       []UnavailableProductWorkItem     `json:"unavailable_product_continuations,omitempty"`
 	ProductMachineVerification            *ProductMachineVerificationInput `json:"product_machine_verification,omitempty"`
 	UnavailableProductMachineVerification string                           `json:"unavailable_product_machine_verification,omitempty"`
 
@@ -348,6 +350,23 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 	m.ProductWorkItems, m.UnavailableProductWorkItems, err = k.productWorkItemInputsTx(ctx, tx, b, w)
 	if err != nil {
 		return m, err
+	}
+	seenContinuations := map[string]bool{}
+	for _, registration := range m.ProductWorkItems {
+		lineage, e := k.productContinuationInputsTx(ctx, tx, w, registration.Value.Definition.ID)
+		if readinessHoldError(e) || errors.Is(e, ErrProductContinuationHeld) {
+			m.UnavailableProductContinuations = append(m.UnavailableProductContinuations, UnavailableProductWorkItem{ID: registration.Value.Definition.ID, Reason: "continuation_evidence_unavailable"})
+			continue
+		}
+		if e != nil {
+			return m, e
+		}
+		for _, node := range lineage {
+			if !seenContinuations[node.ID] {
+				m.ProductContinuations = append(m.ProductContinuations, productContinuationInput(node))
+				seenContinuations[node.ID] = true
+			}
+		}
 	}
 	if b.Kind == "orchestrator" && w.Policy.Stage == "P" && w.Policy.Product {
 		coverage, err := k.productCoverageTx(ctx, tx, w)
