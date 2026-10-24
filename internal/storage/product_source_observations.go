@@ -186,7 +186,24 @@ func (k *KernelStore) sourceStatusTx(ctx context.Context, tx *sql.Tx, w domain.W
 		return "hold", nil
 	case !facts.Ready:
 		return "not_ready", nil
-	case facts.RequestDigest != ProductSourceRequestDigest(w.OriginalRequest):
+	}
+	expectedRequest := ProductSourceRequestDigest(w.OriginalRequest)
+	adoption, err := k.loadProductSourceRequestTx(ctx, tx, w, true)
+	if err != nil {
+		return "", err
+	}
+	if adoption != nil {
+		expectedRequest = adoption.Value.RequestDigest
+	} else {
+		known, err := knownProductSourceRequestTx(ctx, tx, w)
+		if err != nil {
+			return "", err
+		}
+		if known {
+			return "request_changed", nil
+		}
+	}
+	if facts.RequestDigest != expectedRequest {
 		return "request_changed", nil
 	}
 	registration, err := loadProductWorkItemRegistration(ctx, tx, w.SourceID)
@@ -266,6 +283,9 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 		}
 	}
 	status, err := k.sourceStatusTx(ctx, tx, w, facts)
+	if errors.Is(err, ErrTaskEvidence) {
+		return k.prohibitInvalidSourceTx(ctx, tx, w, err)
+	}
 	if err != nil {
 		return result, err
 	}
