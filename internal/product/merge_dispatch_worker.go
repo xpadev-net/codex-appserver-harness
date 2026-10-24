@@ -38,7 +38,7 @@ func (d MergeDispatchWorker) process(ctx context.Context, target storage.MergeDi
 			return false, err
 		}
 		job, err := d.Driver.Merge(ctx, target.ID, dispatchOwner("merge:"+target.ID), method)
-		return job.Stop != nil || job.HTTPAbort != nil || job.Cancellation != nil, err
+		return d.finishKnown(ctx, job, err)
 	}
 	if target.Kind != "merge" {
 		return false, storage.ErrTaskEvidence
@@ -49,6 +49,10 @@ func (d MergeDispatchWorker) process(ctx context.Context, target storage.MergeDi
 	}
 	if job.Value.HTTPProtocol != "registered_http_v1" {
 		return false, storage.ErrProductMergeHeld
+	}
+	if job.State == "merged" {
+		_, changed, err := d.Driver.Store.RecordProductMergedWorkItem(ctx, job.ID)
+		return changed, err
 	}
 	if job.Stop != nil || job.HTTPAbort != nil || job.Cancellation != nil {
 		return false, nil
@@ -63,13 +67,21 @@ func (d MergeDispatchWorker) process(ctx context.Context, target storage.MergeDi
 			return false, storage.ErrProductMergeHeld
 		}
 		job, err := d.Driver.Merge(ctx, current.Value.RequestID, current.Value.OwnerID, method)
-		return job.Stop != nil || job.HTTPAbort != nil || job.Cancellation != nil, err
+		return d.finishKnown(ctx, job, err)
 	}
 	if job.State != "launching" && job.State != "unknown" {
 		return false, storage.ErrProductMergeHeld
 	}
 	job, err = d.Driver.Transport.Recover(ctx, job.ID)
-	return job.Stop != nil || job.HTTPAbort != nil, err
+	return d.finishKnown(ctx, job, err)
+}
+
+func (d MergeDispatchWorker) finishKnown(ctx context.Context, job storage.ProductMerge, err error) (bool, error) {
+	if err == nil && job.State == "merged" {
+		_, changed, err := d.Driver.Store.RecordProductMergedWorkItem(ctx, job.ID)
+		return changed, err
+	}
+	return job.Stop != nil || job.HTTPAbort != nil || job.Cancellation != nil, err
 }
 
 // A single joined cause is still ordinary cancellation/hold. Joined unrelated
