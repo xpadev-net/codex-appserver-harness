@@ -73,7 +73,7 @@ func mergeStoppedState(proof ProductMergeStop) string {
 	return "rejected"
 }
 func productMergeTerminal(job ProductMerge) bool {
-	return job.State == "stopped_unsent" || job.State == "rejected" || job.State == "merged"
+	return job.State == "stopped_unsent" || job.State == "rejected" || job.State == "merged" || job.State == "aborted_http"
 }
 func validateProductMergeResult(ctx context.Context, q queryer, job ProductMerge) error {
 	var proof ProductMergeStop
@@ -153,6 +153,9 @@ func (k *KernelStore) RecordProductMergeStopped(ctx context.Context, id, owner, 
 	job, err := k.readProductMergeTx(ctx, tx, id)
 	if err != nil {
 		return empty, err
+	}
+	if job.Value.HTTPProtocol == productMergeHTTPProtocol && !job.MayHaveSentAt.IsZero() {
+		return empty, ErrProductMergeHeld
 	}
 	if job.Value.OwnerID != owner || job.Digest != digest || validateProductMergeStop(job, proof) != nil || proof.FinishedAt.After(k.clock()) {
 		return empty, ErrProductMergeHeld
