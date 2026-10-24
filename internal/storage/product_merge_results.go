@@ -53,7 +53,13 @@ func validateProductMergeStop(job ProductMerge, proof ProductMergeStop) error {
 	} else if job.MayHaveSentAt.Before(proof.StartedAt) || job.MayHaveSentAt.After(proof.FinishedAt) {
 		return ErrProductMergeHeld
 	}
-	if proof.Disposition == "client_not_started" && proof.Response == nil && job.Value.HTTPProtocol == productMergeHTTPProtocol && job.HTTP != nil {
+	if proof.Disposition == "client_not_started" {
+		// A no-request result is trusted only for the registered, physically
+		// checked client. No activation must use the atomic abort protocol; it
+		// cannot be certified by a caller's no-request claim.
+		if job.Value.HTTPProtocol != productMergeHTTPProtocol || job.HTTP == nil || proof.Response != nil {
+			return ErrProductMergeHeld
+		}
 		return nil
 	}
 	if proof.Disposition == "outcome_unknown" && proof.Response == nil {

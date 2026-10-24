@@ -164,3 +164,38 @@ func TestProductMergeHTTPFinishRollbackRetainsOwnership(t *testing.T) {
 		t.Fatal("rollback released PR", seat, err)
 	}
 }
+
+func TestProductMergeHTTPClientNotStartedRequiresActivation(t *testing.T) {
+	for _, mode := range []string{"registered_unactivated", "legacy"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			var k *KernelStore
+			var job ProductMerge
+			if mode == "legacy" {
+				k, job, _ = mergeResultFixture(t, true)
+			} else {
+				k, job = registeredMergeHTTPFixture(t)
+			}
+			proof := ProductMergeStop{MergeID: job.ID, ProofID: "unproven-no-request", Reason: "absence of activation is not client-result evidence", StartedAt: job.ClaimedAt, FinishedAt: k.clock(), Disposition: "client_not_started"}
+			if err := validateProductMergeStop(job, proof); !errors.Is(err, ErrProductMergeHeld) {
+				t.Fatal("unauthenticated no-request disposition accepted", err)
+			}
+			if _, err := k.RecordProductMergeStopped(ctx, job.ID, job.Value.OwnerID, job.Digest, proof); !errors.Is(err, ErrProductMergeHeld) {
+				t.Fatal("unproven no-request result released ownership", err)
+			}
+			if _, err := k.FinishProductMergeHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), proof); !errors.Is(err, ErrProductMergeHeld) {
+				t.Fatal("missing activation certified by completion port", err)
+			}
+			read, err := k.ReadProductMerge(ctx, job.ID)
+			if err != nil || read.State != "unknown" || read.Stop != nil || read.HTTPStop != nil {
+				t.Fatal("invalid claim changed journal", read, err)
+			}
+			if mode == "registered_unactivated" {
+				sealed, err := k.AbortUnactivatedProductMergeHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, "sealed-no-admission", "atomic proof prevents every delayed activation")
+				if err != nil || sealed.State != "aborted_http" || sealed.Stop != nil {
+					t.Fatal("appropriate atomic abort path unavailable", sealed, err)
+				}
+			}
+		})
+	}
+}
