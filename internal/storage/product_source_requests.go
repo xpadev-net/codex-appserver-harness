@@ -48,7 +48,7 @@ func (k *KernelStore) checkProductSourceRequestTx(ctx context.Context, tx *sql.T
 		return err
 	}
 	epoch := sourceRequestEpoch(r.Target)
-	if saved.Digest != digest || saved.ID != structureID("source-request-", epoch, digest) || !r.Target.Valid() || w.Source != "github" || w.Policy.Stage != "P" || !w.Policy.Product || r.Target.WaveID != w.ID || r.Target.ScopeRevision != w.ScopeRevision || r.Target.PolicyRevision != w.Policy.Revision || v.CreatedAt.IsZero() || v.OriginalRequestDigest != ProductSourceRequestDigest(w.OriginalRequest) || !validSourceDigest(v.RequestDigest) || v.RequestDigest == v.OriginalRequestDigest || w.DirectionID != r.DirectionID {
+	if saved.Digest != digest || saved.ID != structureID("source-request-", epoch, digest) || !r.Target.Valid() || w.Source != "github" || w.Policy.Stage != "P" || !w.Policy.Product || r.Target.WaveID != w.ID || r.Target.ScopeRevision != w.ScopeRevision || r.Target.PolicyRevision != w.Policy.Revision || v.CreatedAt.IsZero() || v.OriginalRequestDigest != ProductSourceRequestDigest(w.OriginalRequest) || !validSourceDigest(v.RequestDigest) || w.DirectionID != r.DirectionID {
 		return ErrTaskEvidence
 	}
 	var direction WaveDirection
@@ -110,6 +110,18 @@ func (k *KernelStore) checkProductSourceRequestTx(ctx context.Context, tx *sql.T
 // Missing records never fall back to the original request once independently
 // retained admission/history establishes this epoch's adopted request.
 func (k *KernelStore) productSourceRequestTx(ctx context.Context, tx *sql.Tx, w domain.Wave) (*ProductSourceRequestAdoption, error) {
+	return k.loadProductSourceRequestTx(ctx, tx, w, false)
+}
+
+func knownProductSourceRequestTx(ctx context.Context, tx *sql.Tx, w domain.Wave) (bool, error) {
+	var known bool
+	err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE (kind IN ('product_source_request','product_source_request_admission') AND work_item_id=?) OR (kind='product_source_request_history' AND json_extract(payload,'$.value.request.target.wave_id')=?))", w.ID, w.ID).Scan(&known)
+	return known, err
+}
+
+// Only observation and explicit adoption may inspect an as-yet unadopted new
+// epoch. Task inputs must hold once any earlier adopted request is known.
+func (k *KernelStore) loadProductSourceRequestTx(ctx context.Context, tx *sql.Tx, w domain.Wave, allowNewEpoch bool) (*ProductSourceRequestAdoption, error) {
 	if w.Source != "github" || w.Policy.Stage != "P" || !w.Policy.Product {
 		return nil, nil
 	}
@@ -123,6 +135,15 @@ func (k *KernelStore) productSourceRequestTx(ctx context.Context, tx *sql.Tx, w 
 		}
 		if known {
 			return nil, ErrTaskEvidence
+		}
+		if !allowNewEpoch {
+			known, err := knownProductSourceRequestTx(ctx, tx, w)
+			if err != nil {
+				return nil, err
+			}
+			if known {
+				return nil, ErrTaskEvidence
+			}
 		}
 		return nil, nil
 	}
@@ -163,7 +184,7 @@ func (k *KernelStore) AdoptProductSourceRequest(ctx context.Context, r ProductSo
 	if err != nil {
 		return saved, err
 	}
-	prior, err := k.productSourceRequestTx(ctx, tx, w)
+	prior, err := k.loadProductSourceRequestTx(ctx, tx, w, true)
 	if err != nil {
 		return saved, err
 	}

@@ -188,12 +188,20 @@ func (k *KernelStore) sourceStatusTx(ctx context.Context, tx *sql.Tx, w domain.W
 		return "not_ready", nil
 	}
 	expectedRequest := ProductSourceRequestDigest(w.OriginalRequest)
-	adoption, err := k.productSourceRequestTx(ctx, tx, w)
+	adoption, err := k.loadProductSourceRequestTx(ctx, tx, w, true)
 	if err != nil {
 		return "", err
 	}
 	if adoption != nil {
 		expectedRequest = adoption.Value.RequestDigest
+	} else {
+		known, err := knownProductSourceRequestTx(ctx, tx, w)
+		if err != nil {
+			return "", err
+		}
+		if known {
+			return "request_changed", nil
+		}
 	}
 	if facts.RequestDigest != expectedRequest {
 		return "request_changed", nil

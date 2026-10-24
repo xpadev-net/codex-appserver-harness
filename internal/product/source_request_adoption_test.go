@@ -135,4 +135,54 @@ func checkAdoptedRequestTaskEvidence(t *testing.T, k *storage.KernelStore, w dom
 	if err != nil || !reflect.DeepEqual(after, prep) {
 		t.Fatal("adopted request lost on reopen", after, err)
 	}
+	checkSourceRequestNextEpoch(t, reopened, w, node)
+}
+
+func checkSourceRequestNextEpoch(t *testing.T, k *storage.KernelStore, w domain.Wave, node storage.ProductContinuation) {
+	t.Helper()
+	ctx := context.Background()
+	var oldDirection storage.WaveDirection
+	if err := k.Record(ctx, "wave_direction", w.DirectionID, &oldDirection); err != nil {
+		t.Fatal(err)
+	}
+	direction, err := k.RequestWaveDirection(ctx, storage.WaveDirectionRequest{Target: w.Target(), Key: "next-adopted-epoch", Instruction: oldDirection.Request.Instruction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyWaveDirection(ctx, direction.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := k.ReadProductWorkItemRegistration(ctx, node.Value.Request.Definition.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RegisterProductWorkItem(ctx, w.Target(), registration.Digest, registration.Value.Definition); err != nil {
+		t.Fatal(err)
+	}
+	work := contract.TaskSpec{ID: "next-epoch-work", Kind: "work", Instruction: "implement current explicit request", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{registration.Value.Definition.ID}}
+	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "next-epoch", Tasks: []contract.TaskSpec{work}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{work.ID}}, FailurePolicy: "drain_and_block"}}, Templates: []contract.FixReviewTemplate{}}
+	if _, err := k.AdoptPlan(ctx, w.Target(), "implicit-source-fallback", plan); err == nil {
+		t.Fatal("new scope implicitly fell back to original Issue request")
+	}
+	prior, err := k.ReadProductSourceObservation(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := k.ObserveProductSource(ctx, w.Target(), prior.Digest, prior.Value.Facts)
+	if err != nil || held.Hold == nil || held.Hold.Reason != "request_changed" {
+		t.Fatal("new scope did not require explicit adoption", held, err)
+	}
+	request := storage.ProductSourceRequestAdoptionRequest{Target: w.Target(), DirectionID: direction.ID, ObservationID: held.Snapshot.ID, ObservationDigest: held.Snapshot.Digest, WorkItemID: registration.Value.Definition.ID}
+	adopted, err := k.AdoptProductSourceRequest(ctx, request)
+	if err != nil || adopted.Value.RequestDigest != prior.Value.Facts.RequestDigest {
+		t.Fatal("next epoch adoption failed", adopted, err)
+	}
+	ready, err := k.ObserveProductSource(ctx, w.Target(), held.Snapshot.Digest, prior.Value.Facts)
+	if err != nil || ready.Hold != nil || ready.Snapshot.Value.Status != "ready" {
+		t.Fatal(ready, err)
+	}
 }

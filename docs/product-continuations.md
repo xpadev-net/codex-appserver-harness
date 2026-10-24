@@ -40,8 +40,10 @@ coverage は現在版の登録から全系譜を照合し、元の登録 digest 
 
 `AdoptProductSourceRequest` は trusted operator/source controller 専用の metadata port であり、model tool ではない。現在の scope/policy に適用済みの方向修正全文を、新しい Issue の `title + "\n\n" + body` と一致させる。保存済み host 観測の head/history、open/ready/hold、policy head/history、現在の後続系譜と元 Issue の退役を照合し、一致した要求 digest だけを採用する。対象 ID/digest を明示し、観測後に別の観測が入れば旧 CAS で採用しない。
 
-一つの scope/policy 版につき head/history/admission を一 transaction で保存し、同じ要求は同じ記録を返す。その版の別本文を採用するには新たな方向修正が必要である。元要求、旧 PR、旧 scope/policy、旧入力、予算は変更しない。保存だけで source hold を解除せず、新しい host GET の成功後に新 plan/Task を採用する。Task 入力 digest、準備、manifest には採用 ID/digest と根拠の要約を結び付ける。後の scope/policy でも変更本文を使う場合は、その版の方向修正と観測で改めて明示採用する。
+一つの scope/policy 版につき head/history/admission を一 transaction で保存し、同じ要求は同じ記録を返す。その版の別本文を採用するには新たな方向修正が必要である。元要求、旧 PR、旧 scope/policy、旧入力、予算は変更しない。保存だけで source hold を解除せず、新しい host GET の成功後に新 plan/Task を採用する。Task 入力 digest、準備、manifest には採用 ID/digest と根拠の要約を結び付ける。後の scope/policy でも変更本文を使う場合は、その版の方向修正と観測で改めて明示採用する。過去の採用があるのに現在版の採用がない状態では、新 Task/plan の入力を保留し、source 観測を `request_changed` にする。元本文へ戻す変更も、同じ明示操作で採用する。
 
 採用記録の head/history/admission、方向修正、元観測、policy、系譜を失えば原要求へ fallback せず保留する。source 観測は `state_invalid` を保存し、Task の入力・準備も保留する。記録がない旧形式の JSON/digest は変更しない。この port は Issue 本文を policy として実行せず、品質・正式承認・候補や新 model run を作らない。
 
 実 Git/SQLite fixture は、元 Issue の merge と方向修正後、新本文の `request_changed`、明示採用、採用だけでは hold 維持、次の4 GETで ready、新 plan の新 Task 入力、途中失敗の全 rollback、exact replay、各証拠の喪失・復旧、reopen を確認する。親 tool/CLI による呼出しと、後続の実候補・正式 GitHub gate の受入は別途必要である。
+
+次 scope の検査では、旧採用を保持した通常の方向修正と registration CAS の後、暗黙の原要求への fallback による plan 採用を拒否し、新 scope の観測・明示採用・ready を再度通す。追加モデルや外部書込みは行わない。
