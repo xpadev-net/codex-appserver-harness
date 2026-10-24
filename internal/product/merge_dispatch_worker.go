@@ -2,6 +2,7 @@ package product
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"maps"
 	"path/filepath"
@@ -100,6 +101,13 @@ func mergeSoleCause(err, cause error) bool {
 	return false
 }
 
+func mergeDispatchCancellation(err, canceled error) bool {
+	// BeginTx's context watcher may win the race with Commit: cancellation
+	// then returns ErrTxDone after the transaction has already rolled back.
+	// Only the exact sole cause is expected, and only while this owner is canceled.
+	return canceled != nil && (mergeSoleCause(err, canceled) || mergeSoleCause(err, sql.ErrTxDone))
+}
+
 func (d MergeDispatchWorker) Run(ctx context.Context) error {
 	if d.Driver.Store == nil || d.Driver.Transport.Store != d.Driver.Store || d.Driver.Gate == nil || !filepath.IsAbs(d.Driver.Transport.Executable) {
 		return errors.New("shared merge driver, gate and trusted transport required")
@@ -139,7 +147,7 @@ func (d MergeDispatchWorker) Run(ctx context.Context) error {
 	next := map[string]time.Time{}
 	cursor, scan := "", true
 	report := func(err error) {
-		if err != nil && !mergeSoleCause(err, ctx.Err()) && !mergeSoleCause(err, storage.ErrProductMergeHeld) && d.Report != nil {
+		if err != nil && !mergeDispatchCancellation(err, ctx.Err()) && !mergeSoleCause(err, storage.ErrProductMergeHeld) && d.Report != nil {
 			d.Report(err)
 		}
 	}
