@@ -137,7 +137,8 @@ func loadProductExecutorWithObserver(path string, k *storage.KernelStore, runtim
 		}
 		dispatcher := productPublicationDispatcher(executor, routes, sources, c.Publication.Workers, every)
 		dispatcher.OnMutation, dispatcher.Report = wake, report
-		workers := []func(context.Context) error{w.Run, dispatcher.Run}
+		completion := product.CloudCompletionWorker{Reader: product.CloudCompletionReader{Store: k, API: product.GitHubResourceAPI, Routes: routes}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
+		workers := []func(context.Context) error{w.Run, dispatcher.Run, completion.Run}
 		if !externalObserver {
 			observer := product.Observer{Store: k, API: product.GitHubResourceAPI, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 			workers = append(workers, observer.Run)
