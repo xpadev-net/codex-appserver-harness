@@ -48,7 +48,10 @@ func (d MergeReconciliationWorker) Run(ctx context.Context) error {
 	cursor := ""
 	scan := true
 	report := func(err error) {
-		if err != nil && !errors.Is(err, storage.ErrProductMergeHeld) && d.Report != nil {
+		// A wake can cancel the owner between the loop's cancellation check
+		// and the next short DB scan. Preserve other/joined failures, while
+		// treating the exact owner cancellation as ordinary worker shutdown.
+		if err != nil && !(ctx.Err() != nil && err == ctx.Err()) && !errors.Is(err, storage.ErrProductMergeHeld) && d.Report != nil {
 			d.Report(err)
 		}
 	}
