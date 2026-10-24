@@ -15,6 +15,9 @@ func validateProductBranchStop(job ProductBranchPublication, proof ProductBranch
 	if proof.PublicationID != job.ID || proof.ProofID == "" || strings.TrimSpace(proof.Reason) == "" || !utf8.ValidString(proof.ProofID+proof.Reason) || len(proof.ProofID) > 16384 || len(proof.Reason) > 16384 || strings.ContainsRune(proof.ProofID+proof.Reason, '\x00') || o.Source != job.Value.Source || o.Remote != job.Value.Remote.URL || o.Branch != job.Value.Branch || o.RemoteSHA != "" && !fixedSHA(o.RemoteSHA) || proof.StartedAt.Before(job.CreatedAt) || proof.FinishedAt.Before(proof.StartedAt) || proof.StartedAt.IsZero() || proof.FinishedAt.IsZero() {
 		return ErrProductBranchHeld
 	}
+	if proof.RemoteVerified && o.RemoteSHA != job.Value.Source.SHA {
+		return ErrProductBranchHeld
+	}
 	if job.ClaimedAt.IsZero() || proof.StartedAt.Before(job.ClaimedAt) {
 		return ErrProductBranchHeld
 	}
@@ -59,7 +62,7 @@ func (k *KernelStore) RecordProductBranchStopped(ctx context.Context, operationI
 		return job, ErrProductBranchHeld
 	}
 	job.Stop, job.StoppedAt, job.State = &proof, k.clock(), "stopped"
-	if proof.Observation.RemoteSHA == job.Value.Source.SHA {
+	if proof.RemoteVerified && proof.Observation.RemoteSHA == job.Value.Source.SHA {
 		job.State = "published"
 		job.Published = &ProductBranchRemoteProof{PublicationID: job.ID, ProofID: proof.ProofID + ":remote", StopProofID: proof.ProofID, RemoteSHA: proof.Observation.RemoteSHA, ReadAt: proof.FinishedAt}
 		if err := kernelRecordTx(ctx, tx, "product_branch_remote", job.ID, job.Value.Product.Value.Target.WaveID, *job.Published); err != nil {

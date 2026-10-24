@@ -43,12 +43,13 @@ type ProductBranchValue struct {
 }
 
 type ProductBranchStop struct {
-	PublicationID string                      `json:"publication_id"`
-	ProofID       string                      `json:"proof_id"`
-	Reason        string                      `json:"reason"`
-	StartedAt     time.Time                   `json:"started_at"`
-	FinishedAt    time.Time                   `json:"finished_at"`
-	Observation   workspace.BranchPublication `json:"observation"`
+	PublicationID  string                      `json:"publication_id"`
+	ProofID        string                      `json:"proof_id"`
+	Reason         string                      `json:"reason"`
+	StartedAt      time.Time                   `json:"started_at"`
+	FinishedAt     time.Time                   `json:"finished_at"`
+	Observation    workspace.BranchPublication `json:"observation"`
+	RemoteVerified bool                        `json:"remote_verified,omitempty"`
 }
 
 type ProductBranchRemoteProof struct {

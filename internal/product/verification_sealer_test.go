@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,12 +80,12 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 }
 
 func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "publication", "product_change", "missing_test"} {
+	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "publication", "publication_push", "publication_noop", "publication_unknown", "publication_partial", "publication_stopped", "publication_metadata", "publication_cancel", "publication_fence", "publication_pause", "product_change", "missing_test"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) {
 				plan.Phases[1].Tasks[0].Kind = "verification"
-				if mode == "publication" {
+				if strings.HasPrefix(mode, "publication") {
 					verifier := plan.Phases[1].Tasks[0]
 					review := contract.TaskSpec{ID: "publication-review", Kind: "review", Instruction: "independently evaluate the fixed code/tests against original AC", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: verifier.ID}}, InputArtifactIDs: []string{}, WorkItemIDs: append([]string{}, verifier.WorkItemIDs...)}
 					plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "local-quality", Tasks: []contract.TaskSpec{review}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{review.ID}}, FailurePolicy: "drain_and_block"})
@@ -120,7 +121,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			}
 			var ready storage.ProductWorkspace
 			var host Executor
-			if mode == "host_executor" || mode == "publication" {
+			if mode == "host_executor" || strings.HasPrefix(mode, "publication") {
 				repo := executorRepositoryFixture(implementation.Value.Request)
 				pinned, readErr := s.Store.ReadProductVerificationPolicy(ctx, task.Target(), repo.Policy.RepositoryID)
 				if readErr != nil {
@@ -194,7 +195,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 				t.Fatal("local sealing bypassed host adoption", p, err)
 			}
 			var receipt storage.ResultApplication
-			if mode == "host_executor" || mode == "publication" {
+			if mode == "host_executor" || strings.HasPrefix(mode, "publication") {
 				receipt, err = host.Apply(ctx, task.ID, verificationRun.ID)
 			} else {
 				receipt, err = s.Store.AdoptProductVerificationTaskResult(ctx, task.SessionID, verificationRun.ID, "trunk")
@@ -214,9 +215,9 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *sealed.Candidate || p.Value.WorkItem.Phase != domain.Verifying {
 				t.Fatal("adoption invented runner pass", p, err)
 			}
-			if mode == "publication" {
+			if strings.HasPrefix(mode, "publication") {
 				checkProductExecutorVerification(t, s.Store, canonical)
-				checkKernelPublicationGate(t, host, canonical)
+				checkKernelPublicationGate(t, host, canonical, mode)
 			} else if mode == "host_executor" {
 				checkProductExecutorVerification(t, s.Store, canonical)
 			} else if mode == "runner_retry" {

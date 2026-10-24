@@ -25,6 +25,8 @@ type PublicationGate func(context.Context, storage.ProductTargetSnapshot) (Publi
 type Repository struct {
 	ID            int64  `json:"id"`
 	DefaultBranch string `json:"default_branch"`
+	Name          string `json:"full_name"`
+	CloneURL      string `json:"clone_url"`
 }
 
 // Every HTTP mutation must call BeforeWrite immediately before sending it.
@@ -41,6 +43,8 @@ type Publisher struct {
 	Store *storage.KernelStore
 	Gate  PublicationGate
 	API   APIFactory
+	// Branch publishes the sealed candidate before the HTTP publication fence.
+	Branch func(context.Context, storage.PRDispatchClaim) error
 }
 
 type liveAPI struct{ github.Client }
@@ -165,6 +169,11 @@ func (p Publisher) Publish(ctx context.Context, id, owner string) (storage.PRCom
 	}
 	if err = verifyRepository(ctx, api, claim.Product.Value); err != nil {
 		return empty, err
+	}
+	if p.Branch != nil {
+		if err := p.Branch(ctx, claim); err != nil {
+			return empty, err
+		}
 	}
 	// The built-in transport resolves the WorkItem marker again before its single
 	// guarded POST/PATCH. Any ambiguity returns an error without retrying a write.
