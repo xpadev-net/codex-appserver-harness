@@ -37,9 +37,12 @@ func (k *KernelStore) MergeDispatchTargets(ctx context.Context, after string, li
  AND NOT EXISTS(SELECT 1 FROM records m WHERE m.kind='product_merge'
  AND CASE WHEN json_valid(m.payload) THEN json_extract(m.payload,'$.merge.value.request_id')=o.id ELSE 0 END)
  UNION ALL
- SELECT 'merge:'||id cursor,'merge' kind,id FROM records WHERE kind='product_merge'
- AND CASE WHEN json_valid(payload) THEN COALESCE(json_extract(payload,'$.merge.state'),'') NOT IN
- ('canceled','stopped_unsent','stopped_unknown','rejected','merged','aborted_http','stopped_before_http') ELSE 1 END
+ SELECT 'merge:'||r.id cursor,'merge' kind,r.id FROM records r WHERE r.kind='product_merge'
+ AND CASE WHEN json_valid(r.payload) THEN
+ COALESCE(json_extract(r.payload,'$.merge.state'),'') NOT IN
+ ('canceled','stopped_unsent','stopped_unknown','rejected','merged','aborted_http','stopped_before_http')
+ OR (json_extract(r.payload,'$.merge.state')='merged' AND NOT EXISTS
+ (SELECT 1 FROM records receipt WHERE receipt.kind='product_merged_work_item' AND receipt.id=r.id)) ELSE 1 END
  ) WHERE cursor>? ORDER BY cursor LIMIT ?`, after, limit+1)
 	if err != nil {
 		return page, err

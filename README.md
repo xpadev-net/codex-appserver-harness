@@ -387,4 +387,4 @@ PR の `MERGED` / 分割元の `SPLIT` と親全体の完了は別に保存し�
 
 `publication.merge`をさらに明示すると、private authorityと永続merge queueを接続します。保存済み候補の正式Cloud承認・CI・rulesと検証済みcapabilityがすべて揃うまで送信しません。unknownを承認へ変換しません。
 
-[公開設定](docs/product-operations.md#daemonのpr公開worker)と[merge設定](docs/product-operations.md#daemonの明示的なmerge設定)を参照してください。製品モデルdispatchの `product_readiness_unavailable`、WorkItem/親最終受入、部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。
+[公開設定](docs/product-operations.md#daemonのpr公開worker)と[merge設定](docs/product-operations.md#daemonの明示的なmerge設定)を参照してください。製品モデルdispatchの `product_readiness_unavailable`、親最終受入、部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
@@ -137,6 +138,11 @@ func checkMergeDispatchWorker(t *testing.T, g KernelMergeGate, saved storage.Pro
 			if err != nil || (committed.Stop == nil && committed.HTTPAbort == nil && committed.Cancellation == nil) {
 				reported <- errors.New("terminal hint preceded journal commit")
 			}
+			if committed.State == "merged" {
+				if _, err := k.ReadProductMergedWorkItem(ctx, expectedID); err != nil {
+					reported <- errors.New("merge hint preceded authenticated WorkItem receipt")
+				}
+			}
 			hints <- struct{}{}
 		}
 		done := make(chan error, 1)
@@ -220,6 +226,11 @@ func checkMergeDispatchWorker(t *testing.T, g KernelMergeGate, saved storage.Pro
 			calls, err := os.ReadFile(filepath.Join(bin, "calls"))
 			if err != nil || strings.Count(string(calls), "--method PUT") != 1 || target.HTTPStop == nil {
 				t.Fatal("missing/duplicate native PUT or missing actual stop", string(calls), err, target)
+			}
+			receipt, err := k.ReadProductMergedWorkItem(ctx, target.ID)
+			current, currentErr := k.ReadProductTarget(ctx, saved.Value.Target, saved.Value.WorkItem.ID)
+			if err != nil || currentErr != nil || receipt.Value.Projection == nil || current.Value.WorkItem.Phase != domain.Merged || current.Value.Candidate != saved.Value.Candidate {
+				t.Fatal("native result not reflected into original WorkItem", receipt, current, err, currentErr)
 			}
 		} else if _, err := os.Stat(filepath.Join(bin, "calls")); !os.IsNotExist(err) {
 			t.Fatal("recovery/cleanup launched a native client", err)
