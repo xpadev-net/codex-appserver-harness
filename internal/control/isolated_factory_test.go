@@ -20,6 +20,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
 // This launcher is deliberately a stub. It tests runtime configuration and
@@ -557,5 +558,51 @@ func TestIsolatedFactoryKeepsUnconfirmedGitProbeCleanup(t *testing.T) {
 				t.Fatal("uncertain cleanup became a not-started proof", err)
 			}
 		})
+	}
+}
+
+func TestIsolatedRuntimePinsProductAuthorityPathsAndActualRuntimeIdentity(t *testing.T) {
+	k, b := taskFixture(t)
+	authority := filepath.Join(t.TempDir(), "capabilities.json")
+	if err := os.WriteFile(authority, []byte("private host evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{authority}
+	if err := k.ConfigureProductIsolationPaths(paths); err != nil {
+		t.Fatal(err)
+	}
+	c := isolatedConfig(t, k.Root)
+	r, err := NewIsolatedRuntime(k, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ConfigurationDigest == "" || !k.IsolatedRuntimeMatches(r.ConfigurationDigest) {
+		t.Fatal("runtime constructor did not bind exact host configuration")
+	}
+	paths[0] = filepath.Join(t.TempDir(), "other")
+	if err := k.ConfigureProductIsolationPaths(paths); !errors.Is(err, storage.ErrResourceBusy) {
+		t.Fatal("live runtime's probe catalog changed", err)
+	}
+	other := c
+	other.Model = "other-runtime-model"
+	if _, err := NewIsolatedRuntime(k, other); !errors.Is(err, storage.ErrResourceBusy) {
+		t.Fatal("different runtime replaced the active owner", err)
+	}
+	factory := r.Factory.(IsolatedFactory)
+	checked := false
+	factory.probe = func(ctx context.Context, program string, args, environment []string, cwd string) (string, error) {
+		if slices.Contains(args, authority) {
+			checked = true
+			return "", errors.New("fixture authority path visible")
+		}
+		return isolatedProbe(ctx, program, args, environment, cwd)
+	}
+	p, err := factory.Open(context.Background(), Launch{Binding: b})
+	if p != nil {
+		_ = p.Close()
+		t.Fatal("readable product authority started a process")
+	}
+	if !checked || !errors.Is(err, ErrNotStarted) {
+		t.Fatal("actual per-launch probe omitted product authority", checked, err)
 	}
 }

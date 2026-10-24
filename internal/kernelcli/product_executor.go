@@ -96,6 +96,7 @@ func loadProductExecutorWithObserver(path string, k *storage.KernelStore, runtim
 		}
 		hidden = append(hidden, filepath.Join(absolute, "gh"))
 	}
+	modelHidden := append(slices.Clone(hidden), reportPaths...)
 	hidden = append(hidden, runtime.GitDirectories...)
 	hidden = append(hidden, reportPaths...)
 	repositories := map[int64]product.ExecutionRepository{}
@@ -133,12 +134,29 @@ func loadProductExecutorWithObserver(path string, k *storage.KernelStore, runtim
 		}
 		repositories[policy.RepositoryID] = repo
 	}
+	if err := k.ConfigureProductIsolationPaths(modelHidden); err != nil {
+		return nil, nil, err
+	}
+	modelRuntime, err := productModelRuntime(k, runtime, repositories)
+	if err != nil {
+		return nil, nil, err
+	}
 	executor := product.Executor{Store: k, Repositories: repositories, Runner: product.Runner{Store: k, Executable: exe, SocketPath: filepath.Join(k.Root, ipc.SocketName)}}
 	every := time.Duration(c.EverySeconds) * time.Second
 	w := product.NewExecutionWorker(executor, every)
 	return func(ctx context.Context, store *storage.KernelStore, wake func(), report func(error)) error {
 		if store != k {
 			return errors.New("product executor store owner mismatch")
+		}
+		if modelRuntime != nil {
+			revoke, err := k.BindProductModelRuntime(*modelRuntime)
+			if err != nil {
+				return err
+			}
+			defer revoke()
+			if wake != nil {
+				wake()
+			}
 		}
 		w.OnMutation, w.Report = wake, report
 		if c.Publication == nil {

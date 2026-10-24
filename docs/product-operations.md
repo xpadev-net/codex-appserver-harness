@@ -14,7 +14,7 @@ PR toolは既存のsession/run/thread/turn/call検査、元snapshot scope、paus
 
 返す`accepted`は受付だけを表す。未完了operationの状態はaccepted/unknownに保ち、既存の再計画・復旧の保留判定を通す。同一callの再送は同じreceiptを返し、異なる引数・toolへの再利用を拒否する。購読保存に失敗した場合、操作・receipt・早期turn対応付けまでrollbackする。受信購読は共通`session_wait`で使える形式だが、外部成功/完了通知はこの分割では生成しない。
 
-後続では送信直前にsource WorkItemの現状態・候補/検証gate・Wave/Taskの優先操作・capacityを照合し、送信試行とunknown結果を保存する。応答欠落はmarkerで再照合し、資源へのbindingと登録境界の更新回収を接続する。既存PR controllerへの接続（Task_11）までは製品Taskの`product_readiness_unavailable`を維持する。単なるprojection登録を送信許可、独立検証やCloud承認として扱わない。
+後続では送信直前にsource WorkItemの現状態・候補/検証gate・Wave/Taskの優先操作・capacityを照合し、送信試行とunknown結果を保存する。応答欠落はmarkerで再照合し、資源へのbindingと登録境界の更新回収を接続する。製品Taskのmodel dispatchには、後述する稼働中の隔離runtimeとworkspace証跡の結付けが別途必要で、未登録時は`product_readiness_unavailable`で保留する。単なるprojection登録を送信許可、独立検証やCloud承認として扱わない。
 
 検証は `go test ./internal/contract ./internal/storage -run 'TestProduct|TestPRIntent|TestPRTool|TestPRReview' -count=1`。再open/replay、失敗rollback、旧run/旧call・候補変更・未登録/未割当・Kの拒否、WorkItem pause/hold/cancel、既存PRのreview intent、CAS競合と監査保存失敗を確認する。全体回帰と対象packageのraceは各PRで実行する。
 
@@ -132,7 +132,7 @@ P plan採用時、Taskの検証済みWorkItem割当ごとにread用購読intent�
 
 operation由来とassignment由来の購読は、それぞれ元operationまたはTask/session/親/WorkItem割当を再検証する。PR資源とのWorkItem/Wave/repository/番号の所有関係も照合する。同じSourceのraw回収・API差分通知・明示wait処理を再利用し、Taskが別の兄弟の購読を待機することや、未割当WorkItemへのすり替えを拒否する。通常更新はwaitまでdeferred、旧Task/旧scopeはarchivedとし、購読だけで製品Taskの実行・publish・承認を許可しない。
 
-plan、登録、PR bindingの途中で購読保存が失敗すれば全体をrollbackする。元の購読時刻を保持して、binding前に届いた更新も回収する。Taskのwaitのstorage試験は認可済みwaitを模擬したもので、native P実行の合格にはしない。`product_readiness_unavailable`はTask_11のcanonical接続まで維持する。
+plan、登録、PR bindingの途中で購読保存が失敗すれば全体をrollbackする。元の購読時刻を保持して、binding前に届いた更新も回収する。Taskのwaitのstorage試験は認可済みwaitを模擬したもので、native P実行の合格にはしない。model readinessは後述の稼働中runtime bindingで別途確認し、この購読port単独では解除しない。
 
 検証: `go test ./internal/storage -run '^TestTaskPRSubscriptions' -count=1`。planとの原子性、WorkItem所有登録後の遅延candidate projection、call非生成、binding前raw/後続snapshotとwait、再open/再送、binding rollback、兄弟/未割当/偽operation、既存PRと新plan・旧scope履歴を確認する。非同期P daemonと既存PR工程への接続は後続である。
 
@@ -783,7 +783,7 @@ capability reportは同じreview routeのcanonical private `capabilities_path`�
 
 daemonは既存のroot排他の下でprivate authorityのsingleton lock/listenerを先に確保し、その後にpublication/observer/Cloud completion/merge reconciliationとmerge dispatchを共通pipelineで起動する。authorityは登録されたHTTP processだけから元intent/specの照会を受け、同じcanonical gateを直前に実行する。失敗/終了時は全workerをcancel/joinし、private authorityを閉じてから呼出元へ戻る。旧intentのseal/停止回収は既存journalを使い、設定のmethod変更を再送の許可にしない。
 
-設定境界・live reportの再読込・unknown/unsupported保持、実private socketの起動と未登録caller/重複owner拒否、publication単独時の不在、shutdown後のsocket cleanupと全worker join、モデルrun数不変をfixtureで確認する。製品モデルdispatchの`product_readiness_unavailable`、親最終受入・部分/後続工程とnative P受入は引き続き接続・検証中である。
+設定境界・live reportの再読込・unknown/unsupported保持、実private socketの起動と未登録caller/重複owner拒否、publication単独時の不在、shutdown後のsocket cleanupと全worker join、モデルrun数不変をfixtureで確認する。製品model dispatchは後述のruntime bindingを必要とする。親の最終工程daemon・部分/後続工程とnative P受入は引き続き接続・検証中である。
 
 ### 既知mergeのWorkItem receiptとcurrent projection
 
@@ -844,3 +844,17 @@ controllerは実際の正常完了・停止済みmain runとsnapshot/budget/turn
 さらに現在の要求版・criterion定義・source・計画、30秒以内のHEAD/source selection、全Phaseの必要作業完了、pause/cancel/deadlineを照合する。未知/未完了のtool operation、未解放のrunner/Git/PR/Cloud枠、停止未確認のmanaged processが一つでもあれば保留する。複数Waveの提案はK/Pを含め全件を先に検証し、途中保存の失敗ではproof・Wave状態・event・main適用を一緒にrollbackする。
 
 採用時は`product_wave_completion`に元target、実main run、snapshot/manifest、提案digest、計画digest、直前のselectionを保存し、Waveをcompletedにして既存のterminal通知へ配送する。`MainResultApplication.product_completions`は製品proofを返し、汎用proofへ変換しない。replay/reopenは元receiptを返し、新しいモデルや外部操作を起動しない。このportはGitHub Issueを閉じる外部操作を送信せず、daemonの最終工程dispatch・元要求の再観測・製品readiness・native P受入は引き続き接続/検証が必要である。
+
+### 稼働中runtimeに結び付いた製品Taskのreadiness
+
+`wave run`のcommon runtimeを`product_tools: true` / `product_tool_profile: product_v2`で明示し、private product executorを設定した場合、executorの稼働中だけ製品Taskのmodel dispatchを有効にする。設定読込だけでは有効にしない。local executor単独や既存product_v1設定は自動でmodel turnを許可しない。repository ID/name、base branch、固定初回SHA、検証policy、runnerとmodelをhost側で固定する。
+
+common isolated runtimeの構築時に実設定のdigestとprivate authority path集合を同じStore instanceへ結び付ける。capability report、HTTP authority、別設定先のGitHub認証等も実際の起動probeの保護対象に含め、model workspace内のauthority fileは設定を拒否する。構築後のpath集合やruntimeの差替えは拒否し、新controllerで構成し直す。root/runtimeの登録だけではmodel readinessにならず、同じruntime digest/model/profileに対するexecutorのlive bindingを必要とする。DB再openやrestartではこのhost bindingを復元しない。解除後の古いcallbackが新ownerを解除することもない。
+
+schedulerの選択時とturn予約時に、current Task/Phase・登録WorkItem・入力、ホスト設定と同じrepository/policy/base、workspace head/history、Git準備の停止/lease解放証跡、sessionのmodel/CWD/sandboxを再照合する。verification/reviewは固定subjectを再認証し、reviewは正式機械検証の成功も必要とする。genericな依存・入力・予算・pause/cancel/deadline・未停止processのgateも引き続き適用する。未登録・古い候補・欠損・設定不一致は理由付きで保留し、metadataだけからモデルを起動しない。
+
+予約は通常のrun/input/予算と同じtransactionで`product_model_admission`にcontroller epoch、runtime/host設定digest、workspace・固定入力・実snapshotの参照を保存する。保存失敗時はattempt/runの予約もrollbackする。実起動では従来のbinary/version・認証・namespace/子process隔離・private pathのprobeを毎回実行し、bindingを成功や正式承認の代わりにしない。
+
+localなモデル作業のreadyと、PR公開/review依頼/merge/製品Wave受入は別のgateである。Cloud/CI/rulesのunknownをverifiedへ変えず、その能力を必要とする操作とPの受入を保留する。worker終了時は全処理のjoin後にbindingを解除し、新しいturnを許可しない。
+
+fixtureで登録前/稼働中/解除後/reopen、設定とsubjectの改変/欠損、初回選択後の解除、turn予約の原子性、実Gitによるdaemon準備とmodel run非生成、追加authority pathを含む実probe呼出しを確認する。launcher stubはOS隔離やnative P受入の証拠には数えず、各起動の本物のprobeを必須のまま維持する。

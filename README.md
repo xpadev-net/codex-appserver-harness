@@ -166,7 +166,7 @@ chmod 600 product-request.json
 
 Pのstage/product flagと初期policy版はコマンドが指定し、実行上限・main sessionは保存した`kernel.json`から決めます。入力からpolicy、session、candidateを設定できません。JSONは12 MiB、元要求は8 MiB、request IDは4096 bytes、WorkItemは1〜128件/各定義64 KiBまでです。コマンド自体はmodelやGitHubを呼び出さず、commit後にdaemonへbest-effort hintを送ります。
 
-これはPのsource受付です。既存Issueのhold/close/編集同期、製品worktree/readiness・停止後候補・daemonの書込worker配置は接続途中であり、製品Taskは`product_readiness_unavailable`で保留されます。公開gateや正式なCloud承認、P Waveの完了を省略しません。[保存契約](docs/product-operations.md)を参照してください。
+これはPのsource受付です。製品Taskのmodel dispatchには、稼働中executorと同じ隔離済み`product_v2` runtime、設定済みrepository/policy、認証済みのworkspace準備証跡が必要です。未登録時は`product_readiness_unavailable`で保留します。公開gateや正式なCloud承認、P Waveの最終受入を省略しません。[保存契約](docs/product-operations.md)を参照してください。
 
 ### GitHub Issueの明示的な受付
 
@@ -387,4 +387,4 @@ PR の `MERGED` / 分割元の `SPLIT` と親全体の完了は別に保存し�
 
 `publication.merge`をさらに明示すると、private authorityと永続merge queueを接続します。保存済み候補の正式Cloud承認・CI・rulesと検証済みcapabilityがすべて揃うまで送信しません。unknownを承認へ変換しません。
 
-[公開設定](docs/product-operations.md#daemonのpr公開worker)と[merge設定](docs/product-operations.md#daemonの明示的なmerge設定)を参照してください。製品モデルdispatchの `product_readiness_unavailable`、親最終受入、部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。
+[公開設定](docs/product-operations.md#daemonのpr公開worker)と[merge設定](docs/product-operations.md#daemonの明示的なmerge設定)を参照してください。製品model dispatchは[稼働中runtimeとの結付け](docs/product-operations.md#稼働中runtimeに結び付いた製品taskのreadiness)を必要とし、各起動の認証・隔離probeを省略しません。親の最終工程daemon、base更新・部分公開・merge後の後続、P/M受入は引き続き接続・検証中です。
