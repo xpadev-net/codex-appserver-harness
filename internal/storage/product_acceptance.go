@@ -19,13 +19,14 @@ import (
 var ErrProductAcceptanceHeld = errors.New("product acceptance requires exact parent input and current stopped final verification")
 
 type ProductAcceptanceProof struct {
-	Target         contract.Target            `json:"target"`
-	Proposal       contract.ProductAcceptance `json:"proposal"`
-	SnapshotID     string                     `json:"snapshot_id"`
-	SnapshotDigest string                     `json:"snapshot_digest"`
-	Manifest       InputReference             `json:"manifest"`
-	PlanDigest     string                     `json:"plan_digest"`
-	Selection      ProductFinalPlanSelection  `json:"selection"`
+	FinalRuntime   *ProductFinalRuntimeAdmission `json:"final_runtime,omitempty"`
+	Target         contract.Target               `json:"target"`
+	Proposal       contract.ProductAcceptance    `json:"proposal"`
+	SnapshotID     string                        `json:"snapshot_id"`
+	SnapshotDigest string                        `json:"snapshot_digest"`
+	Manifest       InputReference                `json:"manifest"`
+	PlanDigest     string                        `json:"plan_digest"`
+	Selection      ProductFinalPlanSelection     `json:"selection"`
 }
 type ProductWaveCompletion struct {
 	ID        string                 `json:"id"`
@@ -162,7 +163,7 @@ func (k *KernelStore) checkProductAcceptanceTx(ctx context.Context, tx *sql.Tx, 
 }
 
 // Only ApplyMainResult calls this after authenticating its normal stopped run.
-func (k *KernelStore) completeProductWaveTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, runID string, snapshot contract.InputSnapshot, target contract.Target, p contract.ProductAcceptance, summary string) (ProductWaveCompletion, error) {
+func (k *KernelStore) completeProductWaveTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, runID string, snapshot contract.InputSnapshot, target contract.Target, p contract.ProductAcceptance, summary string, finalAdmission *ProductFinalRuntimeAdmission) (ProductWaveCompletion, error) {
 	var completion ProductWaveCompletion
 	proof, err := k.checkProductAcceptanceTx(ctx, tx, b, snapshot, target, p)
 	if err != nil {
@@ -172,6 +173,7 @@ func (k *KernelStore) completeProductWaveTx(ctx context.Context, tx *sql.Tx, b c
 	if err != nil {
 		return completion, err
 	}
+	proof.FinalRuntime = finalAdmission
 	completion = ProductWaveCompletion{ID: structureID("product-wave-completion-", w.ID, fmt.Sprintf("%d:%d:%d", target.ScopeRevision, target.PlanRevision, target.PolicyRevision)), SessionID: b.ID, RunID: runID, Proof: proof, Summary: summary, CreatedAt: k.clock()}
 	w.State, w.Reason, w.CompletedAt = domain.WaveCompleted, summary, completion.CreatedAt
 	if err := saveWave(ctx, tx, w); err != nil {

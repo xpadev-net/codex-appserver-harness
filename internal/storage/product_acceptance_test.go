@@ -16,6 +16,16 @@ import (
 
 func productParentRun(t *testing.T, k *KernelStore, targets ...contract.Target) (contract.SessionBinding, contract.SessionRun, contract.InputSnapshot) {
 	t.Helper()
+	k.productFinalRuntime.RLock()
+	bound := k.productFinalRuntime.gate != nil
+	k.productFinalRuntime.RUnlock()
+	if !bound {
+		revoke, err := k.BindProductFinalRuntime(strings.Repeat("a", 64), func(context.Context, contract.Target) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(revoke)
+	}
 	ctx := context.Background()
 	b, err := k.SessionBinding(ctx, "main")
 	if err != nil {

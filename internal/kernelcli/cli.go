@@ -2,6 +2,8 @@ package kernelcli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -227,13 +229,19 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
-		executor, hintExecution, err := loadProductExecutorWithObserver(*executorFile, k, config, observer != nil)
+		pipeline, err := loadProductExecutorPipeline(*executorFile, k, config, observer != nil)
 		if err != nil {
 			return err
 		}
 		runtime, err := control.NewIsolatedRuntime(k, config)
 		if err != nil {
 			return err
+		}
+		executor, hintExecution := pipeline.Worker, pipeline.Hint
+		runtime.ProductFinalGate = pipeline.FinalGate
+		if pipeline.FinalGate != nil {
+			sum := sha256.Sum256([]byte(runtime.ConfigurationDigest + ":" + pipeline.ConfigDigest))
+			runtime.ProductFinalConfigDigest = hex.EncodeToString(sum[:])
 		}
 		runtime.OnMutation = hintExecution
 		var background []daemonWorker

@@ -81,6 +81,7 @@ func checkFinalRunner(t *testing.T, k *storage.KernelStore, target contract.Targ
 			t.Fatal("missing remote commit passed", missing)
 		}
 	})
+	checkKernelFinalGate(t, k, target, receipt)
 	checkFinalCommitFetch(t, k, target, receipt)
 
 }
@@ -180,6 +181,50 @@ func checkFinalCommitFetch(t *testing.T, k *storage.KernelStore, target contract
 		same, err := k.ReadProductFinalFetch(ctx, id)
 		if err != nil || !reflect.DeepEqual(same, fetch) {
 			t.Fatal("replay repeated fetch", same, err)
+		}
+
+		// A new remote HEAD is discovered by the ordinary daemon worker. It
+		// starts a real fixed-commit profile, then produces one parent input.
+		if err := os.WriteFile(filepath.Join(remote, "daemon-advance.txt"), []byte("next observed base\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		api.head, err = workspace.Freeze(workspace.WithStoppedCommands(ctx), remote, "daemon final verification")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.ResolveRemote = func(context.Context, contract.Target, int64) (string, error) { return remote, nil }
+		f.FetchRemotes = nil
+		worker := FinalVerificationWorker{Final: f, Repositories: map[int64]ExecutionRepository{p.WorkItem.RepositoryID: {Name: p.Repository, BaseBranch: p.BaseBranch, Policy: policy.Value, Runner: runtime}}}
+		if changed, err := worker.Advance(ctx, target); err != nil || !changed {
+			t.Fatal("daemon did not start fixed profile", changed, err)
+		}
+		evidence, err := k.ReadProductFinalVerificationEvidence(ctx, target)
+		if err != nil || len(evidence.Value.Repositories) != 1 || len(evidence.Value.Repositories[0].Jobs) != 1 {
+			t.Fatal(evidence, err)
+		}
+		jobID := evidence.Value.Repositories[0].Jobs[0].JobID
+		deadline = time.Now().Add(15 * time.Second)
+		for {
+			job, err = f.Runner.Reconcile(ctx, jobID)
+			if err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("daemon final runner did not stop", err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if job.Completion.Result.Status != "passed" || job.Completion.Result.TestedSHA != api.head {
+			t.Fatal("daemon ran stale commit", job)
+		}
+		for i := 0; i < 2; i++ {
+			if changed, err := worker.Advance(ctx, target); err != nil || changed != (i == 0) {
+				t.Fatal("final notice missing or repeated", changed, err)
+			}
+		}
+		var count int
+		if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='parent_attention' AND json_extract(payload,'$.reason')='product_final_verification'").Scan(&count); err != nil || count != 1 {
+			t.Fatal(count, err)
 		}
 	})
 }

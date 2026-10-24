@@ -124,6 +124,13 @@ func runDaemonWithHint(ctx context.Context, k *storage.KernelStore, runtime cont
 		return err
 	}
 	defer unlock()
+	if runtime.ProductFinalGate != nil {
+		revoke, err := k.BindProductFinalRuntime(runtime.ProductFinalConfigDigest, runtime.ProductFinalGate)
+		if err != nil {
+			return err
+		}
+		defer revoke()
+	}
 	runtime.Factory = workspaceFactory{Factory: runtime.Factory, root: k.Root}
 	source := control.NewKernelSource(k)
 	loop := control.NewLoop(runtime, source)

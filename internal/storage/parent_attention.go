@@ -221,6 +221,19 @@ func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.
 			return ErrWakeHeld
 		}
 	}
+	if a.Reason == "product_final_verification" {
+		wave, err := loadWave(ctx, tx, a.Target.WaveID)
+		if err != nil {
+			return err
+		}
+		evidence, err := k.productFinalVerificationEvidenceTx(ctx, tx, wave)
+		if err != nil {
+			return err
+		}
+		if !evidence.Value.Current || !evidence.Value.Complete || evidence.Digest != a.Detail {
+			return ErrWakeHeld
+		}
+	}
 	if a.Reason == "task_evidence_unavailable" {
 		wave, err := loadWave(ctx, tx, a.Target.WaveID)
 		if err != nil {

@@ -31,11 +31,11 @@ type MainResultApplication struct {
 	Completions []WaveCompletion     `json:"completions,omitempty"`
 }
 
-// ApplyMainResult applies one known normal main completion after stop proof.
+// applyMainResult applies one known normal main completion after stop proof.
 // Errors leave the stored physical outcome/input untouched for classification
 // or reference reconciliation, never another implicit model turn. All selected
 // Waves and all input bindings commit together; unknown starts cannot enter.
-func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID string) (MainResultApplication, error) {
+func (k *KernelStore) applyMainResult(ctx context.Context, sessionID, runID string, finalAdmission *ProductFinalRuntimeAdmission) (MainResultApplication, error) {
 	receipt := MainResultApplication{SessionID: sessionID, RunID: runID, Plans: []PlanAdmission{}}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
@@ -185,6 +185,9 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 		}
 		if decision.Action == "accept" {
 			if decision.ProductAcceptance != nil {
+				if finalAdmission == nil || finalAdmission.SessionID != b.ID || finalAdmission.RunID != runID || finalAdmission.OutputDigest != bytesDigest([]byte(run.Final)) || finalAdmission.SnapshotID != snapshot.ID || finalAdmission.SnapshotDigest != snapshot.Digest || !slices.Contains(finalAdmission.Targets, decision.Target) {
+					return receipt, ErrMainResultHeld
+				}
 				if _, err = k.checkProductAcceptanceTx(ctx, tx, b, snapshot, decision.Target, *decision.ProductAcceptance); err != nil {
 					return receipt, mainAcceptanceError(err)
 				}
@@ -224,7 +227,7 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 		}
 		if decision.Action == "accept" {
 			if decision.ProductAcceptance != nil {
-				completion, err := k.completeProductWaveTx(ctx, tx, b, runID, snapshot, decision.Target, *decision.ProductAcceptance, decision.Summary)
+				completion, err := k.completeProductWaveTx(ctx, tx, b, runID, snapshot, decision.Target, *decision.ProductAcceptance, decision.Summary, finalAdmission)
 				if err != nil {
 					return receipt, mainAcceptanceError(err)
 				}

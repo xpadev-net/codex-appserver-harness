@@ -11,11 +11,12 @@ import (
 
 // FinalRunner refreshes actual GitHub heads/source policy before reserving and
 // claiming an ordinary trusted runner. The repository must already contain the
-// fixed commit. FetchRemotes explicitly opts in to the leased host fetch owner.
+// fixed commit. FetchRemotes or ResolveRemote opts in to the leased host fetch owner.
 type FinalRunner struct {
-	FetchRemotes map[int64]string
-	Planner      FinalPlanner
-	Runner       Runner
+	ResolveRemote func(context.Context, contract.Target, int64) (string, error)
+	FetchRemotes  map[int64]string
+	Planner       FinalPlanner
+	Runner        Runner
 }
 
 func (f FinalRunner) Start(ctx context.Context, target contract.Target, repositoryID int64, profileID string, runtime storage.ProductRunnerRuntime) (storage.ProductRunnerJob, error) {
@@ -27,8 +28,16 @@ func (f FinalRunner) Start(ctx context.Context, target contract.Target, reposito
 	if err != nil {
 		return job, err
 	}
-	if f.FetchRemotes != nil {
-		fetched, err := (FinalCommitFetcher{Planner: f.Planner, Remotes: f.FetchRemotes}).Ensure(ctx, target, repositoryID)
+	if f.FetchRemotes != nil || f.ResolveRemote != nil {
+		remotes := f.FetchRemotes
+		if f.ResolveRemote != nil {
+			remote, err := f.ResolveRemote(ctx, target, repositoryID)
+			if err != nil {
+				return job, err
+			}
+			remotes = map[int64]string{repositoryID: remote}
+		}
+		fetched, err := (FinalCommitFetcher{Planner: f.Planner, Remotes: remotes}).Ensure(ctx, target, repositoryID)
 		if err != nil {
 			return job, err
 		}

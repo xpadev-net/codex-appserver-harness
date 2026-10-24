@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/control"
 	"github.com/xpadev-net/codex-appserver-harness/internal/ipc"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
+	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
 type neverStartFactory struct{ launches chan control.Launch }
@@ -278,4 +280,57 @@ func TestKernelCLIRunUsesPrivateRuntimeConfigAndStopsCleanly(t *testing.T) {
 	if _, err = cliCall(t, "run", "--root", root, "--runtime", operatorFile(t, c)); err == nil {
 		t.Fatal("relative runtime path accepted")
 	}
+}
+
+func TestKernelDaemonOwnsFinalGateUntilBackgroundWorkersJoin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	k, _, err := openKernel(ctx, cliRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	gate := func(context.Context, contract.Target) error { return nil }
+	go func() {
+		done <- runDaemon(ctx, k, control.Runtime{Store: k, Factory: neverStartFactory{make(chan control.Launch, 1)}, ProductFinalConfigDigest: strings.Repeat("a", 64), ProductFinalGate: gate}, io.Discard, func(ctx context.Context, _ *storage.KernelStore, _ func(), _ func(error)) error {
+			close(started)
+			<-ctx.Done()
+			<-release
+			return ctx.Err()
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not start")
+	}
+	assertOwned := func() {
+		t.Helper()
+		revoke, err := k.BindProductFinalRuntime(strings.Repeat("b", 64), gate)
+		if !errors.Is(err, storage.ErrResourceBusy) {
+			if revoke != nil {
+				revoke()
+			}
+			t.Fatal("daemon lost exclusive live final gate", err)
+		}
+	}
+	assertOwned()
+	cancel()
+	assertOwned()
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not join")
+	}
+	revoke, err := k.BindProductFinalRuntime(strings.Repeat("c", 64), gate)
+	if err != nil {
+		t.Fatal("daemon retained final gate after stop", err)
+	}
+	revoke()
 }
