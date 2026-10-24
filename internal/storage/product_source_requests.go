@@ -41,6 +41,17 @@ func sourceRequestEpoch(t contract.Target) string {
 	return structureID("source-request-epoch-", t.WaveID, strconv.Itoa(t.ScopeRevision)+":"+strconv.Itoa(t.PolicyRevision))
 }
 
+// Operational failures must not become durable state_invalid source holds.
+func sourceRequestEvidenceErr(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if readinessHoldError(err) || errors.Is(err, ErrProductCoverageHeld) {
+		return errors.Join(ErrTaskEvidence, err)
+	}
+	return err
+}
+
 func (k *KernelStore) checkProductSourceRequestTx(ctx context.Context, tx *sql.Tx, w domain.Wave, saved ProductSourceRequestAdoption) error {
 	v, r := saved.Value, saved.Value.Request
 	digest, err := contentDigest(v)
@@ -53,7 +64,7 @@ func (k *KernelStore) checkProductSourceRequestTx(ctx context.Context, tx *sql.T
 	}
 	var direction WaveDirection
 	if err := taskEvidenceRecord(ctx, tx, "wave_direction", r.DirectionID, &direction); err != nil {
-		return errors.Join(ErrTaskEvidence, err)
+		return sourceRequestEvidenceErr(err)
 	}
 	directionDigest, err := contentDigest(direction.Request)
 	if err != nil {
@@ -64,7 +75,7 @@ func (k *KernelStore) checkProductSourceRequestTx(ctx context.Context, tx *sql.T
 	}
 	var observed ProductSourceSnapshot
 	if err := taskEvidenceRecord(ctx, tx, "product_source_observation_history", r.ObservationID, &observed); err != nil {
-		return errors.Join(ErrTaskEvidence, err)
+		return sourceRequestEvidenceErr(err)
 	}
 	observationDigest, err := contentDigest(observed.Value)
 	if err != nil {
@@ -80,24 +91,24 @@ func (k *KernelStore) checkProductSourceRequestTx(ctx context.Context, tx *sql.T
 	}
 	var policyHead, policyHistory productSourcePolicyRecord
 	if err := taskEvidenceRecord(ctx, tx, "product_source_policy", productSourcePolicyID(w), &policyHead); err != nil {
-		return errors.Join(ErrTaskEvidence, err)
+		return sourceRequestEvidenceErr(err)
 	}
 	if err := taskEvidenceRecord(ctx, tx, "product_source_policy_history", productSourcePolicyID(w), &policyHistory); err != nil {
-		return errors.Join(ErrTaskEvidence, err)
+		return sourceRequestEvidenceErr(err)
 	}
 	if policy != v.PolicyDigest || !reflect.DeepEqual(policyHead, policyHistory) {
 		return ErrTaskEvidence
 	}
 	lineage, err := k.productContinuationInputsTx(ctx, tx, w, r.WorkItemID)
 	if err != nil {
-		return errors.Join(ErrTaskEvidence, err)
+		return sourceRequestEvidenceErr(err)
 	}
 	if len(lineage) == 0 || lineage[0].ID != v.ContinuationID || lineage[0].Digest != v.ContinuationDigest {
 		return ErrTaskEvidence
 	}
 	coverage, err := k.productCoverageTx(ctx, tx, w)
 	if err != nil {
-		return errors.Join(ErrTaskEvidence, err)
+		return sourceRequestEvidenceErr(err)
 	}
 	for _, retired := range coverage.Value.Retired {
 		if retired.WorkItemID == w.SourceID && retired.CurrentWorkItemID == r.WorkItemID {
@@ -153,10 +164,10 @@ func (k *KernelStore) loadProductSourceRequestTx(ctx context.Context, tx *sql.Tx
 	var history ProductSourceRequestAdoption
 	var admission string
 	if err := taskEvidenceRecord(ctx, tx, "product_source_request_history", saved.ID, &history); err != nil {
-		return nil, errors.Join(ErrTaskEvidence, err)
+		return nil, sourceRequestEvidenceErr(err)
 	}
 	if err := taskEvidenceRecord(ctx, tx, "product_source_request_admission", epoch, &admission); err != nil {
-		return nil, errors.Join(ErrTaskEvidence, err)
+		return nil, sourceRequestEvidenceErr(err)
 	}
 	if !reflect.DeepEqual(saved, history) || saved.Digest != admission {
 		return nil, ErrTaskEvidence
