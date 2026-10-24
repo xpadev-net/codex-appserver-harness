@@ -318,6 +318,8 @@ func (o *owner) Close() error {
 }
 
 type Runtime struct {
+	ConfigurationDigest string
+
 	ProductTools       bool // trusted opt-in; each thread's tool profile is pinned
 	ProductToolProfile string
 	Store              *storage.KernelStore

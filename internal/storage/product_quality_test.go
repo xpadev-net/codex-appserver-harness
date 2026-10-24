@@ -16,6 +16,12 @@ import (
 
 func productQualityFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, ProductVerificationPlanSnapshot, ProductRunnerRuntime, domain.Task, contract.SessionRun) {
 	t.Helper()
+	k, w, plan, runtime, review := productQualityPreparationFixture(t, configure...)
+	review, run := seedProductQualityReview(t, k, w, plan, review)
+	return k, w, plan, runtime, review, run
+}
+func productQualityPreparationFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (*KernelStore, domain.Wave, ProductVerificationPlanSnapshot, ProductRunnerRuntime, domain.Task) {
+	t.Helper()
 	ctx := context.Background()
 	k, w, task, run, _, _ := verificationSealFixtureWithPlan(t, func(plan *contract.PlanProposal) {
 		verifier := plan.Phases[1].Tasks[0]
@@ -60,9 +66,8 @@ func productQualityFixture(t *testing.T, configure ...func(*contract.PlanProposa
 			review = item
 		}
 	}
-	review, reviewRun := seedProductQualityReview(t, k, w, plan, review)
 	runtime := ProductRunnerRuntime{Root: k.Root + "/runner", LauncherContract: "argv_passthrough_v1", Launcher: []string{"/bin/true"}}
-	return k, w, plan, runtime, review, reviewRun
+	return k, w, plan, runtime, review
 }
 
 func TestProductQualityReusesOnlyExplicitlyCarriedExecutionEvidence(t *testing.T) {

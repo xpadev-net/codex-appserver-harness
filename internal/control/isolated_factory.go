@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +26,8 @@ import (
 // or merge-capability prerequisite. IsolationVerified is a trusted operator
 // attestation about descendant containment; per-launch probes remain mandatory.
 type IsolatedConfig struct {
+	ProtectedPaths []string // Host authority paths; frozen by NewIsolatedRuntime.
+
 	ProductTools       bool
 	ProductToolProfile string
 	PrivateRoot        string
@@ -38,6 +43,8 @@ type IsolatedConfig struct {
 
 type runtimeProbe func(context.Context, string, []string, []string, string) (string, error)
 type IsolatedFactory struct {
+	runtimeDigest string
+
 	Config IsolatedConfig
 	store  *storage.KernelStore
 	probe  runtimeProbe
@@ -64,7 +71,21 @@ func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runt
 	config.PrivateRoot = root
 	config.Launcher = append([]string{}, config.Launcher...)
 	config.GitDirectories = append([]string{}, config.GitDirectories...)
-	return Runtime{Store: store, Factory: IsolatedFactory{Config: config, store: store}, ProductTools: config.ProductTools, ProductToolProfile: config.ProductToolProfile}, nil
+	config.ProtectedPaths = append(append([]string{}, config.ProtectedPaths...), store.SealProductIsolationPaths()...)
+	sort.Strings(config.ProtectedPaths)
+	config.ProtectedPaths = slices.Compact(config.ProtectedPaths)
+	if len(config.ProtectedPaths) > 512 {
+		return Runtime{}, errors.New("bounded host protected paths required")
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return Runtime{}, err
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(raw))
+	if err := store.RegisterIsolatedRuntime(digest, config.Model, config.ProductToolProfile); err != nil {
+		return Runtime{}, err
+	}
+	return Runtime{ConfigurationDigest: digest, Store: store, Factory: IsolatedFactory{runtimeDigest: digest, Config: config, store: store}, ProductTools: config.ProductTools, ProductToolProfile: config.ProductToolProfile}, nil
 }
 
 func pathContains(root, path string) bool {
@@ -94,6 +115,9 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 		probe = isolatedProbe
 	}
 	c := f.Config
+	if f.runtimeDigest != "" && (f.store == nil || !f.store.IsolatedRuntimeMatches(f.runtimeDigest)) {
+		return fail(errors.New("isolated runtime owner changed"))
+	}
 	if !c.IsolationVerified || c.LauncherContract != "argv_passthrough_v1" || len(c.Launcher) == 0 || c.Model == "" || c.Model != launch.Binding.Model {
 		return fail(errors.New("verified common launcher contract and matching model required"))
 	}
@@ -215,6 +239,7 @@ func (f IsolatedFactory) Open(ctx context.Context, launch Launch) (Process, erro
 	if tokenSource != nil {
 		hidden = append(hidden, tokenSource.path)
 	}
+	hidden = append(hidden, c.ProtectedPaths...)
 	// Probe each shared parent independently: mounting only worker-homes or
 	// workspaces can expose siblings while still hiding the controller root.
 	for _, directory := range []string{root, filepath.Dir(home), filepath.Join(root, "workspaces")} {

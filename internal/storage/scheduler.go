@@ -312,10 +312,12 @@ func (k *KernelStore) taskReadyTx(ctx context.Context, tx *sql.Tx, wave domain.W
 	if active != "" || creating != 0 || (!prepared && stopped != 1) {
 		return "process_reconciliation_required", nil
 	}
-	// Product bindings require Task_8's trusted candidate/merge adapter. Generic
-	// artifacts and Task completion cannot stand in for that evidence.
+	// Product execution requires this live host runtime plus authenticated local
+	// preparation. Publication/merge retain their separate canonical gates.
 	if len(task.Spec.WorkItemIDs) > 0 {
-		return "product_readiness_unavailable", nil
+		if reason, err := k.productTaskReadinessTx(ctx, tx, wave, task); err != nil || reason != "" {
+			return reason, err
+		}
 	}
 	for _, dependency := range task.Spec.DependsOn {
 		prior, err := loadTask(ctx, tx, structureID("task-", wave.ID, dependency.TaskID))
