@@ -109,3 +109,9 @@ model manifest は実際の新 checkout の固定 SHA・安全な conflict path 
 同一原因の ACK・定期照合は通知を増やさず、利用時にも現在の原因を再確認する。通常の capacity 待ちや未着手 prepared seal は通知しない。通知は Task の成果を適用せず、候補・品質を変更せず、Git/model の再実行も許可しない。停止未確認 owner は launching と lease を保持する。pause/cancel と期限は従来の通知 gate を使う。
 
 SQLite の検査は通知改変・証拠欠落・解決後の古い通知・ACK 重複・通常待機を確認する。実 Git/SQLite の worker 検査は未解消 marker、既存の未解決 owner、sealing 後の候補変更を確認する。model の正常停止は fixture であり native P の受入には含めない。
+
+## sealing 前の結果拒否
+
+正常停止 run の JSON・結果 schema・Task/Phase/target・割り当てられた criterion の集合を、controller と成果適用で同じ `TaskResult.ValidateAssignment` を使って検査する。sealing 前の明確な結果違反は保存済み run を既存の成果適用へ渡し、Task の failed と監査 receipt を保存する。誤った workspace 参照も Git owner の admission より前に拒否できた場合だけ、同じ経路へ渡す。別 profile の成果は既存の failed/blocked 判定を使い、製品候補へ変換しない。
+
+これらは通常の Task 失敗・保留として親通知へ接続し、同じ原因の ACK・定期照合で通知を増やさない。Git の stage/commit、model の追加起動、新 Task/session、予算リセットは行わない。admission 済みの Git owner のエラー・停止不明・証拠欠落は sealing 例外の照合経路を維持する。実 Git/SQLite の検査は不正 JSON/schema/identity/criterion/workspace と別 profile、親通知・監査 replay、HEAD/index 保持と追加 owner 不在を確認する。run/停止は最初から fixture として保存し、完了済み run の書換えは禁止したままとする。

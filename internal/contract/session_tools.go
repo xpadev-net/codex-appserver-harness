@@ -263,6 +263,31 @@ type TaskResult struct {
 	Verification        *VerificationReference        `json:"verification"`
 }
 
+// ValidateAssignment checks the common result contract against a host-assigned
+// Task. It does not validate artifact bytes, product evidence or grant execution.
+func (r TaskResult) ValidateAssignment(target Target, taskID, phaseID string, criteria []string) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if r.TaskID != taskID || r.PhaseID != phaseID || r.Target != target {
+		return errors.New("Task result identity/scope mismatch")
+	}
+	known := map[string]bool{}
+	for _, id := range criteria {
+		known[id] = true
+	}
+	for _, c := range r.CriterionResults {
+		if !known[c.CriterionID] {
+			return errors.New("Task result invents or repeats criterion coverage")
+		}
+		delete(known, c.CriterionID)
+	}
+	if r.Outcome == "result" && len(known) > 0 {
+		return errors.New("Task result omits assigned criterion coverage")
+	}
+	return nil
+}
+
 func (r TaskResult) Validate() error {
 	if (r.SchemaVersion != 1 && r.SchemaVersion != 2 && r.SchemaVersion != 3) || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
 		return errors.New("result identity missing")

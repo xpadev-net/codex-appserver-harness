@@ -232,14 +232,24 @@ func TestProductCandidateSealingCannotBypassInvalidResultApplication(t *testing.
 				t.Fatal(err)
 			}
 			saved, err := k.ReserveProductSeal(ctx, task.ID, run.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if claim, err := k.ClaimProductSeal(ctx, task.ID, run.ID, saved.Digest); err != nil || !claim.Start {
-				t.Fatal(claim, err)
-			}
-			if _, err := k.FinishProductSeal(ctx, task.ID, run.ID, sealProofFixture(saved)); err != nil {
-				t.Fatal(err)
+			if mode == "criterion" {
+				if !errors.Is(err, ErrTaskEvidence) {
+					t.Fatal("misassigned result admitted sealing", saved, err)
+				}
+				var count int
+				if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_seal'").Scan(&count); err != nil || count != 0 {
+					t.Fatal("misassigned result persisted sealing", count, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if claim, err := k.ClaimProductSeal(ctx, task.ID, run.ID, saved.Digest); err != nil || !claim.Start {
+					t.Fatal(claim, err)
+				}
+				if _, err := k.FinishProductSeal(ctx, task.ID, run.ID, sealProofFixture(saved)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			receipt, err := k.AdoptProductTaskResult(ctx, task.SessionID, run.ID, "master")
 			if err != nil || receipt.State != contract.TaskFailed {

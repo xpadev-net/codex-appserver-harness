@@ -141,26 +141,7 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 	var result contract.TaskResult
 	validationErr := contract.DecodeStrict([]byte(run.Final), &result)
 	if validationErr == nil {
-		validationErr = result.Validate()
-	}
-	if validationErr == nil && (result.TaskID != task.ID || result.PhaseID != task.PhaseID || result.Target != task.Target()) {
-		validationErr = errors.New("Task result identity/scope mismatch")
-	}
-	if validationErr == nil {
-		known := map[string]bool{}
-		for _, id := range task.Spec.Criteria {
-			known[id] = true
-		}
-		for _, c := range result.CriterionResults {
-			if !known[c.CriterionID] {
-				validationErr = errors.New("Task result invents or repeats criterion coverage")
-				break
-			}
-			delete(known, c.CriterionID)
-		}
-		if validationErr == nil && result.Outcome == "result" && len(known) > 0 {
-			validationErr = errors.New("Task result omits assigned criterion coverage")
-		}
+		validationErr = result.ValidateAssignment(task.Target(), task.ID, task.PhaseID, task.Spec.Criteria)
 	}
 	if validationErr == nil && wave.Policy.Stage == "K" && len(result.WorkItemRefs) > 0 {
 		validationErr = errors.New("K Task cannot claim product Candidate results")

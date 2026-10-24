@@ -36,7 +36,7 @@ func candidateSealerFixtureWithAdmission(t *testing.T, request *storage.ProductW
 }
 
 // The structured result/run/stop are synthetic; checkout and sealing are real.
-func stoppedProductWriterRunFixture(t *testing.T, k *storage.KernelStore, ready storage.ProductWorkspace, task domain.Task) (domain.Task, contract.SessionRun) {
+func stoppedProductWriterRunFixture(t *testing.T, k *storage.KernelStore, ready storage.ProductWorkspace, task domain.Task, configure ...func(*contract.SessionRun)) (domain.Task, contract.SessionRun) {
 	t.Helper()
 	ctx := context.Background()
 	w, err := k.Wave(ctx, task.WaveID)
@@ -65,6 +65,9 @@ func stoppedProductWriterRunFixture(t *testing.T, k *storage.KernelStore, ready 
 	}
 	b.ThreadID, b.PreparationID = "test-product-thread", "test-product-preparation"
 	run := contract.SessionRun{ID: "test-product-run", ThreadID: b.ThreadID, TurnID: "test-product-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
+	for _, apply := range configure {
+		apply(&run)
+	}
 	task.State, task.Attempts = contract.TaskRunning, 1
 	budget := storage.RunBudgetBinding{RunID: run.ID, SessionID: b.ID, TaskID: task.ID, ThreadID: b.ThreadID, SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, Targets: []contract.Target{w.Target()}}
 	tx, err := k.DB.BeginTx(ctx, nil)

@@ -138,12 +138,23 @@ func (e Executor) Apply(ctx context.Context, taskID, runID string) (storage.Resu
 		}
 		var result contract.TaskResult
 		if err := contract.DecodeStrict([]byte(state.Run.Final), &result); err != nil {
-			return storage.ResultApplication{}, err
+			return e.Store.ApplyTaskResult(ctx, task.SessionID, runID)
+		}
+		if err := result.ValidateAssignment(task.Target(), task.ID, task.PhaseID, task.Spec.Criteria); err != nil {
+			return e.Store.ApplyTaskResult(ctx, task.SessionID, runID)
 		}
 		if task.Spec.Kind == "review" || result.Outcome != "result" {
 			return e.Store.ApplyTaskResult(ctx, task.SessionID, runID)
 		}
-		if _, err := (CandidateSealer{Store: e.Store}).Seal(ctx, task.ID, runID); err != nil {
+		if storage.UsesProductChangeOutput(w, task) && result.SchemaVersion != 2 || storage.UsesProductVerificationOutput(w, task) && result.SchemaVersion != 3 {
+			return e.Store.ApplyTaskResult(ctx, task.SessionID, runID)
+		}
+		if seal, err := (CandidateSealer{Store: e.Store}).Seal(ctx, task.ID, runID); err != nil {
+			// Only pre-admission output rejection belongs to result settlement.
+			// Preserve all errors once a Git owner has an admitted identity.
+			if seal.ID == "" && errors.Is(err, storage.ErrProductChangeReference) {
+				return e.Store.ApplyTaskResult(ctx, task.SessionID, runID)
+			}
 			return storage.ResultApplication{}, err
 		}
 	}
