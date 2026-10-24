@@ -46,13 +46,15 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 		if _, err := k.ClaimProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest); err != nil {
 			t.Fatal(err)
 		}
-		gate, err := g.Check(ctx, saved, requestID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		job, err = k.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, gate)
-		if err != nil {
-			t.Fatal(err)
+		if transportMode != "unfenced" {
+			gate, err := g.Check(ctx, saved, requestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err = k.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, gate)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	var authCalls atomic.Int64

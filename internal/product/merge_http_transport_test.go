@@ -29,7 +29,7 @@ func checkMergeHTTPTransport(t *testing.T, k *storage.KernelStore, job storage.P
 	expected := "merged"
 	var stopped storage.ProductMerge
 	switch mode {
-	case "unactivated":
+	case "unactivated", "unfenced":
 		// Reopen with a different controller epoch and no spec/process/result.
 		reopened, err := storage.OpenExistingKernel(filepath.Join(k.Root, "state.db"))
 		if err != nil {

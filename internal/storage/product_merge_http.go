@@ -67,7 +67,7 @@ func validateProductMergeHTTP(ctx context.Context, q queryer, job ProductMerge) 
 		return ErrTaskEvidence
 	}
 	if job.HTTPAbort != nil {
-		if abortErr != nil || abort != *job.HTTPAbort || abort.MergeID != job.ID || abort.GateDigest != job.GateDigest || !validPRProofID(abort.ProofID) || !validPRProofID(abort.Reason) || abort.At.Before(job.MayHaveSentAt) || job.MayHaveSentAt.IsZero() || job.HTTP != nil || job.State != "aborted_http" {
+		if abortErr != nil || abort != *job.HTTPAbort || abort.MergeID != job.ID || abort.GateDigest != job.GateDigest || !validPRProofID(abort.ProofID) || !validPRProofID(abort.Reason) || abort.At.Before(job.ClaimedAt) || job.ClaimedAt.IsZero() || !job.MayHaveSentAt.IsZero() && abort.At.Before(job.MayHaveSentAt) || job.HTTP != nil || job.State != "aborted_http" {
 			return ErrTaskEvidence
 		}
 	} else if !errors.Is(abortErr, sql.ErrNoRows) || job.State == "aborted_http" {
@@ -146,6 +146,9 @@ func (k *KernelStore) ActivateProductMergeHTTP(ctx context.Context, id, owner, d
 // native client won it. This is an atomic protocol proof, not an inference from
 // missing files, an absent PR, an expired lease or a restarted owner. After this
 // commit every delayed wrapper must fail activation and therefore cannot send.
+// The registered protocol can also seal a physical parent claim before its
+// fence: the same atomic state change rejects every delayed parent fence. No
+// old-controller death or replacement process identity is inferred.
 func (k *KernelStore) AbortUnactivatedProductMergeHTTP(ctx context.Context, id, owner, digest, proofID, reason string) (ProductMerge, error) {
 	var empty ProductMerge
 	if !validPRProofID(proofID) || !validPRProofID(reason) {
@@ -169,7 +172,7 @@ func (k *KernelStore) AbortUnactivatedProductMergeHTTP(ctx context.Context, id, 
 		}
 		return job, tx.Commit()
 	}
-	if job.State != "unknown" || job.Stop != nil || job.MayHaveSentAt.IsZero() {
+	if (job.State != "unknown" && job.State != "launching") || job.Stop != nil {
 		return empty, ErrProductMergeHeld
 	}
 	abort := ProductMergeHTTPAbort{MergeID: id, ProofID: proofID, Reason: reason, GateDigest: job.GateDigest, At: k.clock()}
