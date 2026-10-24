@@ -67,6 +67,12 @@ func (f FinalCommitFetcher) Ensure(ctx context.Context, target contract.Target, 
 	if err != nil {
 		return saved, err
 	}
+	if saved.State == "not_started" {
+		saved, err = k.RetryUnstartedProductFinalFetch(ctx, saved.ID, saved.Digest)
+		if err != nil {
+			return saved, err
+		}
+	}
 	if saved.State == "available" {
 		return saved, nil
 	}
@@ -102,6 +108,16 @@ func (f FinalCommitFetcher) Ensure(ctx context.Context, target contract.Target, 
 	}
 	cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer stop()
+	if fetchErr != nil && !observed.Attempted {
+		current, readErr := k.ReadProductFinalFetch(cleanup, saved.ID)
+		if readErr != nil {
+			return saved, errors.Join(fetchErr, readErr)
+		}
+		if current.MayHaveSentAt.IsZero() {
+			outcome = "not_started"
+			reason = "fixed commit fetch was not sent; Git probes stopped"
+		}
+	}
 	finished, finishErr := k.FinishProductFinalFetch(cleanup, saved.ID, saved.Digest, storage.ProductFinalFetchProof{ProofID: saved.ID + ":stopped", Observation: observed, Outcome: outcome, Reason: reason})
 	if finishErr != nil {
 		return saved, errors.Join(fetchErr, finishErr)

@@ -23,6 +23,7 @@ type ProductFinalFetchRequest struct {
 	Remote       string                  `json:"remote"`
 }
 type ProductFinalFetchValue struct {
+	RetryOf         string                    `json:"retry_of,omitempty"`
 	Request         ProductFinalFetchRequest  `json:"request"`
 	PlanDigest      string                    `json:"plan_digest"`
 	Target          contract.Target           `json:"target"`
@@ -54,6 +55,9 @@ type ProductFinalFetch struct {
 
 func finalFetchID(plan string, repo int64) string {
 	return structureID("product-final-fetch-", plan, fmt.Sprint(repo))
+}
+func finalFetchRetryID(root string) string {
+	return structureID("product-final-fetch-retry-", root, "1")
 }
 func finalFetchPaths(source workspace.RepositoryPin) bool {
 	for _, p := range []string{source.Repository, source.GitDir, source.CommonDir} {
@@ -103,8 +107,24 @@ func (k *KernelStore) finalFetchTx(ctx context.Context, q queryer, id string) (r
 	if err != nil {
 		return f, err
 	}
-	if f.ID != id || id != finalFetchID(f.Value.Request.PlanID, f.Value.Request.RepositoryID) || f.Digest != digest || f.CreatedAt.IsZero() || f.CreatedAt.After(k.clock()) || !fixedSHA(f.Value.SHA) || !finalFetchPaths(f.Value.Request.Source) {
+	expectedID := finalFetchID(f.Value.Request.PlanID, f.Value.Request.RepositoryID)
+	if f.Value.RetryOf != "" {
+		if f.Value.RetryOf != expectedID {
+			return f, ErrTaskEvidence
+		}
+		expectedID = finalFetchRetryID(expectedID)
+	}
+	if f.ID != id || id != expectedID || f.Digest != digest || f.CreatedAt.IsZero() || f.CreatedAt.After(k.clock()) || !fixedSHA(f.Value.SHA) || !finalFetchPaths(f.Value.Request.Source) {
 		return f, ErrTaskEvidence
+	}
+	if f.Value.RetryOf != "" {
+		parent, err := k.finalFetchTx(ctx, q, f.Value.RetryOf)
+		if err != nil {
+			return f, err
+		}
+		if f.CreatedAt.Before(parent.FinishedAt) || parent.State != "not_started" || parent.Proof == nil || parent.Proof.Observation.Attempted || !parent.MayHaveSentAt.IsZero() || !reflect.DeepEqual(parent.Value.Request, f.Value.Request) || parent.Value.PlanDigest != f.Value.PlanDigest || parent.Value.Target != f.Value.Target || parent.Value.ParentSessionID != f.Value.ParentSessionID || parent.Value.SHA != f.Value.SHA {
+			return f, ErrTaskEvidence
+		}
 	}
 	if err := taskEvidenceRecord(ctx, q, "product_final_fetch_history", id, &original); err != nil {
 		return f, err
@@ -199,7 +219,7 @@ func (k *KernelStore) finalFetchTx(ctx context.Context, q queryer, id string) (r
 		if f.Claim == nil || f.Proof != nil || !f.FinishedAt.IsZero() || r.State != "held" {
 			return f, ErrTaskEvidence
 		}
-	case "available", "failed":
+	case "available", "failed", "not_started":
 		if f.Claim == nil || f.Proof == nil || f.FinishedAt.Before(f.Claim.ClaimedAt) || f.FinishedAt.After(k.clock()) || r.State != "released" {
 			return f, ErrTaskEvidence
 		}
@@ -207,7 +227,11 @@ func (k *KernelStore) finalFetchTx(ctx context.Context, q queryer, id string) (r
 		if err := taskEvidenceRecord(ctx, q, "product_final_fetch_terminal", id, &terminal); err != nil {
 			return f, err
 		}
-		if !reflect.DeepEqual(terminal, f) || f.State != f.Proof.Outcome || validateFinalFetchProof(f, *f.Proof) != nil || r.Proof == nil || *r.Proof != (OperationReleaseProof{OperationID: id, ProofID: f.Proof.ProofID, Disposition: "process_stopped", Reason: f.Proof.Reason}) {
+		disposition := "process_stopped"
+		if f.State == "not_started" {
+			disposition = "not_started"
+		}
+		if !reflect.DeepEqual(terminal, f) || f.State != f.Proof.Outcome || validateFinalFetchProof(f, *f.Proof) != nil || r.Proof == nil || *r.Proof != (OperationReleaseProof{OperationID: id, ProofID: f.Proof.ProofID, Disposition: disposition, Reason: f.Proof.Reason}) {
 			return f, ErrTaskEvidence
 		}
 	default:
@@ -371,6 +395,15 @@ func validateFinalFetchProof(f ProductFinalFetch, p ProductFinalFetchProof) erro
 	if p.ProofID != f.ID+":stopped" || p.Reason == "" || len(p.Reason) > contract.MaxInline || o.Source != r.Source || o.Remote != r.Remote || o.SHA != f.Value.SHA || o.Attempted && f.MayHaveSentAt.IsZero() {
 		return ErrTaskEvidence
 	}
+	if p.Outcome == "not_started" {
+		if o.Attempted || o.Available || !f.MayHaveSentAt.IsZero() {
+			return ErrTaskEvidence
+		}
+		return nil
+	}
+	if p.Outcome == "failed" && !o.Attempted && f.MayHaveSentAt.IsZero() {
+		return ErrTaskEvidence
+	}
 	if p.Outcome == "available" {
 		if !o.Available {
 			return ErrTaskEvidence
@@ -403,7 +436,11 @@ func (k *KernelStore) FinishProductFinalFetch(ctx context.Context, id, digest st
 		return f, ErrProductFinalFetchHeld
 	}
 	f.State, f.Proof, f.FinishedAt = proof.Outcome, &proof, k.clock()
-	if err := k.releaseOperationCapacityTx(ctx, tx, OperationReleaseProof{OperationID: id, ProofID: proof.ProofID, Disposition: "process_stopped", Reason: proof.Reason}); err != nil {
+	disposition := "process_stopped"
+	if proof.Outcome == "not_started" {
+		disposition = "not_started"
+	}
+	if err := k.releaseOperationCapacityTx(ctx, tx, OperationReleaseProof{OperationID: id, ProofID: proof.ProofID, Disposition: disposition, Reason: proof.Reason}); err != nil {
 		return f, err
 	}
 	for _, kind := range []string{"product_final_fetch_terminal", "product_final_fetch"} {
@@ -412,4 +449,55 @@ func (k *KernelStore) FinishProductFinalFetch(ctx context.Context, id, digest st
 		}
 	}
 	return f, tx.Commit()
+}
+
+// RetryUnstartedProductFinalFetch allocates one distinct derived attempt only
+// after a positive stopped/unsent receipt. It never resets or reuses a claim.
+func (k *KernelStore) RetryUnstartedProductFinalFetch(ctx context.Context, id, digest string) (ProductFinalFetch, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductFinalFetch{}, err
+	}
+	defer tx.Rollback()
+	parent, err := k.finalFetchTx(ctx, tx, id)
+	if err != nil {
+		return parent, err
+	}
+	if parent.Digest != digest || parent.Value.RetryOf != "" || parent.State != "not_started" || parent.Proof == nil || parent.Proof.Observation.Attempted || !parent.MayHaveSentAt.IsZero() {
+		return parent, ErrProductFinalFetchHeld
+	}
+	retryID := finalFetchRetryID(id)
+	if old, err := k.finalFetchTx(ctx, tx, retryID); err == nil {
+		return old, tx.Commit()
+	} else if err != sql.ErrNoRows {
+		return old, err
+	}
+	plan, err := k.readProductFinalPlanTx(ctx, tx, parent.Value.Request.PlanID)
+	if err != nil {
+		return parent, err
+	}
+	selection, w, err := k.finalRunnerPreflightTx(ctx, tx, plan)
+	if err != nil {
+		return parent, err
+	}
+	value := parent.Value
+	value.RetryOf = id
+	value.Selection = selection
+	retry := ProductFinalFetch{ID: retryID, Value: value, State: "prepared", CreatedAt: k.clock()}
+	retry.Digest, err = contentDigest(value)
+	if err != nil {
+		return retry, err
+	}
+	if _, err := k.reserveOperationCapacityTx(ctx, tx, OperationCapacityRequest{ID: retry.ID, Kind: "git", SessionID: value.ParentSessionID, Target: value.Target, Repository: value.Request.Source.Repository}); err != nil {
+		return retry, err
+	}
+	if _, err := fetchGitReservation(ctx, tx, retry); err != nil {
+		return retry, err
+	}
+	for _, kind := range []string{"product_final_fetch", "product_final_fetch_history"} {
+		if err := kernelRecordTx(ctx, tx, kind, retry.ID, w.ID, retry); err != nil {
+			return retry, err
+		}
+	}
+	return retry, tx.Commit()
 }

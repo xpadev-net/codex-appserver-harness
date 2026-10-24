@@ -31,6 +31,9 @@ func finalFetchFixture(t *testing.T) (*KernelStore, ProductFinalPlan, ProductFin
 }
 func finalFetchProof(f ProductFinalFetch, available, attempted bool) ProductFinalFetchProof {
 	outcome := "failed"
+	if !available && !attempted && f.MayHaveSentAt.IsZero() {
+		outcome = "not_started"
+	}
 	if available {
 		outcome = "available"
 	}
@@ -291,5 +294,136 @@ func TestProductFinalFetchFreshObservationCanClaimUnstartedHistoricalPlan(t *tes
 	claimed, start, err := k.ClaimProductFinalFetch(ctx, f.ID, f.Digest)
 	if err != nil || !start || !claimed.Claim.Selection.ObservedAt.Equal(now) {
 		t.Fatal("fresh source did not authorize original unclaimed preparation", claimed, start, err)
+	}
+}
+
+func TestProductFinalFetchRetriesOnlyPositiveUnsentReceiptOnce(t *testing.T) {
+	ctx := context.Background()
+	k, _, request := finalFetchFixture(t)
+	root, err := k.ReserveProductFinalFetch(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RetryUnstartedProductFinalFetch(ctx, root.ID, root.Digest); err == nil {
+		t.Fatal("unclaimed preparation became retry")
+	}
+	root, _, err = k.ClaimProductFinalFetch(ctx, root.ID, root.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RetryUnstartedProductFinalFetch(ctx, root.ID, root.Digest); err == nil {
+		t.Fatal("unknown physical owner became retry")
+	}
+	root, err = k.FinishProductFinalFetch(ctx, root.ID, root.Digest, finalFetchProof(root, false, false))
+	if err != nil || root.State != "not_started" {
+		t.Fatal(root, err)
+	}
+	retry, err := k.RetryUnstartedProductFinalFetch(ctx, root.ID, root.Digest)
+	if err != nil || retry.ID == root.ID || retry.Value.RetryOf != root.ID || retry.State != "prepared" {
+		t.Fatal(retry, err)
+	}
+	again, err := k.RetryUnstartedProductFinalFetch(ctx, root.ID, root.Digest)
+	if err != nil || !reflect.DeepEqual(again, retry) {
+		t.Fatal("replay allocated a third attempt", again, err)
+	}
+	retry, start, err := k.ClaimProductFinalFetch(ctx, retry.ID, retry.Digest)
+	if err != nil || !start {
+		t.Fatal(retry, start, err)
+	}
+	// A second known unsent outcome still cannot create an unbounded chain.
+	retry, err = k.FinishProductFinalFetch(ctx, retry.ID, retry.Digest, finalFetchProof(retry, false, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RetryUnstartedProductFinalFetch(ctx, retry.ID, retry.Digest); err == nil {
+		t.Fatal("retry limit was reset")
+	}
+	original, err := k.ReadProductFinalFetch(ctx, root.ID)
+	if err != nil || !reflect.DeepEqual(original, root) {
+		t.Fatal("retry reset original claim/proof", original, err)
+	}
+	// A lost child head is admitted evidence loss, not a chance to issue it again.
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_final_fetch' AND id=?", retry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RetryUnstartedProductFinalFetch(ctx, root.ID, root.Digest); err == nil {
+		t.Fatal("lost retry was regenerated")
+	}
+}
+func TestProductFinalFetchSentFailureAndStaleUnsentCannotRetry(t *testing.T) {
+	for _, mode := range []string{"sent", "stale", "pause", "head"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			k, plan, request := finalFetchFixture(t)
+			f, err := k.ReserveProductFinalFetch(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, _, err = k.ClaimProductFinalFetch(ctx, f.ID, f.Digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "sent" {
+				if err := k.AuthorizeProductFinalFetch(ctx, f.ID, f.Digest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f, err = k.FinishProductFinalFetch(ctx, f.ID, f.Digest, finalFetchProof(f, false, mode == "sent"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "stale" {
+				now := k.clock().Add(31 * time.Second)
+				k.Now = func() time.Time { return now }
+			}
+			if mode == "pause" {
+				if _, err := k.ApplyOperatorControl(ctx, OperatorControl{Key: "pause-unsent-retry", Target: plan.Value.Target, Action: "pause", Reason: "fixture"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "head" {
+				heads := append([]ProductFinalHeadObservation{}, plan.Admission...)
+				heads[0].HeadSHA = strings.Repeat("b", 40)
+				if _, err := k.PrepareProductFinalPlan(ctx, plan.Value.Target, plan.Value.CoverageDigest, heads); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := k.RetryUnstartedProductFinalFetch(ctx, f.ID, f.Digest); err == nil {
+				t.Fatal("unsafe retry granted", mode)
+			}
+		})
+	}
+}
+
+func TestProductFinalFetchUnsentRetryReservationRollsBack(t *testing.T) {
+	ctx := context.Background()
+	k, _, request := finalFetchFixture(t)
+	f, err := k.ReserveProductFinalFetch(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _, err = k.ClaimProductFinalFetch(ctx, f.ID, f.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err = k.FinishProductFinalFetch(ctx, f.ID, f.Digest, finalFetchProof(f, false, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.Exec("CREATE TRIGGER fail_final_retry BEFORE INSERT ON records WHEN NEW.kind='product_final_fetch_history' AND NEW.id LIKE 'product-final-fetch-retry-%' BEGIN SELECT RAISE(FAIL,'retry rollback'); END"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RetryUnstartedProductFinalFetch(ctx, f.ID, f.Digest); err == nil {
+		t.Fatal("failed retry history committed")
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM kernel_dispatch_intents WHERE run_id=?", finalFetchRetryID(f.ID)).Scan(&count); err != nil || count != 0 {
+		t.Fatal("rollback retained retry capacity", count, err)
+	}
+	if _, err := k.DB.Exec("DROP TRIGGER fail_final_retry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RetryUnstartedProductFinalFetch(ctx, f.ID, f.Digest); err != nil {
+		t.Fatal("rollback consumed retry entitlement", err)
 	}
 }

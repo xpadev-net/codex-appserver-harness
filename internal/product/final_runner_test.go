@@ -127,8 +127,22 @@ func checkFinalCommitFetch(t *testing.T, k *storage.KernelStore, target contract
 			t.Fatal(err)
 		}
 		api := &finalReadFixture{repository: Repository{ID: p.WorkItem.RepositoryID, Name: p.Repository, DefaultBranch: p.BaseBranch}, head: sha, merge: receipt.Value.MergeSHA}
-		f := FinalRunner{Planner: FinalPlanner{Store: k, Gate: func(context.Context, contract.Target) error { return nil }, API: func(storage.ProductTarget) ResourceAPI { return api }}, Runner: Runner{Store: k, Executable: exe}, FetchRemotes: map[int64]string{p.WorkItem.RepositoryID: remote}}
+		gates := 0
+		temporary := errors.New("fixture source read temporarily unavailable")
+		f := FinalRunner{Planner: FinalPlanner{Store: k, Gate: func(context.Context, contract.Target) error {
+			gates++
+			if gates == 5 {
+				return temporary
+			}
+			return nil
+		}, API: func(storage.ProductTarget) ResourceAPI { return api }}, Runner: Runner{Store: k, Executable: exe}, FetchRemotes: map[int64]string{p.WorkItem.RepositoryID: remote}}
 		runtime := storage.ProductRunnerRuntime{Root: filepath.Join(k.Root, "fetched-final-runners"), LauncherContract: "argv_passthrough_v1", Launcher: []string{launcher}}
+		if _, err := f.Start(ctx, target, p.WorkItem.RepositoryID, "unit", runtime); !errors.Is(err, temporary) {
+			t.Fatal("did not exercise pre-send transient read", err, gates)
+		}
+		if _, err := workspace.Resolve(ctx, policy.Value.Repository, sha); err == nil {
+			t.Fatal("held pre-send attempt fetched the object")
+		}
 		job, err := f.Start(ctx, target, p.WorkItem.RepositoryID, "unit", runtime)
 		if err != nil || job.State != "launching" || job.Value.Spec.Candidate.SHA != sha {
 			t.Fatal("remote commit did not reach trusted runner", job, err)
@@ -152,11 +166,11 @@ func checkFinalCommitFetch(t *testing.T, k *storage.KernelStore, target contract
 			t.Fatal("runner used old checkout instead of fixed fetched SHA", job)
 		}
 		var id string
-		if err := k.DB.QueryRow("SELECT id FROM records WHERE kind='product_final_fetch' AND json_extract(payload,'$.value.sha')=?", sha).Scan(&id); err != nil {
+		if err := k.DB.QueryRow("SELECT id FROM records WHERE kind='product_final_fetch' AND json_extract(payload,'$.value.sha')=? AND json_extract(payload,'$.state')='available'", sha).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		fetch, err := k.ReadProductFinalFetch(ctx, id)
-		if err != nil || fetch.State != "available" || fetch.Proof == nil || !fetch.Proof.Observation.Attempted || fetch.MayHaveSentAt.IsZero() {
+		if err != nil || fetch.State != "available" || fetch.Proof == nil || fetch.Value.RetryOf == "" || !fetch.Proof.Observation.Attempted || fetch.MayHaveSentAt.IsZero() {
 			t.Fatal("fetch lacks physical owner/send/stop receipt", fetch, err)
 		}
 		replay, err := f.Start(ctx, target, p.WorkItem.RepositoryID, "unit", runtime)
