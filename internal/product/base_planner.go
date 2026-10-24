@@ -50,6 +50,9 @@ func (p BasePlanner) Prepare(ctx context.Context, taskID string) (storage.Produc
 	}
 	product := storage.ProductTargetSnapshot{Value: storage.ProductTarget{Target: prep.Task.Target(), Repository: repo.Name, BaseBranch: repo.BaseBranch, WorkItem: domain.WorkItem{ID: prep.Registration.Value.Definition.ID, RepositoryID: repo.Policy.RepositoryID}}}
 	if prep.Product != nil {
+		if prep.Product.Value.Repository != repo.Name || prep.Product.Value.WorkItem.RepositoryID != repo.Policy.RepositoryID || prep.Product.Value.BaseBranch != repo.BaseBranch {
+			return empty, storage.ErrProductBasePlanHeld
+		}
 		product = *prep.Product
 	}
 	if err := p.Source(ctx, product); err != nil {

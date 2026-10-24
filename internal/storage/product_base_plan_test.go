@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 )
 
 func productBasePlanFixture(t *testing.T) (*KernelStore, ProductBaseInput, ProductBaseObservation) {
@@ -202,5 +205,28 @@ func TestProductBaseInputKeepsAuthenticatedPredecessorIdentity(t *testing.T) {
 	}
 	if _, err := k.ReadProductBaseInput(ctx, task.ID); err == nil {
 		t.Fatal("lost predecessor proof became base input")
+	}
+}
+
+func TestProductBasePlanCannotRetargetExistingCandidateBase(t *testing.T) {
+	ctx := context.Background()
+	k, input, obs := productBasePlanFixture(t)
+	task := input.Value.Preparation.Task
+	candidate := runner.Candidate{ID: "existing-candidate", SHA: strings.Repeat("d", 40), BaseSHA: obs.Head.InitialSHA, ScopeRevision: task.ScopeRevision, PolicyRevision: task.PolicyRevision}
+	product := ProductTarget{Target: task.Target(), Repository: "owner/repo", BaseBranch: "master", WorkItem: domain.WorkItem{ID: input.Value.Preparation.Registration.Value.Definition.ID, RepositoryID: 17, ScopeRevision: task.ScopeRevision, PolicyRevision: task.PolicyRevision, Version: 1, Phase: domain.Reviewing, Candidate: candidate.ID, Branch: "harness/existing"}, Candidate: candidate}
+	if _, err := k.SetProductTarget(ctx, "", product); err != nil {
+		t.Fatal(err)
+	}
+	input, err := k.ReadProductBaseInput(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs.Head.BaseBranch = "other-default"
+	if _, err := k.PrepareProductBasePlan(ctx, task.ID, input.Digest, obs); !errors.Is(err, ErrProductBasePlanHeld) {
+		t.Fatal("existing candidate silently retargeted", err)
+	}
+	obs.Head.BaseBranch = "master"
+	if _, err := k.PrepareProductBasePlan(ctx, task.ID, input.Digest, obs); err != nil {
+		t.Fatal("matching existing candidate base held", err)
 	}
 }

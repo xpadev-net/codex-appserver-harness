@@ -63,6 +63,9 @@ func validateBasePlanValue(v ProductBasePlanValue) error {
 	}
 	input, h := v.Input, v.Head
 	prep := input.Value.Preparation
+	if current := prep.Product; current != nil && (current.Value.WorkItem.RepositoryID != h.RepositoryID || current.Value.Repository != h.Repository || current.Value.BaseBranch != h.BaseBranch) {
+		return ErrProductBasePlanHeld
+	}
 	digest, err := contentDigest(input.Value)
 	if err != nil {
 		return err
