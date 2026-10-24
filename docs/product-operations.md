@@ -652,3 +652,11 @@ fixtureでpause/cancel/別SHAの新候補後の旧結果保存、予約枠だけ
 成功時は、実際に再確認したrequest comment・round digest・native review ID/provider/SHAへの参照を持つ依頼固有の測定reportを作り、短いstorage transactionへ渡す。元の検証済みrouteをunknownから昇格せず、元file/reportの時刻を書き換えない。`cloud_native_approval`等のmerge能力は新reportでもunknownのままとし、実応答の受信と正式承認を分ける。
 
 過去のCloud作業を終える照合なので、依頼時のbase ref/SHAが一致する範囲では、PRがclosedになった場合やheadが新候補へ進んだ場合も元SHAの割当provider応答を扱える。baseが変わった場合は同じheadでも別の比較結果か判別できないため、このadapterでは保留し、単なる現在値の読み替えで完了させない。新headを採用/承認せず、現在Productを変更しない。daemonへの周期呼出しは後続とし、fixtureでは具体的な測定参照、元report不変、closed/新head/host actor設定変更後の保存済みactor優先、再送のAPI再取得なし、不明結果の保持を確認する。native P/Cloudの実受入は別途必要である。
+
+### Cloud完了の常駐照合
+
+`--product-executor`で`publication`を設定すると、`CloudCompletionWorker`も起動し、依頼確定済みでCloud枠がheldのoperationを起動時と`every_seconds`ごとに照合する。standalone PR observerの設定有無にかかわらず、依頼固有の完了確認を行う。worker数はpublicationの1〜8、ページは最大128件、各照合はreaderの30秒/128要求/16 MiB制限を使い、LLM turnや再依頼を起動しない。
+
+発見時はopaque operation IDだけを取得し、各readerで保存済みroundを認証する。ある依頼の証拠が破損していても、その巡回の他の依頼は継続する。DB起動時の整合性検査は引き続き適用する。pause/cancel/新候補を発見条件にせず、完了receiptと枠解放のcommit後だけwakeを送る。unknown sendは依頼確定済みに含めず、provider/能力不明や未応答は枠を保持して次の定期巡回を待つ。終了時は全read workerの復帰まで待ち、controller/storeの所有を先に解放しない。
+
+fixtureでは257件超のページ、破損した先頭依頼の後の正常処理、完了済みの再open時の再取得防止、待機中の呼出し抑制と終了joinを確認する。daemon設定から実fake-gh subprocessを使うテストも、cancel後の依頼完了保存・commit後通知・モデル起動なし・承認生成なしを確認する。実Cloudの正式APPROVEDやP受入の代用にはしない。
