@@ -68,7 +68,7 @@ func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b
 		if subject == nil || saved.Value.SubjectID != subject.ID || saved.Value.SubjectDigest != subject.Digest {
 			return nil, ErrTaskEvidence
 		}
-		if _, err := productWorkspaceVerificationPolicyTx(ctx, tx, w, task, saved.Value); err != nil {
+		if _, err := k.productWorkspaceVerificationPolicyTx(ctx, tx, w, task, saved.Value); err != nil {
 			return nil, err
 		}
 	}

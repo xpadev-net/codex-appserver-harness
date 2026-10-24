@@ -106,3 +106,5 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 ## P base 更新の Git component
 
 [固定候補への通常 base merge](product-base-merge.md)は実 temp Git で merge commit の両親、競合、無断実行の抑止と取消しを検査する。別 WorkItem の依存は実 merge の品質証拠を準備・claim・model 起動で待つ。固定計画の commit 取得・workspace 証拠・初回/再開 admission、新規 WorkItem の daemon 自動選択、同じ HEAD の観測更新と準備例外の一度限りの安全な親通知を検査した。GitHub 観測と model は fixture であり、旧候補更新・新 fix Task への接続は後続へ残る。P 全体は未達である。
+
+旧候補を参照する workspace の実 SQLite 検査は、独立した merge 送信 fence、成功/競合/部分変更の停止証拠、再起動・証拠欠落・保存 rollback、変更済み候補の admission 拒否も確認する。physical merge facts は fixture であり、daemon の実 Git 接続と競合から新 fix Task への引渡しは未完了である。

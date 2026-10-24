@@ -51,10 +51,19 @@ func (k *KernelStore) productWorkspaceSubjectTx(ctx context.Context, tx *sql.Tx,
 	return subject, nil
 }
 
-func productWorkspaceVerificationPolicyTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, value ProductWorkspaceValue) (*ProductVerificationPolicySnapshot, error) {
+func (k *KernelStore) productWorkspaceVerificationPolicyTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, value ProductWorkspaceValue) (*ProductVerificationPolicySnapshot, error) {
 	if task.Spec.Kind != "verification" {
-		if value.VerificationPolicyID != "" || value.VerificationPolicyDigest != "" || value.ComparisonBaseSHA != "" {
+		if value.VerificationPolicyID != "" || value.VerificationPolicyDigest != "" {
 			return nil, ErrTaskEvidence
+		}
+		if value.ComparisonBaseSHA != "" {
+			plan, err := k.baseWorkspacePlanTx(ctx, tx, value)
+			if err != nil {
+				return nil, err
+			}
+			if plan.Value.Input.Value.Preparation.Product == nil || value.ComparisonBaseSHA != plan.Value.Head.HeadSHA {
+				return nil, ErrTaskEvidence
+			}
 		}
 		return nil, nil
 	}

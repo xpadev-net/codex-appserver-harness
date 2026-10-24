@@ -163,9 +163,6 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 	}
 	current, err := loadProductTargetTx(ctx, tx, w.Target(), saved.Value.WorkItemID)
 	if err == nil {
-		if saved.Value.Request.BasePlanID != "" {
-			return "product_base_source_changed", nil
-		}
 		if current.Value.Repository != host.Name || current.Value.BaseBranch != host.BaseBranch {
 			return "product_repository_changed", nil
 		}
