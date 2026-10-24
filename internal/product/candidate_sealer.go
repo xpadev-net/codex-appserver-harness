@@ -56,7 +56,7 @@ func (s CandidateSealer) Seal(ctx context.Context, taskID, runID string) (storag
 				return err
 			}
 		}
-		pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: v.Request.BaseSHA}
+		pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: saved.Value.Workspace.SealBaseSHA()}
 		frozen, err := workspace.FreezePinned(ctx, pinned, "Harness candidate "+saved.ID)
 		if err != nil {
 			return err

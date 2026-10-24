@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -329,6 +330,19 @@ func TestExistingCandidateMergedBaseModelAdmissionKeepsOriginalAndNewBase(t *tes
 			}
 			if set := productModelReady(t, k, w); len(set.Tasks) != 1 {
 				t.Fatal("merged checkout did not become ready", set)
+			}
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			public, err := k.productWorkspaceInputTx(ctx, tx, b, w)
+			tx.Rollback()
+			if err != nil || public == nil || public.PreparedHeadSHA != ready.Proof.HeadSHA || public.ComparisonBaseSHA != plan.Value.Head.HeadSHA || public.BaseSHA != source.SHA {
+				t.Fatal("public manifest lost separate fixed SHA facts", public, err)
+			}
+			raw, err := json.Marshal(public)
+			if err != nil || strings.Contains(string(raw), k.Root) || strings.Contains(string(raw), plan.Value.Head.Remote) || strings.Contains(string(raw), "git_dir") || strings.Contains(string(raw), "base_merge") {
+				t.Fatal("private merge proof reached model input", string(raw), err)
 			}
 			if moved {
 				old := *plan.Value.Input.Value.Preparation.Product

@@ -80,6 +80,16 @@ type ProductWorkspaceClaim struct {
 	Start     bool             `json:"start"`
 }
 
+// SealBaseSHA fixes the preparation history a writer must retain. An ordinary
+// base merge must remain an ancestor, independently of the comparison base used
+// for verification. Legacy checkouts retain their original sealing contract.
+func (s ProductWorkspace) SealBaseSHA() string {
+	if s.Proof != nil && s.Proof.BaseMerge != nil {
+		return s.Proof.HeadSHA
+	}
+	return s.Value.Request.BaseSHA
+}
+
 type productWorkspaceRecord struct {
 	Workspace ProductWorkspace `json:"workspace"`
 	Digest    string           `json:"digest"`

@@ -56,7 +56,7 @@ func sealedProductEvidence(ctx context.Context, q queryer, taskID, runID string)
 		return saved, ErrTaskEvidence
 	}
 	v, prepared := saved.Value.Workspace.Value, saved.Value.Workspace.Proof
-	pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: v.Request.BaseSHA}
+	pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: saved.Value.Workspace.SealBaseSHA()}
 	expected := runner.Candidate{ID: structureID("candidate-", saved.ID, saved.Proof.Frozen.SHA), SHA: saved.Proof.Frozen.SHA, BaseSHA: productWorkspaceComparisonBase(v), ScopeRevision: v.Target.ScopeRevision, PolicyRevision: v.Target.PolicyRevision}
 	if !fixedSHA(expected.SHA) || saved.Proof.Outcome != "sealed" || saved.Proof.Frozen.PinnedCheckout != pinned || *saved.Candidate != expected {
 		return saved, ErrTaskEvidence

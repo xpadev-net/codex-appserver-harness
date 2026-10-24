@@ -258,7 +258,7 @@ func (k *KernelStore) FinishProductSeal(ctx context.Context, taskID, runID strin
 	if proof.Outcome == "sealed" {
 		v := saved.Value.Workspace.Value
 		prepared := saved.Value.Workspace.Proof
-		expected := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: v.Request.BaseSHA}
+		expected := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: saved.Value.Workspace.SealBaseSHA()}
 		if proof.Frozen.PinnedCheckout != expected || !fixedSHA(proof.Frozen.SHA) {
 			return saved, ErrTaskEvidence
 		}

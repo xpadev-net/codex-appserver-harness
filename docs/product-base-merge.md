@@ -10,7 +10,7 @@
 
 実 temp Git の検査では、両変更と両親の保持、既に取り込み済みの read-only 結果、競合内容/HEAD の保持と二重実行拒否、branch strategy/独自 hooksPath の hook/署名/attribute driver の抑止、未知/別系統 SHA、汚れた checkout、既存 operation、fence 前後の変更、worktree 固有 promisor 設定、merge コマンド中の取消し、実際には index/worktree を変更したのに非正常終了して未解決 path がない場合の照合観測を確認する。
 
-これは Task_11 の通常 merge の component 実装である。新規 WorkItem の daemon による現在 HEAD 観測・取得・永続 claim/send/stop は後述の工程へ接続した。旧候補への適用・新版採用・検証の取り直し、および競合を新しい fix Task/session へ渡す接続は後続 PR に残る。P 全体の受入には数えない。
+これは Task_11 の通常 merge の component 実装である。新規 WorkItem の daemon による現在 HEAD 観測・取得・永続 claim/send/stop は後述の工程へ接続した。旧候補への適用と新版採用は後述の adapter へ接続した。競合を新しい fix Task/session へ渡す接続は後続 PR に残る。P 全体の受入には数えない。
 
 ## 別 WorkItem の merge を待つ準備
 
@@ -18,7 +18,7 @@ P の work/fix Task が `depends_on` で別 WorkItem の work/fix/verification/r
 
 先行 Task の正常完了や native merge 応答だけでは解除しない。receipt/history が失われた場合は準備、Git の claim、model の新起動を保留する。Git の開始後に証拠が失われた場合も、実停止の証拠は stale として保存し、準備成功や model 起動へ変換しない。P の同じ WorkItem 内の検証・レビュー・修正と、汎用 Wave は従来の成果依存を使う。
 
-実 SQLite の検査は、完了済み Task と merge receipt の区別、同じ要求版での plan carry、receipt 復旧による準備再開、遅い proof 喪失による claim/ready の保留、親 turn・新 Task・Wave 完了の非生成を確認する。外部 merge の応答と品質証拠は fixture であり、native P の受入ではない。先行 commit を現在の作業に取り込む base 更新の接続は引き続き後続へ残る。
+実 SQLite の検査は、完了済み Task と merge receipt の区別、同じ要求版での plan carry、receipt 復旧による準備再開、遅い proof 喪失による claim/ready の保留、親 turn・新 Task・Wave 完了の非生成を確認する。外部 merge の応答と品質証拠は fixture であり、native P の受入ではない。新規 WorkItem の固定 base と既存候補への通常 merge は後述する。
 
 ## Task ごとの固定 base 計画
 
@@ -48,7 +48,7 @@ CLI の publication 設定がある場合、実 `KernelSourceGate` と GitHub re
 
 既知の準備失敗、未解決 owner、証拠の欠落、準備後の base 変更は、Task・計画・SHA・停止結果の安全な要約を親通知へ保存する。private path、取得先、資格情報、command、raw log は親入力に渡さない。同一の原因と証拠は ACK や定期照合で追加通知せず、通知の利用時にも原因が現在有効か再照合する。親 turn、新しい Task/session、Git の再実行を定期照合だけで生成しない。
 
-実 Git/SQLite の統合検査は、自動選択した新 SHA の取得、fresh な準備済み workspace の無操作、同じ HEAD の時刻更新、変更後の起動保留と一度の通知、未着手 profile の停止・capacity 解放、通知改変と古い原因の拒否を確認する。GitHub HEAD/ancestry と model は fixture であり、native P の受入ではない。旧候補への通常 merge と新 fix Task への競合引渡しは後続へ残る。
+実 Git/SQLite の統合検査は、自動選択した新 SHA の取得、fresh な準備済み workspace の無操作、同じ HEAD の時刻更新、変更後の起動保留と一度の通知、未着手 profile の停止・capacity 解放、通知改変と古い原因の拒否を確認する。GitHub HEAD/ancestry と model は fixture であり、native P の受入ではない。旧候補への通常 merge は後述する。新 fix Task への競合引渡しは後続へ残る。
 
 ## 旧候補を取り込む workspace の保存契約
 
@@ -58,4 +58,15 @@ CLI の publication 設定がある場合、実 `KernelSourceGate` と GitHub re
 
 model admission は元候補の現在の projection が計画時と一致することも照合し、保存済みの merge 結果を別候補へ流用しない。任意の merge 結果だけで品質・検証・正式承認を継承しない。新 field は使用時だけ JSON に保存し、旧 workspace の checksum を保つ。
 
-この節は実 SQLite の保存/admission component である。physical facts は trusted fixture として注入し、実 Git の merge は冒頭の port 検査に分ける。daemon の旧候補用 adapter、新候補の検証工程、競合から新 fix Task/session への引渡しは次の接続に残る。
+この節は実 SQLite の保存/admission component である。physical facts は trusted fixture として注入し、実 Git の merge は冒頭の port 検査に分ける。daemon の旧候補用 adapter と新版採用は後述する。競合から新 fix Task/session への引渡しは後続へ残る。
+
+
+## 旧候補への実 Git 接続
+
+publication 設定がある daemon は、既存候補を扱う unused な work/fix Task でも実 source/default HEAD を固定する。取得する SHA は新 HEAD、作業用 checkout の起点は元候補 SHA とする。元候補の比較 base を ancestry の起点として `MergePinnedBase` を呼び、送信直前に reader と永続 fence を確認する。成功時は merge 後の実 HEAD・clean 状態・Git metadata を照合し、再度 source/HEAD を確認してから workspace を ready にする。
+
+競合では元候補の HEAD、MERGE_HEAD、未解決 index と内容を保持し、failed の停止証拠と既存の一度限りの親例外通知を保存する。後から HEAD が進んだ場合も、完了済み merge/fetch の観測を消さず model 起動を保留する。停止未確認は launching と lease を保持する。settled/unknown の同じ workspace を定期照合で再実行しない。元 repository の checkout と履歴を変更しない。
+
+model 入力には元候補 SHA と、準備済み HEAD・新比較 base の固定 SHA を区別して渡す。private path・取得先・raw proof は渡さない。writer 完了後の sealing は準備済み merge commit の ancestry を再確認し、worker が merge を取り消した成果を採用しない。採用候補の比較 base は新 HEAD とし、WorkItem は Verifying へ戻す。以前の検証・レビュー・承認の成功へ読み替えない。
+
+実 temp Git/SQLite の統合検査は、固定 SHA の実取得と通常 merge の両変更/両親、already_current の無送信、競合内容保持、merge 前の source 保留、merge 後の HEAD 変更、停止未確認の lease 保持、replay、正常停止 writer の sealing/新版採用と新比較 base、準備済み merge を取り消した候補の拒否を確認する。GitHub 観測と model run は fixture であり native P の受入ではない。競合から新 fix Task/session への引渡しは未完了である。

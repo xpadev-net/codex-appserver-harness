@@ -38,6 +38,9 @@ func sameUserDirectory(path string, private bool) error {
 	return nil
 }
 func verifyPreparedWorkspace(ctx context.Context, saved storage.ProductWorkspace) (storage.ProductWorkspaceProof, error) {
+	return verifyPreparedWorkspaceHead(ctx, saved, saved.Value.Request.BaseSHA)
+}
+func verifyPreparedWorkspaceHead(ctx context.Context, saved storage.ProductWorkspace, expected string) (storage.ProductWorkspaceProof, error) {
 	v := saved.Value
 	proof := storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "prepared", Reason: "local Git commands stopped; fixed checkout verified", CWD: v.CWD, Branch: v.Branch}
 	if err := workspace.Verify(ctx, v.Request.Repository, v.CWD, v.Branch); err != nil {
@@ -50,7 +53,7 @@ func verifyPreparedWorkspace(ctx context.Context, saved storage.ProductWorkspace
 	if err != nil {
 		return proof, err
 	}
-	if head != v.Request.BaseSHA {
+	if head != expected {
 		return proof, errors.New("prepared checkout is not the pinned base commit")
 	}
 	paths := []struct {
@@ -110,6 +113,8 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 	// A missing final receipt leaves the launching intent/leases held; a replay
 	// never runs these commands a second time.
 	var fetched *workspace.CommitFetch
+	var basePlan *storage.ProductBasePlan
+	var merged *workspace.BaseMerge
 	createErr := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -128,6 +133,7 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 			if err != nil {
 				return err
 			}
+			basePlan = &plan
 			pin, err := workspace.PinRepository(ctx, request.Repository)
 			if err != nil {
 				return err
@@ -140,7 +146,7 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 			if err := p.Store.CheckProductWorkspaceBaseFetch(ctx, request.TaskID, saved.Digest, pin); err != nil {
 				return err
 			}
-			observation, err := workspace.FetchPinnedCommit(ctx, pin, plan.Value.Head.Remote, request.BaseSHA, func(ctx context.Context) error {
+			observation, err := workspace.FetchPinnedCommit(ctx, pin, plan.Value.Head.Remote, plan.Value.Head.HeadSHA, func(ctx context.Context) error {
 				if err := p.refreshBase(ctx, request); err != nil {
 					return err
 				}
@@ -175,9 +181,39 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 		return sameUserDirectory(saved.Value.CWD, true)
 	}()
 	proof := storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "failed", Reason: "local workspace preparation failed after Git owner stopped"}
+	if createErr == nil && basePlan != nil && basePlan.Value.Input.Value.Preparation.Product != nil {
+		// The new Task owns a fresh checkout of the original candidate. Its
+		// comparison base is the candidate's old base, never its divergent HEAD.
+		prepared, err := verifyPreparedWorkspace(ctx, saved)
+		createErr = err
+		if createErr == nil {
+			original := basePlan.Value.Input.Value.Preparation.Product.Value.Candidate
+			frozen := workspace.FrozenCheckout{PinnedCheckout: workspace.PinnedCheckout{Repository: request.Repository, CWD: saved.Value.CWD, Branch: saved.Value.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: original.BaseSHA}, SHA: original.SHA}
+			createErr = p.refreshBase(ctx, request)
+			if createErr == nil {
+				createErr = p.Store.CheckProductWorkspaceBaseFetch(ctx, request.TaskID, saved.Digest, fetched.Source)
+			}
+			if createErr == nil {
+				observation, err := workspace.MergePinnedBase(ctx, frozen, basePlan.Value.Head.HeadSHA, func(ctx context.Context) error {
+					if err := p.refreshBase(ctx, request); err != nil {
+						return err
+					}
+					return p.Store.MarkProductWorkspaceBaseMergeMaySend(ctx, request.TaskID, saved.Digest, frozen)
+				})
+				merged, createErr = &observation, err
+				if createErr == nil && observation.Outcome == "conflict" {
+					createErr = storage.ErrProductWorkspaceHeld
+				}
+			}
+		}
+	}
 	if createErr == nil {
 		var verified storage.ProductWorkspaceProof
-		verified, createErr = verifyPreparedWorkspace(ctx, saved)
+		head := request.BaseSHA
+		if merged != nil {
+			head = merged.HeadSHA
+		}
+		verified, createErr = verifyPreparedWorkspaceHead(ctx, saved, head)
 		if createErr == nil {
 			proof = verified
 		}
@@ -193,6 +229,7 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 		proof = storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "failed", Reason: "canceled workspace owner stopped"}
 	}
 	proof.Fetch = fetched
+	proof.BaseMerge = merged
 	if errors.Is(createErr, workspace.ErrGitStopUnconfirmed) {
 		return saved, createErr
 	}
@@ -215,7 +252,11 @@ func (p WorkspacePreparer) refreshBase(ctx context.Context, r storage.ProductWor
 	if err != nil {
 		return err
 	}
-	if plan.ID != r.BasePlanID || plan.Digest != r.BasePlanDigest || plan.Value.Head.HeadSHA != r.BaseSHA || plan.Value.Input.Value.Policy.Value.Repository != r.Repository {
+	origin := plan.Value.Head.HeadSHA
+	if old := plan.Value.Input.Value.Preparation.Product; old != nil {
+		origin = old.Value.Candidate.SHA
+	}
+	if plan.ID != r.BasePlanID || plan.Digest != r.BasePlanDigest || origin != r.BaseSHA || plan.Value.Input.Value.Policy.Value.Repository != r.Repository {
 		return storage.ErrProductWorkspaceHeld
 	}
 	return nil

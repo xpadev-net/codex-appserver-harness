@@ -13,9 +13,11 @@ import (
 var ErrProductChangeReference = errors.New("product change reference is invalid")
 
 type ProductWorkspaceInput struct {
-	Reference contract.ProductChangeReference `json:"reference"`
-	BaseSHA   string                          `json:"base_sha"`
-	Branch    string                          `json:"branch"`
+	PreparedHeadSHA   string                          `json:"prepared_head_sha,omitempty"`
+	ComparisonBaseSHA string                          `json:"comparison_base_sha,omitempty"`
+	Reference         contract.ProductChangeReference `json:"reference"`
+	BaseSHA           string                          `json:"base_sha"`
+	Branch            string                          `json:"branch"`
 }
 
 // UsesProductChangeOutput selects the bounded output profile only; it is not
@@ -72,7 +74,11 @@ func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b
 			return nil, err
 		}
 	}
-	return &ProductWorkspaceInput{Reference: contract.ProductChangeReference{WorkItemID: saved.Value.WorkItemID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest}, BaseSHA: saved.Value.Request.BaseSHA, Branch: saved.Value.Branch}, nil
+	input := &ProductWorkspaceInput{Reference: contract.ProductChangeReference{WorkItemID: saved.Value.WorkItemID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest}, BaseSHA: saved.Value.Request.BaseSHA, Branch: saved.Value.Branch}
+	if saved.Proof != nil && saved.Proof.BaseMerge != nil {
+		input.PreparedHeadSHA, input.ComparisonBaseSHA = saved.Proof.HeadSHA, saved.Value.ComparisonBaseSHA
+	}
+	return input, nil
 }
 
 // This checks a proposed output's input reference, never seals the filesystem or
