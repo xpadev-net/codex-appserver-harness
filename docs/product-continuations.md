@@ -77,3 +77,11 @@ CLI の SQLite 検査は private/未知 field/不正 flag/必須ファイル、�
 通常の方向修正・後続登録・4 GET の source 再確認後、別 ID の plan/Task/session を作る。production `BasePlanner` と source gate、固定 commit の実 fetch/checkout、停止した writer fixture、host の seal/adoption を通し、新候補の base が元 merge SHA、新候補 SHA と WorkItem/PR が元と異なることを確認する。元の登録・系譜・PR、Wave の期限と累積予算を保持する。
 
 新候補は `VERIFYING` で、元の品質による公開を拒否する。新 verifier は別 session/checkout に新候補を固定し、元の検証計画を継承しない。独立検証モデルの実行・新 runner/review・新 PR/正式 merge・親受入はこの単位では完了させない。model の run/stop、Issue GET、正式承認/CI/rules、remote HTTP 応答は明示的な fixture であり、実 Git/SQLite の検査を native P の受入へ読み替えない。
+
+## policy revision の明示切替
+
+operator の wave steer 用 JSON に任意の next_policy_revision を指定できる。省略は従来どおり、指定する場合は現在版 + 1 だけを許可する。direction の現在 target と同じ CAS を使い、旧 process の停止と結果適用の安全境界を待って scope と policy revision を進める。巻戻し・飛越し・overflow は拒否する。
+
+変更するのは policy の版だけで、stage/product、権限、上限 snapshot、期限・累積予算を保持する。実際の source/検証設定は trusted host 設定から読込み、新版に別の immutable pin を作る。Issue 本文や model に policy の指定権を渡さず、旧 pin/結果/Task を新版へ書き換えない。新しい plan/Task/session と、merge 済み作業からの新 WorkItem が必要である。変更本文を採用済みなら、新 scope/policy にもその版の明示 source 採用を要求する。
+
+SQLite では、次版以外の拒否、旧 JSON の任意項目省略、stop/result 適用待ち、旧 Task/result の保持、権限・予算・期限の保持、replay/reopen を確認する。product の物理 Git fixture は、policy 1 の merge→通常の direction で policy 2→新 source pin/後続→変更した host 検証設定の独立 pin→実 base 取得/新候補/新 verifier 準備を通し、policy 1 の検証設定が同一 digest のまま残ることを照合する。profile/run/正式 gate は fixture であり、新品質・native P の合格には数えない。

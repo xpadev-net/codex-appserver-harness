@@ -267,8 +267,8 @@ func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.Product
 	if _, err := e.Store.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "merge-gate-resume", Target: saved.Value.Target, Action: "resume", Reason: "restore fixture"}); err != nil {
 		t.Fatal(err)
 	}
-	if httpMode == "versioned_source" || httpMode == "versioned_request" || httpMode == "versioned_work" {
-		checkVersionedContinuationSource(t, e, g, saved, id, httpMode == "versioned_request", httpMode == "versioned_work")
+	if httpMode == "versioned_source" || httpMode == "versioned_request" || httpMode == "versioned_work" || httpMode == "versioned_policy" {
+		checkVersionedContinuationSource(t, e, g, saved, id, httpMode == "versioned_request", httpMode == "versioned_work" || httpMode == "versioned_policy", httpMode == "versioned_policy")
 		return
 	}
 	if httpMode == "partial_continuation" {

@@ -14,10 +14,14 @@ import (
 
 // Local Git/SQL quality and registered HTTP stop are real; source GETs,
 // formal approvals/CI/rules and the remote merge response are fixtures.
-func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID string, adoptRequest, prepareWork bool) {
+func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID string, adoptRequest, prepareWork, upgradePolicy bool) {
 	t.Helper()
 	ctx := context.Background()
 	k := e.Store
+	originalPolicy, err := k.ReadProductVerificationPolicy(ctx, saved.Value.Target, saved.Value.WorkItem.RepositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	job, err := k.PrepareProductMergeHTTP(ctx, requestID, "kernel-http-owner", "merge")
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +70,11 @@ func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGat
 		api.issue.UpdatedAt = api.issue.UpdatedAt.Add(time.Second)
 		instruction = api.issue.Title + "\n\n" + api.issue.Body
 	}
-	direction, err := k.RequestWaveDirection(ctx, storage.WaveDirectionRequest{Key: "versioned-source", Target: w.Target(), Instruction: instruction})
+	directionRequest := storage.WaveDirectionRequest{Key: "versioned-source", Target: w.Target(), Instruction: instruction}
+	if upgradePolicy {
+		directionRequest.NextPolicyRevision = w.Policy.Revision + 1
+	}
+	direction, err := k.RequestWaveDirection(ctx, directionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +126,11 @@ func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGat
 		checkSourceRequestAdoption(t, k, w, node)
 	}
 	w = observe("ready")
-	if w.ScopeRevision != 2 || w.OriginalRequest != held.OriginalRequest {
+	expectedPolicy := 1
+	if upgradePolicy {
+		expectedPolicy = 2
+	}
+	if w.ScopeRevision != 2 || w.Policy.Revision != expectedPolicy || w.OriginalRequest != held.OriginalRequest {
 		t.Fatal("source read rewrote request or scope", w)
 	}
 	original, err := k.ReadProductWorkItemRegistration(ctx, w.SourceID)
@@ -165,6 +177,30 @@ func checkVersionedContinuationSource(t *testing.T, e Executor, g KernelMergeGat
 		checkAdoptedRequestTaskEvidence(t, k, w, node)
 	}
 	if prepareWork {
+		if upgradePolicy {
+			repo := e.Repositories[node.Value.Request.Definition.RepositoryID]
+			profile := repo.Policy.Verification.Profiles["unit"]
+			profile.Revision++
+			repo.Policy.Verification.Revision = w.Policy.Revision
+			profile.Argv = []string{"sh", "-c", "printf NEXT_POLICY_PASS"}
+			profile.SuccessPattern = "NEXT_POLICY_PASS"
+			repo.Policy.Verification.Profiles["unit"] = profile
+			e.Repositories[node.Value.Request.Definition.RepositoryID] = repo
+		}
 		checkVersionedPhysicalCandidate(t, e, w, node, remote, physicalMergeSHA, observer)
+		if upgradePolicy {
+			var historical storage.ProductVerificationPolicySnapshot
+			if err := k.Record(ctx, "product_verification_policy", originalPolicy.ID, &historical); err != nil || !reflect.DeepEqual(historical, originalPolicy) {
+				t.Fatal("old verification policy was rewritten", historical, err)
+			}
+			current, err := k.Wave(ctx, w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			adopted, err := k.ReadProductVerificationPolicy(ctx, current.Target(), node.Value.Request.Definition.RepositoryID)
+			if err != nil || adopted.ID == originalPolicy.ID || adopted.Digest == originalPolicy.Digest || adopted.Value.PolicyRevision != 2 || adopted.Value.Verification.Revision != 2 || adopted.Value.Verification.Profiles["unit"].Revision != 2 {
+				t.Fatal("new host policy was not separately pinned", adopted, err)
+			}
+		}
 	}
 }
