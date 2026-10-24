@@ -13,6 +13,7 @@ import (
 var ErrProductChangeReference = errors.New("product change reference is invalid")
 
 type ProductWorkspaceInput struct {
+	Conflict          *ProductBaseMergeSummary        `json:"conflict,omitempty"`
 	PreparedHeadSHA   string                          `json:"prepared_head_sha,omitempty"`
 	ComparisonBaseSHA string                          `json:"comparison_base_sha,omitempty"`
 	Reference         contract.ProductChangeReference `json:"reference"`
@@ -77,6 +78,9 @@ func (k *KernelStore) productWorkspaceInputTx(ctx context.Context, tx *sql.Tx, b
 	input := &ProductWorkspaceInput{Reference: contract.ProductChangeReference{WorkItemID: saved.Value.WorkItemID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest}, BaseSHA: saved.Value.Request.BaseSHA, Branch: saved.Value.Branch}
 	if saved.Proof != nil && saved.Proof.BaseMerge != nil {
 		input.PreparedHeadSHA, input.ComparisonBaseSHA = saved.Proof.HeadSHA, saved.Value.ComparisonBaseSHA
+		if saved.PreparedBaseConflict() {
+			input.Conflict = publicBaseMergeSummary(saved.Proof.BaseMerge)
+		}
 	}
 	return input, nil
 }

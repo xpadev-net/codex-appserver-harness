@@ -105,10 +105,13 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 
 ## P base 更新の Git component
 
-[固定候補への通常 base merge](product-base-merge.md)は実 temp Git で merge commit の両親、競合、無断実行の抑止と取消しを検査する。別 WorkItem の依存は実 merge の品質証拠を準備・claim・model 起動で待つ。固定計画の commit 取得・workspace 証拠・初回/再開 admission、新規 WorkItem の daemon 自動選択、同じ HEAD の観測更新と準備例外の一度限りの安全な親通知を検査した。旧候補への実取得・通常 merge・停止証拠と新版採用も接続した。GitHub 観測と model は fixture であり、競合から新 fix Task への接続は後続へ残る。P 全体は未達である。
+[固定候補への通常 base merge](product-base-merge.md)は実 temp Git で merge commit の両親、競合、無断実行の抑止と取消しを検査する。別 WorkItem の依存は実 merge の品質証拠を準備・claim・model 起動で待つ。固定計画の commit 取得・workspace 証拠・初回/再開 admission、新規 WorkItem の daemon 自動選択、同じ HEAD の観測更新と準備例外の一度限りの安全な親通知を検査した。旧候補への実取得・通常 merge・停止証拠と新版採用も接続した。GitHub 観測と model は fixture であり、競合から新 fix Task への接続も実 Git/SQLite で検査した。P 全体は未達である。
 
-旧候補を参照する workspace の実 SQLite 検査は、独立した merge 送信 fence、成功/競合/部分変更の停止証拠、再起動・証拠欠落・保存 rollback、変更済み候補の admission 拒否も確認する。この保存 component の physical facts は fixture とし、daemon adapter は別の実 Git 統合検査で両変更/両親・競合内容・source/HEAD 変更・unknown owner・新版採用・merge 取消し拒否を確認する。競合から新 fix Task への引渡しは未完了である。
+旧候補を参照する workspace の実 SQLite 検査は、独立した merge 送信 fence、成功/競合/部分変更の停止証拠、再起動・証拠欠落・保存 rollback、変更済み候補の admission 拒否も確認する。この保存 component の physical facts は fixture とし、daemon adapter は別の実 Git 統合検査で両変更/両親・競合内容・source/HEAD 変更・unknown owner・新版採用・merge 取消し拒否を確認する。競合から新 fix Task への引渡しも後述の統合で検査する。
 
-競合通知から新 fix Task/session への入力/admission は実 SQLite で検査した。停止済み workspace/proof 参照、対象候補だけの明示的な plan carry、予算・rollback・replay と証拠喪失時の保留を確認する。競合 checkout の model 開放と解消後の sealing は後続であり、この参照だけを native P の合格には数えない。
+競合通知から新 fix Task/session への入力/admission は実 SQLite で検査した。停止済み workspace/proof 参照、対象候補だけの明示的な plan carry、予算・rollback・replay と証拠喪失時の保留を確認する。競合 checkout の model 開放と解消後の sealing も後述の統合で検査する。この参照だけを native P の合格には数えない。
 
-解消ファイルを controller が stage/commit する `FreezeResolvedBase` は実 temp Git で両親・新 base・marker 拒否・ours/削除・権限/状態変更・部分失敗の観測を検査する。worker の Git metadata は読み取り専用のままとし、意味的な品質成功をこの port から生成しない。fix workspace と model/adoption の接続は未完了である。
+解消ファイルを controller が stage/commit する `FreezeResolvedBase` は実 temp Git で両親・新 base・marker 拒否・ours/削除・権限/状態変更・部分失敗の観測を検査する。worker の Git metadata は読み取り専用のままとし、意味的な品質成功をこの port から生成しない。fix workspace と model/adoption の接続も実 Git/SQLite で検査する。
+
+
+競合の統合検査は、通知を元にした明示的な親再計画から別 Task/session/checkout を作り、実ファイル解消を host が stage/commit して新比較 base の候補へ採用する。元の失敗 workspace、累積予算と merge hold を保持し、marker/abort/証拠欠落/lease 失効/候補競合を拒否する。model run/停止と GitHub 応答は fixture であり、native P/正式承認の合格とは区別する。

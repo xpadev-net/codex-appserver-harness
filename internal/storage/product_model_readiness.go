@@ -139,7 +139,7 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 	if err != nil {
 		return productReadinessError("product_workspace_unavailable", err)
 	}
-	if saved == nil || saved.State != "ready" || saved.Proof == nil || saved.Proof.Outcome != "prepared" || !saved.Proof.Clean {
+	if saved == nil || saved.State != "ready" || saved.Proof == nil || saved.Proof.Outcome != "prepared" || !saved.Proof.Clean && !(task.Spec.ProductBaseConflict != nil && saved.PreparedBaseConflict()) {
 		return "product_workspace_unavailable", nil
 	}
 	registration, err := loadProductWorkItemRegistration(ctx, tx, saved.Value.WorkItemID)

@@ -30,6 +30,7 @@ type ProductSealValue struct {
 	SnapshotDigest string                        `json:"snapshot_digest"`
 }
 type ProductSealProof struct {
+	Resolution   *workspace.ResolvedBase        `json:"base_resolution,omitempty"`
 	Verification *ProductVerificationCheckProof `json:"verification,omitempty"`
 	ProofID      string                         `json:"proof_id"`
 	Outcome      string                         `json:"outcome"` // sealed, failed, not_started; stopped Git owner only
@@ -82,6 +83,11 @@ func loadProductSeal(ctx context.Context, q queryer, id string) (ProductSeal, er
 	}
 	if record.Digest != digest || saved.Digest != valueDigest || saved.ID != id || id != productSealID(saved.Value.TaskID, saved.Value.RunID) || saved.Value.TaskID == "" || saved.Value.RunID == "" || saved.CreatedAt.IsZero() || saved.Value.Workspace.State != "ready" || saved.Value.Workspace.Value.Request.TaskID != saved.Value.TaskID || !validSourceDigest(saved.Value.InputDigest) || !validSourceDigest(saved.Value.OutputDigest) || !validSourceDigest(saved.Value.SnapshotDigest) || saved.Value.SnapshotID == "" {
 		return saved, ErrTaskEvidence
+	}
+	if saved.Proof != nil {
+		if err := validateProductSealResolution(saved.Value.Workspace, *saved.Proof); err != nil {
+			return saved, err
+		}
 	}
 	if input := saved.Value.Verification; input != nil {
 		v := saved.Value.Workspace.Value
@@ -249,6 +255,9 @@ func (k *KernelStore) FinishProductSeal(ctx context.Context, taskID, runID strin
 		return saved, ErrProductSealHeld
 	}
 	if err := productSealReservationTx(ctx, tx, saved); err != nil {
+		return saved, err
+	}
+	if err := validateProductSealResolution(saved.Value.Workspace, proof); err != nil {
 		return saved, err
 	}
 	saved.State = "failed"

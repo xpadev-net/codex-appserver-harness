@@ -106,7 +106,8 @@ func (k *KernelStore) validateWorkspaceBaseMergeTx(ctx context.Context, q querye
 			return ErrTaskEvidence
 		}
 	case "conflict":
-		if !sent || !merge.Attempted || merge.HeadSHA != merge.Source.SHA || merge.Failure != nil || len(merge.Conflicts) == 0 || !validBaseMergePaths(merge.Conflicts) || s.Proof.Outcome != "failed" {
+		repair := productBaseConflictPreparation(plan, s.Proof)
+		if !sent || !merge.Attempted || merge.HeadSHA != merge.Source.SHA || merge.Failure != nil || len(merge.Conflicts) == 0 || !validBaseMergePaths(merge.Conflicts) || s.Proof.Outcome != "failed" && (s.Proof.Outcome != "prepared" || !repair || s.Proof.Clean) {
 			return ErrTaskEvidence
 		}
 	case "":
@@ -121,10 +122,18 @@ func (k *KernelStore) validateWorkspaceBaseMergeTx(ctx context.Context, q querye
 	default:
 		return ErrTaskEvidence
 	}
-	if s.Proof.Outcome == "prepared" && ((merge.Outcome != "merged" && merge.Outcome != "already_current") || s.Proof.HeadSHA != merge.HeadSHA || !s.Proof.Clean || s.Proof.GitDir != merge.Source.GitDir || s.Proof.CommonDir != merge.Source.CommonDir) {
-		return ErrTaskEvidence
+	if s.Proof.Outcome == "prepared" {
+		repair := productBaseConflictPreparation(plan, s.Proof)
+		if ((merge.Outcome != "merged" && merge.Outcome != "already_current") && !repair) || s.Proof.HeadSHA != merge.HeadSHA || s.Proof.Clean == repair || s.Proof.GitDir != merge.Source.GitDir || s.Proof.CommonDir != merge.Source.CommonDir {
+			return ErrTaskEvidence
+		}
 	}
 	return nil
+}
+
+func productBaseConflictPreparation(plan ProductBasePlan, proof *ProductWorkspaceProof) bool {
+	task := plan.Value.Input.Value.Preparation.Task
+	return task.Spec.Kind == "fix" && task.Spec.ProductBaseConflict != nil && proof != nil && proof.BaseMerge != nil && proof.BaseMerge.Outcome == "conflict"
 }
 
 func validBaseMergePaths(paths []string) bool {

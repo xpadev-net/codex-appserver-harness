@@ -221,11 +221,17 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		if err != nil {
 			return state, refs, err
 		}
+		if b.Kind == "orchestrator" && w.Policy.Stage == "P" && w.Policy.Product {
+			state.Instructions += " A product_base_merge_conflict parent notification contains a stopped conflict reference in product_preparation.conflict. To repair it, plan a fresh fix Task for the same WorkItem with product_base_conflict copied from that reference; never reuse the canceled source Task/session. Preserve budgets and required independent verification/review after the new candidate. The reference alone grants no model, Git or publication permission."
+		}
 		if manifest.ProductWorkspace != nil {
 			if manifest.ProductSubject != nil && manifest.ProductSubject.Value.Spec.Kind == "verification" {
 				state.Instructions += " For this independent verification assignment use TaskResult schema_version=3. Modify only the trusted product_verification_policy.verifier_paths. For outcome=result copy product_workspace.reference into product_changes. Set product_verification.subject_id=product_subject.id and product_verification.subject_digest=product_subject.digest, never product_subject.value.candidate_digest. Set plan_artifact_id naming your published verification.Plan against the input Candidate. Publish the owned plan with kind verification_plan and content_type application/json, and declare it in artifacts. Do not claim a new SHA, runner evidence, review or approval. Keep work_item_refs empty and review/verification null; waiting/blocked use empty product_changes and null product_verification."
 			} else {
 				state.Instructions += " For this product work/fix assignment use TaskResult schema_version=2. For outcome=result copy the product_workspace.reference from this saved manifest into product_changes. For waiting/blocked return an empty product_changes array. Keep work_item_refs empty and review/verification null. The controller owns Git commits, Candidate IDs/SHA and quality/approval gates after normal completion and physical stopping. Publish actual notes/evidence with artifact_publish when needed."
+				if manifest.ProductWorkspace.Conflict != nil {
+					state.Instructions += " product_workspace.conflict describes the fixed pending base merge. Resolve the files against the original requirements, preserving both intended changes. Git metadata is read-only; the controller stages and commits after your normal stopped result. Do not reset, abort, stage, commit, or treat the conflict summary as verification/approval. If resolution cannot be justified, report waiting/blocked with evidence."
+				}
 			}
 		}
 		if manifest.ProductSubject != nil {

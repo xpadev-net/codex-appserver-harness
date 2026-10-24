@@ -291,14 +291,8 @@ func (k *KernelStore) productModelBaseSelectionTx(ctx context.Context, tx *sql.T
 	if original.Target() != task.Target() || original.SessionID != task.SessionID || original.ParentSessionID != task.ParentSessionID || original.InputDigest != s.Value.InputDigest || !reflect.DeepEqual(original.Spec, task.Spec) {
 		return nil, ErrProductWorkspaceHeld
 	}
-	current, currentErr := loadProductTargetTx(ctx, tx, task.Target(), s.Value.WorkItemID)
-	old := plan.Value.Input.Value.Preparation.Product
-	if old == nil {
-		if currentErr != sql.ErrNoRows {
-			return nil, errors.Join(ErrProductWorkspaceHeld, currentErr)
-		}
-	} else if currentErr != nil || current.Digest != old.Digest || !reflect.DeepEqual(current, *old) {
-		return nil, errors.Join(ErrProductWorkspaceHeld, currentErr)
+	if err := k.productWorkspaceOriginCurrentTx(ctx, tx, s); err != nil {
+		return nil, err
 	}
 	selection, _, err := k.readProductBaseSelectionTx(ctx, tx, task.ID)
 	if err != nil {
@@ -311,6 +305,32 @@ func (k *KernelStore) productModelBaseSelectionTx(ctx context.Context, tx *sql.T
 		return nil, ErrProductWorkspaceHeld
 	}
 	return &selection, nil
+}
+
+func sameProductExecutionOrigin(current, original ProductTargetSnapshot) bool {
+	normalized := current.Value
+	normalized.WorkItem.MergeHold = original.Value.WorkItem.MergeHold
+	return reflect.DeepEqual(normalized, original.Value)
+}
+
+func (k *KernelStore) productWorkspaceOriginCurrentTx(ctx context.Context, tx *sql.Tx, s ProductWorkspace) error {
+	if s.Value.Request.BasePlanID == "" {
+		return nil
+	}
+	plan, err := k.baseWorkspacePlanTx(ctx, tx, s.Value)
+	if err != nil {
+		return err
+	}
+	current, currentErr := loadProductTargetTx(ctx, tx, s.Value.Target, s.Value.WorkItemID)
+	old := plan.Value.Input.Value.Preparation.Product
+	if old == nil {
+		if currentErr != sql.ErrNoRows {
+			return errors.Join(ErrProductWorkspaceHeld, currentErr)
+		}
+	} else if currentErr != nil || !sameProductExecutionOrigin(current, *old) {
+		return errors.Join(ErrProductWorkspaceHeld, currentErr)
+	}
+	return nil
 }
 
 // A stopped prepared checkout may refresh read-only source observations after
