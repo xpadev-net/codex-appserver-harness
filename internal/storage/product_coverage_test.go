@@ -275,3 +275,36 @@ func TestProductCoverageDoesNotHideNewCandidateBeforeAnotherMergeIntentExists(t 
 		t.Fatal("old merge hid new local work without a new merge intent", ledger, err)
 	}
 }
+
+func TestProductCoverageUnavailableRegistrationKeepsWorkAndOverlappingCriterionResidual(t *testing.T) {
+	ctx := context.Background()
+	k, job := knownCoverageFixture(t)
+	receipt, _, err := k.RecordProductMergedWorkItem(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := job.Value.Product.Value
+	other := ProductWorkItemDefinition{ID: "other-criterion-contributor", Repository: p.Repository, RepositoryID: p.WorkItem.RepositoryID, Criteria: slices.Clone(receipt.Value.Criteria)}
+	if _, err := k.RegisterProductWorkItem(ctx, p.Target, "", other); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"unmerged", "unavailable", "missing"} {
+		if mode == "unavailable" {
+			if err := k.Put(ctx, "product_work_item_registration", other.ID, p.Target.WaveID, map[string]string{"damaged": "source registration"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if mode == "missing" {
+			if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_work_item_registration' AND id=?", other.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ledger, err := k.ProductCoverage(ctx, p.Target)
+		if err != nil || len(ledger.Value.Merged) != 1 || !reflect.DeepEqual(ledger.Value.UnmergedWorkItems, []string{other.ID}) || !reflect.DeepEqual(ledger.Value.Residual, receipt.Value.Criteria) {
+			t.Fatal("another contributor silently disappeared", mode, ledger, err)
+		}
+		if (len(ledger.Value.Unavailable) != 0) != (mode != "unmerged") {
+			t.Fatal("unknown registration not identified", mode, ledger)
+		}
+	}
+}

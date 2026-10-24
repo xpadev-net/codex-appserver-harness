@@ -77,7 +77,7 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 	}
 	ledger.Value = ProductCoverageValue{Target: w.Target(), Source: w.Source, SourceID: w.SourceID, Criteria: slices.Clone(w.Criteria), Merged: []ProductCoverageFact{}, Historical: []ProductCoverageFact{}, Residual: []string{}, Pending: []ProductCoveragePending{}, Unavailable: []ProductCoveragePending{}, UnmergedWorkItems: []string{}}
 	sort.Slice(ledger.Value.Criteria, func(i, j int) bool { return ledger.Value.Criteria[i].ID < ledger.Value.Criteria[j].ID })
-	workIDs, err := inputIDsTx(ctx, tx, "SELECT id FROM records WHERE kind='product_work_item_registration' AND work_item_id=? ORDER BY id LIMIT ?", w.ID, maxProductWorkItems+1)
+	workIDs, err := inputIDsTx(ctx, tx, "SELECT DISTINCT id FROM records WHERE kind IN ('product_work_item_registration','wave_work_item') AND work_item_id=? ORDER BY id LIMIT ?", w.ID, maxProductWorkItems+1)
 	if err != nil {
 		return ledger, err
 	}
@@ -85,7 +85,9 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 		return ledger, ErrProductCoverageHeld
 	}
 	registrations := map[string]string{}
+	workCriteria := map[string][]string{}
 	mergedWork := map[string]bool{}
+	unknownRegistration := false
 	for _, id := range workIDs {
 		r, err := loadProductWorkItemRegistration(ctx, tx, id)
 		if ctx.Err() != nil {
@@ -93,9 +95,11 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 		}
 		if err != nil || !productRegistrationScope(r, w) {
 			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{WorkItemID: id, Reason: "source_registration_unavailable"})
+			unknownRegistration = true
 			continue
 		}
 		registrations[id] = r.Digest
+		workCriteria[id] = slices.Clone(r.Value.Definition.Criteria)
 	}
 	// Include independent history/admission records so a missing merge head or
 	// receipt head remains visible rather than silently disappearing from input.
@@ -195,13 +199,20 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 		ledger.Value.Merged = append(ledger.Value.Merged, fact)
 		mergedWork[p.WorkItem.ID] = true
 	}
+	blockedCriteria := map[string]bool{}
 	for _, id := range workIDs {
-		if registrations[id] != "" && !mergedWork[id] {
+		if !mergedWork[id] {
 			ledger.Value.UnmergedWorkItems = append(ledger.Value.UnmergedWorkItems, id)
+			for _, criterion := range workCriteria[id] {
+				blockedCriteria[criterion] = true
+			}
 		}
 	}
 	for _, c := range ledger.Value.Criteria {
-		if !covered[c.ID] {
+		// Every registered contributor must have its own current merged fact.
+		// Unknown registration content may cover any criterion; without its
+		// authenticated mapping, conservatively retain the entire residual.
+		if unknownRegistration || blockedCriteria[c.ID] || !covered[c.ID] {
 			ledger.Value.Residual = append(ledger.Value.Residual, c.ID)
 		}
 	}
