@@ -64,6 +64,9 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductFinalVerification            *ProductFinalVerificationEvidence `json:"product_final_verification,omitempty"`
+	UnavailableProductFinalVerification string                            `json:"unavailable_product_final_verification,omitempty"`
+
 	ProductMergeCoverage        *ProductCoverageLedger                     `json:"product_merge_coverage,omitempty"`
 	UnavailableProductCoverage  string                                     `json:"unavailable_product_coverage,omitempty"`
 	ProductVerificationPolicy   *ProductVerificationPolicyInput            `json:"product_verification_policy,omitempty"`
@@ -345,6 +348,14 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			return m, err
 		} else {
 			m.ProductMergeCoverage = &coverage
+		}
+		final, err := k.productFinalVerificationEvidenceTx(ctx, tx, w)
+		if errors.Is(err, ErrProductFinalEvidenceBound) {
+			m.UnavailableProductFinalVerification = "final_verification_metadata_exceeds_bound"
+		} else if err != nil {
+			return m, err
+		} else {
+			m.ProductFinalVerification = &final
 		}
 	}
 	m.ProductWorkspace, err = k.productWorkspaceInputTx(ctx, tx, b, w)

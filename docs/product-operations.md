@@ -826,3 +826,11 @@ fixtureでpending→保存済みcoverage、元identity/criterion対応、旧scop
 ホストのlocal repositoryには固定HEADのobjectが必要である。未取得commitは実runnerのinfrastructure failureとして残し、古いcheckoutのpassへ読み替えない。ホストのlease付きfetch/hydration・daemon接続・失敗後の新fix Task・親最終受入は後続で接続する。このportはモデル/Taskを起動せず、最終jobのpassだけでWaveを完了しない。最終jobの自動infrastructure retryもこの時点では許可しない。
 
 fixtureでは実Git checkout・保存済みprofileの実行・停止確認からのpassと、未取得SHAのinfrastructure failureを確認する。SQLite fixtureでは共有予算、二重claim、古いselection/HEAD/control、欠損履歴、キャンセル後の保存、rollback、reopenを確認する。fakeのCloud/native merge/祖先APIはnative P受入には数えない。
+
+### 親向けの最終検証結果
+
+P Waveの親manifestの`product_final_verification`は、current selectionが指す計画と各repository/profileの最終jobを再認証して集約する。`not_planned`・`pending`・`passed`・`failed`・`stale`・`unavailable`を区別し、元計画target、coverage digest、固定SHA、policy/profile、job ID/digest、停止確認済みcompletion/result/log digestを保持する。元のTask検証のpassは最終jobの代わりにしない。全profileが停止完了するまで`complete`にならず、全件のpassと現在target/coverageの一致が揃う場合だけ`passed`になる。failed/timeout/canceled/infrastructure failureは元のstatusで残す。
+
+現在の別候補や要求版は旧計画を`stale`にする。runner head/terminal/claim/selection/plan/receiptの欠損は`unavailable`として残し、他の認証可能なjobは独立に表示する。current indexを失った場合も既存の計画履歴やrunner予約があれば未計画へ戻さない。上限は1024 profile job・集約JSON 1 MiBで、超過時は親manifestに`unavailable_product_final_verification`を示して保留する。
+
+集約は既存scoped manifest reference経由で親だけに渡し、Task/K Waveへは渡さない。保存済みinputのbytes/digestは変えず、新しい停止結果から新しいmanifestを作る。private argv、local repository/root、log path、結果本文は親の要約へ出さない。集約は保存済み実行事実であり、remote HEAD/sourceの新しい観測、control/予算・進行中操作の照合、親の正常停止結果による明示的な最終受入は引き続き別途必要である。
