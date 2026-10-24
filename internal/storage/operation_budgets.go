@@ -16,6 +16,8 @@ var ErrOperationBudget = errors.New("Wave operation budget exhausted")
 // retain their separately trusted definitions and timeout policy.
 type WaveOperationLimits struct {
 	BranchRetries    int   `json:"branch_retries,omitempty"`
+	SplitDepth       int   `json:"split_depth,omitempty"`
+	SplitChildren    int   `json:"split_children,omitempty"`
 	ValidationJobs   int   `json:"validation_jobs"`
 	RunnerRetries    int   `json:"runner_retries"`
 	CandidateReviews int   `json:"candidate_reviews"`
@@ -24,18 +26,23 @@ type WaveOperationLimits struct {
 }
 
 func DefaultWaveOperationLimits() WaveOperationLimits {
-	return WaveOperationLimits{BranchRetries: 1, ValidationJobs: 100, RunnerRetries: 1, CandidateReviews: 2, TurnSeconds: 1800, ReviewSeconds: 3600}
+	return WaveOperationLimits{BranchRetries: 1, SplitDepth: 2, SplitChildren: 8, ValidationJobs: 100, RunnerRetries: 1, CandidateReviews: 2, TurnSeconds: 1800, ReviewSeconds: 3600}
 }
 func (l WaveOperationLimits) Validate() error {
 	const maxSeconds = int64((1<<63 - 1) / time.Second)
 	if l.BranchRetries < 0 || l.BranchRetries > 32 || l.ValidationJobs < 1 || l.RunnerRetries < 0 || l.CandidateReviews < 1 || l.TurnSeconds < 1 || l.TurnSeconds > maxSeconds || l.ReviewSeconds < 1 || l.ReviewSeconds > maxSeconds {
 		return errors.New("invalid Wave operation limits")
 	}
+	// Zero/zero is the old persisted format, with splitting disabled. Do not
+	// infer new permissions from defaults when reading an existing Wave.
+	if l.SplitDepth < 0 || l.SplitDepth > maxProductWorkItems || l.SplitChildren < 0 || l.SplitChildren > maxProductWorkItems || (l.SplitDepth == 0) != (l.SplitChildren == 0) || l.SplitChildren == 1 {
+		return errors.New("split limits must both be disabled or bounded depth and at least two children")
+	}
 	return nil
 }
 func waveOperationLimitsTx(ctx context.Context, q queryer, waveID string) (WaveOperationLimits, error) {
-	// Do not overlay new defaults: a pre-branch-retry record deliberately
-	// retains zero automatic branch retries. Defaults apply at new admission.
+	// Do not overlay new defaults: older records deliberately retain zero
+	// automatic branch retries and/or disabled splitting. New admission only.
 	var l WaveOperationLimits
 	if err := completionRecord(ctx, q, "wave_operation_limits", waveID, &l); err != nil {
 		return l, err
