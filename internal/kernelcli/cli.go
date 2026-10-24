@@ -227,7 +227,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
-		executor, hintExecution, err := loadProductExecutor(*executorFile, k, config)
+		executor, hintExecution, err := loadProductExecutorWithObserver(*executorFile, k, config, observer != nil)
 		if err != nil {
 			return err
 		}
