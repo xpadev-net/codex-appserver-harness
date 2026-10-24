@@ -82,6 +82,29 @@ func (k *KernelStore) SavePRReviewRequestPayload(ctx context.Context, id, owner,
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return packet, err
 	}
+	if err == nil {
+		if err := validateCloudActorHistory(ctx, tx, old); err != nil {
+			return packet, err
+		}
+	} else {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_cloud_actor_history' AND id=?)", id).Scan(&exists); err != nil {
+			return packet, err
+		}
+		if exists {
+			return packet, ErrTaskEvidence
+		}
+		if len(actors) > 0 {
+			h := productCloudActorHistory{Packet: packet}
+			h.Digest, err = contentDigest(packet)
+			if err != nil {
+				return packet, err
+			}
+			if err := kernelRecordTx(ctx, tx, "product_cloud_actor_history", id, intent.Source.Target.WaveID, h); err != nil {
+				return packet, err
+			}
+		}
+	}
 	if err = kernelRecordTx(ctx, tx, "product_pr_review_payload", id, intent.Source.SessionID, packet); err != nil {
 		return packet, err
 	}
@@ -210,4 +233,27 @@ func CanonicalCloudReviewerIDs(ids []int64) ([]int64, error) {
 		}
 	}
 	return result, nil
+}
+
+type productCloudActorHistory struct {
+	Packet PRReviewRequestPayload `json:"packet"`
+	Digest string                 `json:"digest"`
+}
+
+func validateCloudActorHistory(ctx context.Context, q queryer, p PRReviewRequestPayload) error {
+	if len(p.CloudReviewerIDs) == 0 {
+		return nil
+	}
+	var h productCloudActorHistory
+	if err := taskEvidenceRecord(ctx, q, "product_cloud_actor_history", p.OperationID, &h); err != nil {
+		return errors.Join(ErrTaskEvidence, err)
+	}
+	digest, err := contentDigest(p)
+	if err != nil {
+		return err
+	}
+	if h.Digest != digest || !reflect.DeepEqual(h.Packet, p) {
+		return ErrTaskEvidence
+	}
+	return nil
 }
