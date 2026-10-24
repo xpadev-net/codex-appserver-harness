@@ -42,30 +42,35 @@ func productBranchAdmitted(ctx context.Context, q queryer, id string) (bool, err
 // admitted head/history/budget cannot fall back to an earlier stopped attempt.
 func latestProductBranch(ctx context.Context, q queryer, operationID string) (ProductBranchPublication, error) {
 	id := productBranchID(operationID)
-	job, err := loadProductBranch(ctx, q, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		if admitted, e := productBranchAdmitted(ctx, q, id); e != nil {
-			return job, e
-		} else if admitted {
-			return job, ErrTaskEvidence
-		}
-	}
+	job, found, err := lookupProductBranch(ctx, q, id)
 	if err != nil {
 		return job, err
 	}
+	if !found {
+		admitted, err := productBranchAdmitted(ctx, q, id)
+		if err != nil {
+			return job, err
+		}
+		if admitted {
+			return job, ErrTaskEvidence
+		}
+		return job, sql.ErrNoRows
+	}
 	for count := 0; count <= 32; count++ {
 		id = productBranchRetryID(job.ID)
-		next, err := loadProductBranch(ctx, q, id)
-		if errors.Is(err, sql.ErrNoRows) {
-			if admitted, e := productBranchAdmitted(ctx, q, id); e != nil {
-				return job, e
-			} else if admitted {
+		next, found, err := lookupProductBranch(ctx, q, id)
+		if err != nil {
+			return job, err
+		}
+		if !found {
+			admitted, err := productBranchAdmitted(ctx, q, id)
+			if err != nil {
+				return job, err
+			}
+			if admitted {
 				return job, ErrTaskEvidence
 			}
 			return job, nil
-		}
-		if err != nil {
-			return job, err
 		}
 		if !productBranchRetryMatches(job, next.Value) {
 			return job, ErrTaskEvidence

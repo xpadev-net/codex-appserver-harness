@@ -130,11 +130,32 @@ func saveProductBranchTx(ctx context.Context, tx *sql.Tx, job ProductBranchPubli
 	return kernelRecordTx(ctx, tx, "product_branch_publication", job.ID, job.Value.Product.Value.Target.WaveID, productBranchRecord{Publication: job, Digest: digest})
 }
 
-func loadProductBranch(ctx context.Context, q queryer, id string) (job ProductBranchPublication, err error) {
-	var record productBranchRecord
-	if err := taskEvidenceRecord(ctx, q, "product_branch_publication", id, &record); err != nil {
+func loadProductBranch(ctx context.Context, q queryer, id string) (ProductBranchPublication, error) {
+	job, found, err := lookupProductBranch(ctx, q, id)
+	if err != nil {
 		return job, err
 	}
+	if !found {
+		return job, sql.ErrNoRows
+	}
+	return job, nil
+}
+
+// Absence of the head is a separate result. Once a head exists, all missing
+// dependencies are invalid evidence, never permission to create a new attempt.
+func lookupProductBranch(ctx context.Context, q queryer, id string) (ProductBranchPublication, bool, error) {
+	var record productBranchRecord
+	if err := taskEvidenceRecord(ctx, q, "product_branch_publication", id, &record); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProductBranchPublication{}, false, nil
+		}
+		return ProductBranchPublication{}, false, err
+	}
+	job, err := validateProductBranchRecord(ctx, q, id, record)
+	return job, true, err
+}
+
+func validateProductBranchRecord(ctx context.Context, q queryer, id string, record productBranchRecord) (job ProductBranchPublication, err error) {
 	defer func() {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = ErrTaskEvidence

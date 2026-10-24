@@ -2,11 +2,41 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
 )
+
+func TestProductBranchLatestDistinguishesNeverAdmittedFromLostEvidence(t *testing.T) {
+	for _, missing := range []string{"product_branch_publication", "product_branch_history"} {
+		t.Run(missing, func(t *testing.T) {
+			ctx := context.Background()
+			k, id, owner, remote := branchPublicationFixture(t)
+			if _, err := k.ProductBranchPublication(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatal("never admitted root treated as corrupt", err)
+			}
+			job, err := k.ReserveProductBranchPublication(ctx, id, owner, remote)
+			if err != nil {
+				t.Fatal("missing root prevented initial reservation", err)
+			}
+			loaded, err := k.ProductBranchPublication(ctx, id)
+			if err != nil || !reflect.DeepEqual(loaded, job) {
+				t.Fatal("absent unadmitted successor prevented lookup", loaded, err)
+			}
+			if _, err := k.DB.Exec("DELETE FROM records WHERE kind=? AND id=?", missing, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := k.ProductBranchPublication(ctx, id); !errors.Is(err, ErrTaskEvidence) {
+				t.Fatal("admitted evidence loss treated as never started", err)
+			}
+			if _, err := k.ReserveProductBranchPublication(ctx, id, owner, remote); !errors.Is(err, ErrTaskEvidence) {
+				t.Fatal("admitted evidence regenerated", err)
+			}
+		})
+	}
+}
 
 func stoppedUnsentBranchFixture(t *testing.T) (*KernelStore, string, string, ProductBranchRemote, ProductBranchPublication) {
 	t.Helper()
