@@ -520,3 +520,11 @@ P自動展開は中間review Phaseも扱い、後続の未使用Taskを新ID/ses
 validation job と既存 retry lineage の予算、実行枠、workspace lease、job/history を同じ transaction で予約し、再送で再課金しない。unknown/launching、検証の failed、timeout、canceled、passed はこの自動再試行の対象外である。予約と Claim の両方で現行 scope/Candidate・pause/期限を再照合する。`product.Runner.StartRetry` はcommit済み Claimの後だけ独立 wrapper を起動し、再送で二重起動しない。
 
 機械検証の読み取りは認証済みの後続 job を追い、再試行待ちを pending とする。後続 head/history/terminal が欠落した場合はエラーとし、古い結果へ戻らない。fixtureで上限・rollback・履歴欠落・二段の再試行・pauseを、実subprocessでlauncher不在→同じ実行パスの復旧→再試行成功を確認する。modelやCloudのP受入を意味せず、daemonによる自動再試行呼び出しはhost executor接続で行う。
+
+### 製品のhost executor
+
+`product.Executor` は private host repository 設定から workspace準備・固定subject・verification policy登録・停止済み出力のseal/採用・detached runnerの全profile照合と環境障害retryを呼ぶ共通portである。`Prepare` の前に `ReadProductTaskPreparation` が現行Phase、未使用Task/session、正常適用済み依存、WorkItemのscope/操作を照合する。reviewはcanonical planの全必須profileがPassedになるまで準備しない。初回SHA/base branch/local repository/profile argvはhost設定に限定し、Issue/model値から作らない。
+
+`Apply` は保存した正常停止runのIDとworkspaceを照合し、work/fixとschema v3 verificationを別のhost adopterへ、review/入力要求を通常のTask result適用へ送る。modelから結果本文・SHA・pass Booleanを受け取らない。`AdvanceVerification`はcanonical profile集合を一度ずつ走査し、保存jobを起動/照合して最新の機械証拠を再読込する。実行枠待ち・実際のjob待機を区別し、unknown launchの再起動、完了profileの再課金を行わない。
+
+これらのGit処理はmodel dispatch loopの外で呼び出し、Storeの所有者は処理のjoinまで保持する。実temp Gitのwriter seal/採用とverification準備/採用/runner、未完了runner・pause・先のPhase・未設定repository・停止未確認runの拒否をfixtureで確認する。daemonの購読ループ・モデル起動との最終接続、公開/Cloud/mergeは後続であり、`product_readiness_unavailable`を解除する権限はこのportから生成しない。
