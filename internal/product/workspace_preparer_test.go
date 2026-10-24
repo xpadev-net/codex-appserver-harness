@@ -17,9 +17,20 @@ import (
 
 func workspacePreparerFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (WorkspacePreparer, storage.ProductWorkspaceRequest, domain.Wave, domain.Task) {
 	t.Helper()
+	return workspacePreparerFixtureWithAdmission(t, nil, configure...)
+}
+
+func workspacePreparerFixtureWithAdmission(t *testing.T, request *storage.ProductWaveRequest, configure ...func(*contract.PlanProposal)) (WorkspacePreparer, storage.ProductWorkspaceRequest, domain.Wave, domain.Task) {
+	t.Helper()
 	ctx := context.Background()
 	a, _ := issueAdmissionFixture(t)
-	w, err := a.Admit(ctx, 42)
+	var w domain.Wave
+	var err error
+	if request == nil {
+		w, err = a.Admit(ctx, 42)
+	} else {
+		w, err = a.Store.CreateProductWave(ctx, *request)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

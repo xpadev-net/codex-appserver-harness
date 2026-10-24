@@ -12,9 +12,10 @@ import (
 )
 
 type ProductPublicationReadinessValue struct {
-	Product    ProductTargetSnapshot `json:"product"`
-	Quality    ProductQualityProof   `json:"quality"`
-	PreparedAt time.Time             `json:"prepared_at"`
+	Scope      *ProductPublicationScope `json:"scope,omitempty"`
+	Product    ProductTargetSnapshot    `json:"product"`
+	Quality    ProductQualityProof      `json:"quality"`
+	PreparedAt time.Time                `json:"prepared_at"`
 }
 
 type ProductPublicationReadiness struct {
@@ -73,6 +74,26 @@ func (k *KernelStore) PrepareProductPublication(ctx context.Context, target cont
 	if product.Value.WorkItem.MergeHold {
 		return saved, ErrProductQualityHeld
 	}
+	w, err := loadWave(ctx, tx, target.WaveID)
+	if err != nil {
+		return saved, err
+	}
+	registration, err := loadProductWorkItemRegistration(ctx, tx, workID)
+	if err != nil {
+		return saved, err
+	}
+	var scope *ProductPublicationScope
+	full, err := productPublicationFullScope(w, registration)
+	if err != nil {
+		return saved, err
+	}
+	if !full {
+		value, err := k.prepareProductPublicationScopeTx(ctx, tx, target, workID)
+		if err != nil {
+			return saved, err
+		}
+		scope = &value
+	}
 	switch product.Value.WorkItem.Phase {
 	case domain.Verifying:
 		value := product.Value
@@ -91,6 +112,9 @@ func (k *KernelStore) PrepareProductPublication(ctx context.Context, target cont
 		if err != nil {
 			return saved, errors.Join(ErrTaskEvidence, err)
 		}
+		if !reflect.DeepEqual(prior.Value.Scope, scope) {
+			return saved, ErrTaskEvidence
+		}
 		old := prior.Value.Product.Value
 		if old.Target.WaveID != target.WaveID || old.Target.ScopeRevision != target.ScopeRevision || old.Target.PolicyRevision != target.PolicyRevision || old.Candidate != product.Value.Candidate {
 			return saved, ErrTaskEvidence
@@ -101,7 +125,7 @@ func (k *KernelStore) PrepareProductPublication(ctx context.Context, target cont
 	default:
 		return saved, ErrProductQualityHeld
 	}
-	saved.Value = ProductPublicationReadinessValue{Product: product, Quality: quality, PreparedAt: k.clock()}
+	saved.Value = ProductPublicationReadinessValue{Scope: scope, Product: product, Quality: quality, PreparedAt: k.clock()}
 	saved.ID = structureID("product-publication-ready-", target.WaveID, quality.Digest)
 	saved.Digest, err = contentDigest(saved.Value)
 	if err != nil {
@@ -117,10 +141,6 @@ func (k *KernelStore) PrepareProductPublication(ctx context.Context, target cont
 		return saved, err
 	}
 	if err := kernelRecordTx(ctx, tx, "product_publication_readiness", productTargetID(target, workID), target.WaveID, saved); err != nil {
-		return saved, err
-	}
-	w, err := loadWave(ctx, tx, target.WaveID)
-	if err != nil {
 		return saved, err
 	}
 	if err := k.waveEventTx(ctx, tx, w, "product_publication_ready", "", saved.ID+":ready", saved); err != nil {
@@ -152,5 +172,44 @@ func (k *KernelStore) ReadProductPublicationReadiness(ctx context.Context, targe
 	if product.Value.WorkItem.MergeHold || product.Value.WorkItem.Phase != domain.Reviewing || !reflect.DeepEqual(saved.Value.Product, product) || !reflect.DeepEqual(saved.Value.Quality, quality) {
 		return saved, ErrProductQualityHeld
 	}
+	if err := k.checkProductPublicationScopeTx(ctx, tx, saved); err != nil {
+		return saved, err
+	}
 	return saved, nil
+}
+
+func (k *KernelStore) checkProductPublicationScopeTx(ctx context.Context, tx *sql.Tx, ready ProductPublicationReadiness) error {
+	p := ready.Value.Product.Value
+	w, err := loadWave(ctx, tx, p.Target.WaveID)
+	if err != nil {
+		return err
+	}
+	registration, err := loadProductWorkItemRegistration(ctx, tx, p.WorkItem.ID)
+	if err != nil {
+		return err
+	}
+	if w.Target() != p.Target {
+		return ErrProductPublicationScopeHeld
+	}
+	full, err := productPublicationFullScope(w, registration)
+	if err != nil {
+		return err
+	}
+	if full {
+		if ready.Value.Scope != nil {
+			return ErrTaskEvidence
+		}
+		return nil
+	}
+	if ready.Value.Scope == nil {
+		return ErrProductPublicationScopeHeld
+	}
+	current, err := k.readProductPublicationScopeTx(ctx, tx, p.Target, p.WorkItem.ID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(*ready.Value.Scope, current) {
+		return ErrTaskEvidence
+	}
+	return nil
 }
