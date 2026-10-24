@@ -166,7 +166,9 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 			}
 		}
 		if tasksPending {
-			page, err := w.Executor.Store.ProductExecutionTasks(ctx, tasksAfter, 128)
+			// Bound synchronous source/HEAD reads before returning to runner
+			// reconciliation. The cursor carries remaining Tasks to the next page.
+			page, err := w.Executor.Store.ProductExecutionTasks(ctx, tasksAfter, 4)
 			if err != nil {
 				tasksAfter, tasksPending = "", false
 				report(err)
@@ -185,6 +187,11 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 			}
 		}
 		if tasksPending || jobsPending {
+			// Keep checking detached owners between Task pages, including when
+			// the preceding job sweep had already reached its end.
+			if tasksPending && !jobsPending {
+				jobsAfter, jobsPending = "", true
+			}
 			continue
 		}
 		select {

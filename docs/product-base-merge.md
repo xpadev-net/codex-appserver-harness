@@ -10,7 +10,7 @@
 
 実 temp Git の検査では、両変更と両親の保持、既に取り込み済みの read-only 結果、競合内容/HEAD の保持と二重実行拒否、branch strategy/独自 hooksPath の hook/署名/attribute driver の抑止、未知/別系統 SHA、汚れた checkout、既存 operation、fence 前後の変更、worktree 固有 promisor 設定、merge コマンド中の取消し、実際には index/worktree を変更したのに非正常終了して未解決 path がない場合の照合観測を確認する。
 
-これは Task_11 の通常 merge の component 実装である。daemon の現在 HEAD 観測・取得・永続 claim/send/stop、候補の新版採用・検証の取り直し、および競合を新しい fix Task/session へ渡す接続は後続 PR に残る。P 全体の受入には数えない。
+これは Task_11 の通常 merge の component 実装である。新規 WorkItem の daemon による現在 HEAD 観測・取得・永続 claim/send/stop は後述の工程へ接続した。旧候補への適用・新版採用・検証の取り直し、および競合を新しい fix Task/session へ渡す接続は後続 PR に残る。P 全体の受入には数えない。
 
 ## 別 WorkItem の merge を待つ準備
 
@@ -26,7 +26,7 @@ P の work/fix Task が `depends_on` で別 WorkItem の work/fix/verification/r
 
 計画は入力 digest・repository・branch・初期 SHA・HEAD・取得先・祖先集合で固定する。同じ HEAD の再観測は元計画の履歴を変えず、現在の選択と観測時刻を別に保存する。HEAD が変われば別計画を作る。effect 前の保存済み選択確認は30秒を超える観測、Task/source の変化、先行証拠の喪失、pause を保留する。plan/head/history/admission/current selection の欠落を、新しい HEAD の再観測で作り直さない。保存途中の失敗は計画と選択を共に rollback する。
 
-これは read-only 外部観測と DB への host 計画保存の component であり、Git の取得・workspace への適用・候補の採用や model/runner 起動を許可しない。実 Git の取得と model readiness への接続は後続 PR で扱う。テストの GitHub HEAD/ancestry は fixture として扱い、native P の受入には含めない。
+この reader は read-only 外部観測と DB への host 計画保存を担い、単独では Git の取得・workspace への適用・候補の採用や model/runner 起動を許可しない。実 Git の取得と model readiness への接続は後述する。テストの GitHub HEAD/ancestry は fixture として扱い、native P の受入には含めない。
 
 ## 固定 base の取得と workspace 証拠
 
@@ -44,7 +44,7 @@ host が `ProductWorkspaceRequest` に base plan の ID/digest を渡すと、wo
 
 CLI の publication 設定がある場合、実 `KernelSourceGate` と GitHub reader を `Executor.BasePlanner` へ接続する。新しい WorkItem の unused な work/fix Task は現在の default HEAD を選び、上記の取得・workspace 証拠を経て model 起動へ進む。publication 設定を持たないローカル工程は host の初期 base を使う。
 
-準備済みで未実行の Task は、観測時刻が失効したときだけ source/HEAD を読み直す。同じ HEAD なら保存 workspace を変更せず選択時刻を更新する。異なる HEAD なら既存 workspace を書き換えず初回 turn を保留する。未 claim の prepared profile は `not_started` の停止証拠を保存して Git capacity を解放する。開始済み・停止未確認の owner は再実行や解放を行わない。
+準備済みで未実行の Task は、観測時刻が失効したときだけ source/HEAD を読み直す。同じ HEAD なら保存 workspace を変更せず選択時刻を更新する。異なる HEAD なら既存 workspace を書き換えず初回 turn を保留する。照合は4 Task ごとに runner owner の確認へ戻り、残りは cursor を進めて扱う。未 claim の prepared profile は `not_started` の停止証拠を保存して Git capacity を解放する。開始済み・停止未確認の owner は再実行や解放を行わない。
 
 既知の準備失敗、未解決 owner、証拠の欠落、準備後の base 変更は、Task・計画・SHA・停止結果の安全な要約を親通知へ保存する。private path、取得先、資格情報、command、raw log は親入力に渡さない。同一の原因と証拠は ACK や定期照合で追加通知せず、通知の利用時にも原因が現在有効か再照合する。親 turn、新しい Task/session、Git の再実行を定期照合だけで生成しない。
 
