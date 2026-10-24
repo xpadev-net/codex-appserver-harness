@@ -77,7 +77,7 @@ func (a *cloudReadAPI) ResourcePages(ctx context.Context, path, field string) ([
 }
 
 func TestCloudReviewReaderRequiresCurrentFormalApprovalAndFreshCapability(t *testing.T) {
-	for _, mode := range []string{"approved", "commented", "old_sha", "old_round", "untrusted", "dismissed", "changes_requested", "unknown_capability", "unknown_request", "unknown_sha", "future_report", "unsupported_capability", "missing_evidence", "host_disabled", "revoked_during_read", "report_error", "missing_comment", "edited_comment", "wrong_requester", "duplicate_comment", "wrong_base", "changed_head", "changed_repository", "future_review", "duplicate_review"} {
+	for _, mode := range []string{"approved", "commented", "old_sha", "old_round", "untrusted", "dismissed", "changes_requested", "unknown_capability", "unknown_request", "unknown_sha", "future_report", "future_final_report", "unsupported_capability", "missing_evidence", "host_disabled", "revoked_during_read", "report_error", "missing_comment", "edited_comment", "wrong_requester", "duplicate_comment", "wrong_base", "changed_head", "changed_repository", "future_review", "duplicate_review"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			r, requestAPI, saved, id := requestFixture(t)
@@ -122,6 +122,9 @@ func TestCloudReviewReaderRequiresCurrentFormalApprovalAndFreshCapability(t *tes
 				report.Capabilities["cloud_request"] = contract.Capability{State: contract.Unknown}
 			case "unknown_sha":
 				report.Capabilities["review_sha"] = contract.Capability{State: contract.Unknown}
+			case "future_final_report":
+				api.onFinal = func() { report.ObservedAt = time.Now().Add(time.Hour) }
+				wantError = true
 			case "future_report":
 				report.ObservedAt = time.Now().Add(time.Hour)
 				wantError = true

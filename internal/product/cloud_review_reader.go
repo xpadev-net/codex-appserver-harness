@@ -50,12 +50,9 @@ func (r CloudReviewReader) Read(ctx context.Context, operationID string) (CloudR
 	if !ok || host.ReadReport == nil {
 		return snapshot, errors.New("explicit Cloud review policy/report reader required")
 	}
-	report, err := host.ReadReport(ctx)
+	report, err := r.readReport(ctx, host, p)
 	if err != nil {
 		return snapshot, err
-	}
-	if report.Version != 1 || report.ObservedAt.IsZero() || report.RepositoryID != p.WorkItem.RepositoryID || report.Repository != p.Repository || report.DefaultBranch != p.BaseBranch {
-		return snapshot, errors.New("Cloud review report identity changed")
 	}
 	transport := r.API(p)
 	if transport == nil {
@@ -153,12 +150,9 @@ func (r CloudReviewReader) Read(ctx context.Context, operationID string) (CloudR
 	if lastRepo.ID != repo.ID || lastRepo.Name != repo.Name || lastRepo.DefaultBranch != repo.DefaultBranch {
 		return snapshot, errors.New("Cloud review repository changed during read")
 	}
-	report, err = host.ReadReport(ctx)
+	report, err = r.readReport(ctx, host, p)
 	if err != nil {
 		return snapshot, err
-	}
-	if report.Version != 1 || report.ObservedAt.IsZero() || report.RepositoryID != p.WorkItem.RepositoryID || report.Repository != p.Repository || report.DefaultBranch != p.BaseBranch {
-		return snapshot, errors.New("Cloud review report changed during read")
 	}
 	policy := host.Policy
 	verified := func(name string) bool {
@@ -184,4 +178,21 @@ func (r CloudReviewReader) Read(ctx context.Context, operationID string) (CloudR
 		}
 	}
 	return CloudReviewSnapshot{Round: round, PR: pr, Reviews: reviews, Decision: review.Evaluate(p.Candidate, review.Round{ID: round.Packet.RoundID, Candidate: p.Candidate, PR: p.PRNumber, RequestedAt: round.RequestedAt, RequestCommentID: round.RequestCommentID, RequestAttempted: round.RequestAttempted, RequesterID: round.Packet.RequesterID}, policy, reviews), ObservedAt: observed}, nil
+}
+
+// Both bookends apply the same identity and timestamp validation, including a
+// report that was atomically replaced while native API reads were in flight.
+func (r CloudReviewReader) readReport(ctx context.Context, host CloudReviewPolicy, p storage.ProductTarget) (contract.Report, error) {
+	report, err := host.ReadReport(ctx)
+	if err != nil {
+		return report, err
+	}
+	observed := time.Now().UTC()
+	if r.Store.Now != nil {
+		observed = r.Store.Now().UTC()
+	}
+	if report.Version != 1 || report.ObservedAt.IsZero() || report.ObservedAt.After(observed) || report.RepositoryID != p.WorkItem.RepositoryID || report.Repository != p.Repository || report.DefaultBranch != p.BaseBranch {
+		return report, errors.New("Cloud review report identity/timestamp unconfirmed")
+	}
+	return report, nil
 }
