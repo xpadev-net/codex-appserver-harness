@@ -42,7 +42,7 @@ func TestMergeReconciliationTargetsBoundedPagesAndCorruptionDoNotInferStopping(t
 	if _, err := k.DB.Exec("UPDATE records SET payload=? WHERE kind='product_merge' AND id='page-001'", []byte(`{"unexpected":"shape"}`)); err != nil {
 		t.Fatal(err)
 	}
-	for _, state := range []string{"prepared", "launching", "unknown", "canceled", "stopped_unsent", "rejected", "merged", "aborted_http"} {
+	for _, state := range []string{"prepared", "launching", "unknown", "canceled", "stopped_unsent", "rejected", "merged", "aborted_http", "stopped_before_http"} {
 		if err := k.Put(ctx, "product_merge", "excluded-"+state, job.Value.Product.Value.Target.WaveID, map[string]any{"merge": map[string]string{"state": state}}); err != nil {
 			t.Fatal(err)
 		}

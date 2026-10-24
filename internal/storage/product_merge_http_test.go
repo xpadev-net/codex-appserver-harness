@@ -51,6 +51,9 @@ func TestMergeHTTPActivationHelper(t *testing.T) {
 		reply.Error = err.Error()
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(reply)
+	if reply.Start && os.Getenv("MERGE_HTTP_TEST_HOLD") == "1" {
+		time.Sleep(time.Minute)
+	}
 	os.Exit(0)
 }
 func mergeHTTPActivationCommand(t *testing.T, k *KernelStore, job ProductMerge) *exec.Cmd {
@@ -230,6 +233,24 @@ func TestProductMergeHTTPLegacyAbsenceControlsAndRollbackNeverGrant(t *testing.T
 				if child := activateHTTPChild(t, k, job); child.Start || child.Error == "" {
 					t.Fatal("legacy upgraded", child)
 				}
+				// Keep the record checksum valid so this exercises protocol
+				// semantics rather than merely detecting changed bytes.
+				job.State = "aborted_http"
+				tx, err := k.kernelTx(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := saveProductMergeTx(ctx, tx, job); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.ReadProductMerge(ctx, job.ID); !errors.Is(err, ErrTaskEvidence) {
+					t.Fatal("legacy forged abort accepted", err)
+				}
+
 				return
 			}
 			k, job := registeredMergeHTTPFixture(t)

@@ -30,7 +30,7 @@ type ProductMergeStop struct {
 	Reason      string                `json:"reason"`
 	StartedAt   time.Time             `json:"started_at"`
 	FinishedAt  time.Time             `json:"finished_at"`
-	Disposition string                `json:"disposition"` // not_started, response_received, outcome_unknown
+	Disposition string                `json:"disposition"` // not_started, client_not_started, response_received, outcome_unknown
 	Response    *ProductMergeResponse `json:"response,omitempty"`
 }
 
@@ -44,8 +44,17 @@ func validateProductMergeStop(job ProductMerge, proof ProductMergeStop) error {
 		}
 		return nil
 	}
-	if job.MayHaveSentAt.Before(proof.StartedAt) || job.MayHaveSentAt.After(proof.FinishedAt) {
+	if job.Value.HTTPProtocol == productMergeHTTPProtocol && job.HTTP != nil {
+		// This protocol fences before native-client admission. The registered
+		// activation, rather than the parent claim, starts this transport span.
+		if !proof.StartedAt.Equal(job.HTTP.ActivatedAt) || job.MayHaveSentAt.After(proof.StartedAt) {
+			return ErrProductMergeHeld
+		}
+	} else if job.MayHaveSentAt.Before(proof.StartedAt) || job.MayHaveSentAt.After(proof.FinishedAt) {
 		return ErrProductMergeHeld
+	}
+	if proof.Disposition == "client_not_started" && proof.Response == nil && job.Value.HTTPProtocol == productMergeHTTPProtocol && job.HTTP != nil {
+		return nil
 	}
 	if proof.Disposition == "outcome_unknown" && proof.Response == nil {
 		return nil
@@ -64,6 +73,9 @@ func mergeStoppedState(proof ProductMergeStop) string {
 	if proof.Disposition == "not_started" {
 		return "stopped_unsent"
 	}
+	if proof.Disposition == "client_not_started" {
+		return "stopped_before_http"
+	}
 	if proof.Disposition == "outcome_unknown" {
 		return "stopped_unknown"
 	}
@@ -73,7 +85,7 @@ func mergeStoppedState(proof ProductMergeStop) string {
 	return "rejected"
 }
 func productMergeTerminal(job ProductMerge) bool {
-	return job.State == "stopped_unsent" || job.State == "rejected" || job.State == "merged" || job.State == "aborted_http"
+	return job.State == "stopped_unsent" || job.State == "rejected" || job.State == "merged" || job.State == "aborted_http" || job.State == "stopped_before_http"
 }
 func validateProductMergeResult(ctx context.Context, q queryer, job ProductMerge) error {
 	var proof ProductMergeStop
@@ -138,6 +150,9 @@ func releaseProductMergeMutationTx(ctx context.Context, tx *sql.Tx, job ProductM
 // mutates current Product or grants Wave acceptance. Unknown outcome retains
 // the mutation lease despite the positively recorded client stop.
 func (k *KernelStore) RecordProductMergeStopped(ctx context.Context, id, owner, digest string, proof ProductMergeStop) (ProductMerge, error) {
+	return k.recordProductMergeStopped(ctx, id, owner, digest, proof, nil)
+}
+func (k *KernelStore) recordProductMergeStopped(ctx context.Context, id, owner, digest string, proof ProductMergeStop, httpStop *ProductMergeHTTPStop) (ProductMerge, error) {
 	var empty ProductMerge
 	proof.StartedAt = proof.StartedAt.Round(0).UTC()
 	proof.FinishedAt = proof.FinishedAt.Round(0).UTC()
@@ -154,25 +169,43 @@ func (k *KernelStore) RecordProductMergeStopped(ctx context.Context, id, owner, 
 	if err != nil {
 		return empty, err
 	}
-	if job.Value.HTTPProtocol == productMergeHTTPProtocol && !job.MayHaveSentAt.IsZero() {
+	registered := job.Value.HTTPProtocol == productMergeHTTPProtocol && !job.MayHaveSentAt.IsZero()
+	if registered {
+		if httpStop == nil || job.HTTP == nil || httpStop.MergeID != id || httpStop.SpecDigest != job.HTTP.SpecDigest || httpStop.Process != job.HTTP.Process || httpStop.ProofID != proof.ProofID || httpStop.VerifiedAt.Before(proof.FinishedAt) || httpStop.VerifiedAt.Before(job.HTTP.ActivatedAt) || httpStop.VerifiedAt.After(k.clock()) {
+			return empty, ErrProductMergeHeld
+		}
+	} else if httpStop != nil {
 		return empty, ErrProductMergeHeld
 	}
+
 	if job.Value.OwnerID != owner || job.Digest != digest || validateProductMergeStop(job, proof) != nil || proof.FinishedAt.After(k.clock()) {
 		return empty, ErrProductMergeHeld
 	}
 	if job.Stop != nil {
-		if !reflect.DeepEqual(*job.Stop, proof) {
+		if !reflect.DeepEqual(*job.Stop, proof) || !reflect.DeepEqual(job.HTTPStop, httpStop) {
 			return empty, ErrProductMergeHeld
 		}
 		return job, tx.Commit()
 	}
-	instance, err := k.branchOwnerInstanceID()
-	if err != nil {
-		return empty, err
-	}
-	if (job.State != "launching" && job.State != "unknown") || job.OwnerProcess != process.Identify(os.Getpid()) || job.OwnerInstanceID != instance {
+	if job.State != "launching" && job.State != "unknown" {
 		return empty, ErrProductMergeHeld
 	}
+	if httpStop == nil {
+		instance, e := k.branchOwnerInstanceID()
+		if e != nil {
+			return empty, e
+		}
+		if job.OwnerProcess != process.Identify(os.Getpid()) || job.OwnerInstanceID != instance {
+			return empty, ErrProductMergeHeld
+		}
+	} else {
+		copy := *httpStop
+		job.HTTPStop = &copy
+		if err := kernelRecordTx(ctx, tx, "product_merge_http_stop", id, job.Value.Product.Value.Target.WaveID, copy); err != nil {
+			return empty, err
+		}
+	}
+
 	job.Stop, job.State = &proof, mergeStoppedState(proof)
 	if job.State != "stopped_unknown" {
 		if err := releaseProductMergeMutationTx(ctx, tx, job); err != nil {

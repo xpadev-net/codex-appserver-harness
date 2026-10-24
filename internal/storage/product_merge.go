@@ -34,6 +34,7 @@ type ProductMergeCancellation struct {
 	At      time.Time `json:"at"`
 }
 type ProductMerge struct {
+	HTTPStop          *ProductMergeHTTPStop       `json:"http_stop,omitempty"`
 	HTTP              *ProductMergeHTTPOwner      `json:"http,omitempty"`
 	HTTPAbort         *ProductMergeHTTPAbort      `json:"http_abort,omitempty"`
 	Reconciliation    *ProductMergeReconciliation `json:"reconciliation,omitempty"`
@@ -160,7 +161,7 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 			return job, true, ErrTaskEvidence
 		}
 
-	case "launching", "unknown", "stopped_unsent", "stopped_unknown", "rejected", "merged", "aborted_http":
+	case "launching", "unknown", "stopped_unsent", "stopped_unknown", "rejected", "merged", "aborted_http", "stopped_before_http":
 		if job.Cancellation != nil || claimErr != nil || claim.ID != id || claim.OwnerProcess != job.OwnerProcess || claim.OwnerInstanceID != job.OwnerInstanceID || !claim.ClaimedAt.Equal(job.ClaimedAt) || !job.OwnerProcess.Valid() || job.OwnerInstanceID == "" || job.ClaimedAt.Before(job.CreatedAt) {
 			return job, true, ErrTaskEvidence
 		}
@@ -194,7 +195,7 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 	if err := validateProductMergeResult(ctx, q, job); err != nil {
 		return job, true, err
 	}
-	if (job.State == "stopped_unsent" || job.State == "stopped_unknown" || job.State == "rejected" || job.State == "merged") && job.Stop == nil {
+	if (job.State == "stopped_unsent" || job.State == "stopped_unknown" || job.State == "rejected" || job.State == "merged" || job.State == "stopped_before_http") && job.Stop == nil {
 		return job, true, ErrTaskEvidence
 	}
 	if (job.State == "launching" || job.State == "unknown" || job.State == "prepared" || job.State == "canceled") && job.Stop != nil {

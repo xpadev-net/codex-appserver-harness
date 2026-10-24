@@ -41,8 +41,17 @@ func validateProductMergeHTTP(ctx context.Context, q queryer, job ProductMerge) 
 	var abort ProductMergeHTTPAbort
 	ownerErr := taskEvidenceRecord(ctx, q, "product_merge_http_owner", job.ID, &owner)
 	abortErr := taskEvidenceRecord(ctx, q, "product_merge_http_abort", job.ID, &abort)
+	var stopped ProductMergeHTTPStop
+	stopErr := taskEvidenceRecord(ctx, q, "product_merge_http_stop", job.ID, &stopped)
+	if job.HTTPStop != nil {
+		if stopErr != nil || !reflect.DeepEqual(stopped, *job.HTTPStop) || job.HTTP == nil || job.Stop == nil || stopped.MergeID != job.ID || stopped.Process != job.HTTP.Process || stopped.SpecDigest != job.HTTP.SpecDigest || stopped.ProofID != job.Stop.ProofID || stopped.VerifiedAt.IsZero() || stopped.VerifiedAt.Before(job.Stop.FinishedAt) || stopped.VerifiedAt.Before(job.HTTP.ActivatedAt) {
+			return ErrTaskEvidence
+		}
+	} else if !errors.Is(stopErr, sql.ErrNoRows) || job.HTTP != nil && job.Stop != nil {
+		return ErrTaskEvidence
+	}
 	if job.Value.HTTPProtocol == "" {
-		if job.HTTP != nil || job.HTTPAbort != nil || !errors.Is(ownerErr, sql.ErrNoRows) || !errors.Is(abortErr, sql.ErrNoRows) {
+		if job.HTTP != nil || job.HTTPAbort != nil || job.HTTPStop != nil || job.State == "aborted_http" || !errors.Is(ownerErr, sql.ErrNoRows) || !errors.Is(abortErr, sql.ErrNoRows) {
 			return ErrTaskEvidence
 		}
 		return nil
