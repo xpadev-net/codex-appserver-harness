@@ -11,3 +11,11 @@
 実 temp Git の検査では、両変更と両親の保持、既に取り込み済みの read-only 結果、競合内容/HEAD の保持と二重実行拒否、branch strategy/独自 hooksPath の hook/署名/attribute driver の抑止、未知/別系統 SHA、汚れた checkout、既存 operation、fence 前後の変更、worktree 固有 promisor 設定、merge コマンド中の取消し、実際には index/worktree を変更したのに非正常終了して未解決 path がない場合の照合観測を確認する。
 
 これは Task_11 の通常 merge の component 実装である。daemon の現在 HEAD 観測・取得・永続 claim/send/stop、候補の新版採用・検証の取り直し、および競合を新しい fix Task/session へ渡す接続は後続 PR に残る。P 全体の受入には数えない。
+
+## 別 WorkItem の merge を待つ準備
+
+P の work/fix Task が `depends_on` で別 WorkItem の work/fix/verification/review Task を指定した場合、その成果を含む merge を待つ。`ReadProductTaskPreparation`、workspace の reserve/claim/finish、model の ready/turn 予約は共通の DB gate を使う。現在の scope/policy/source/registration/candidate projection に対応する authenticated coverage と merged receipt を読み、merge 時の品質パケットに依存 Task の保存済み結果 ID と入力 digest が含まれることを照合する。
+
+先行 Task の正常完了や native merge 応答だけでは解除しない。receipt/history が失われた場合は準備、Git の claim、model の新起動を保留する。Git の開始後に証拠が失われた場合も、実停止の証拠は stale として保存し、準備成功や model 起動へ変換しない。P の同じ WorkItem 内の検証・レビュー・修正と、汎用 Wave は従来の成果依存を使う。
+
+実 SQLite の検査は、完了済み Task と merge receipt の区別、同じ要求版での plan carry、receipt 復旧による準備再開、遅い proof 喪失による claim/ready の保留、親 turn・新 Task・Wave 完了の非生成を確認する。外部 merge の応答と品質証拠は fixture であり、native P の受入ではない。先行 commit を現在の作業に取り込む base 更新の接続は引き続き後続へ残る。

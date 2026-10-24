@@ -129,6 +129,12 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 	if held {
 		return "product_work_item_held", nil
 	}
+	if err := k.productMergeDependenciesTx(ctx, tx, w, task); err != nil {
+		if errors.Is(err, ErrProductMergeDependencyHeld) {
+			return "product_merge_dependency", nil
+		}
+		return productReadinessError("product_merge_dependency_unavailable", err)
+	}
 	saved, err := k.fixedProductWorkspaceInputTx(ctx, tx, w, task.Spec)
 	if err != nil {
 		return productReadinessError("product_workspace_unavailable", err)

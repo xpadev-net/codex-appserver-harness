@@ -105,4 +105,4 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 
 ## P base 更新の Git component
 
-[固定候補への通常 base merge](product-base-merge.md)は実 temp Git で merge commit の両親、競合、無断実行の抑止と取消しを検査する。controller の永続実行・候補更新・新 fix Task への接続は後続へ残り、P 全体は未達である。
+[固定候補への通常 base merge](product-base-merge.md)は実 temp Git で merge commit の両親、競合、無断実行の抑止と取消しを検査する。別 WorkItem の依存は実 merge の品質証拠を準備・claim・model 起動で待つ。base 更新の永続実行・候補更新・新 fix Task への接続は後続へ残り、P 全体は未達である。

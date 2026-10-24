@@ -162,6 +162,9 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 	if held {
 		return w, task, b, ErrProductWorkspaceHeld
 	}
+	if err := k.productMergeDependenciesTx(ctx, tx, w, task); err != nil {
+		return w, task, b, err
+	}
 	if _, err := k.productWorkspaceSubjectTx(ctx, tx, w, task, value); err != nil {
 		return w, task, b, err
 	}
