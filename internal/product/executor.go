@@ -26,6 +26,7 @@ type ExecutionRepository struct {
 // caller must run it outside the model dispatch loop and retain Store until it
 // joins. These ports do not enable the global product model-dispatch gate.
 type Executor struct {
+	BasePlanner  *BasePlanner
 	Store        *storage.KernelStore
 	Repositories map[int64]ExecutionRepository
 	Runner       Runner
@@ -76,7 +77,24 @@ func (e Executor) Prepare(ctx context.Context, taskID string) (storage.ProductWo
 		}
 		base = subject.Value.Candidate.SHA
 	}
-	return (WorkspacePreparer{Store: e.Store}).Prepare(ctx, storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: repo.Policy.RepositoryID, Repository: repo.Policy.Repository, BaseSHA: base})
+	request := storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: repo.Policy.RepositoryID, Repository: repo.Policy.Repository, BaseSHA: base}
+	preparer := WorkspacePreparer{Store: e.Store}
+	if input.Product == nil && (task.Spec.Kind == "work" || task.Spec.Kind == "fix") && e.BasePlanner != nil {
+		if e.BasePlanner.Executor.Store != e.Store {
+			return storage.ProductWorkspace{}, errors.New("base planner store owner mismatch")
+		}
+		plan, err := e.BasePlanner.Prepare(ctx, task.ID)
+		if err != nil {
+			return storage.ProductWorkspace{}, err
+		}
+		h := plan.Value.Head
+		if h.RepositoryID != repo.Policy.RepositoryID || h.Repository != repo.Name || h.BaseBranch != repo.BaseBranch || h.InitialSHA != repo.InitialSHA || plan.Value.Input.Value.Policy.Value.Repository != repo.Policy.Repository {
+			return storage.ProductWorkspace{}, storage.ErrProductWorkspaceHeld
+		}
+		request.BaseSHA, request.BasePlanID, request.BasePlanDigest = h.HeadSHA, plan.ID, plan.Digest
+		preparer.RefreshBase = e.BasePlanner.Prepare
+	}
+	return preparer.Prepare(ctx, request)
 }
 
 // Apply routes only the stored, normally stopped run. A caller cannot supply a
@@ -200,4 +218,33 @@ func (e Executor) startRetry(ctx context.Context, previousID string, runtime sto
 		return previous, storage.ErrProductRunnerHeld
 	}
 	return e.Runner.StartRetry(ctx, previousID)
+}
+
+// RefreshPreparedBase only refreshes ordinary read evidence for an unused Task.
+// A changed HEAD never rewrites the saved workspace or starts another Git owner.
+func (e Executor) RefreshPreparedBase(ctx context.Context, taskID string, saved storage.ProductWorkspace) (bool, error) {
+	if e.BasePlanner == nil || saved.Value.Request.BasePlanID == "" {
+		return false, nil
+	}
+	if e.BasePlanner.Executor.Store != e.Store {
+		return false, errors.New("base planner store owner mismatch")
+	}
+	current, err := e.Store.CurrentProductBasePlan(ctx, taskID)
+	if err == nil {
+		if current.ID != saved.Value.Request.BasePlanID || current.Digest != saved.Value.Request.BasePlanDigest {
+			return false, storage.ErrProductWorkspaceHeld
+		}
+		return false, nil
+	}
+	if !errors.Is(err, storage.ErrProductBasePlanHeld) {
+		return false, err
+	}
+	refreshed, err := e.BasePlanner.Prepare(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if refreshed.ID != saved.Value.Request.BasePlanID || refreshed.Digest != saved.Value.Request.BasePlanDigest {
+		return true, storage.ErrProductWorkspaceHeld
+	}
+	return true, nil
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -16,16 +17,17 @@ import (
 // permission to retry/complete work. The complete source Task is immutable here;
 // current Task state and scope are checked again before dispatching its wake.
 type ParentAttention struct {
-	ID         string          `json:"id"`
-	SessionID  string          `json:"session_id"`
-	Target     contract.Target `json:"target"`
-	Task       domain.Task     `json:"task"`
-	TaskDigest string          `json:"task_digest"`
-	RunID      string          `json:"run_id"`
-	RunState   string          `json:"run_state"`
-	Reason     string          `json:"reason"`
-	Detail     string          `json:"detail"`
-	CreatedAt  time.Time       `json:"created_at"`
+	Preparation *ProductPreparationSummary `json:"product_preparation,omitempty"`
+	ID          string                     `json:"id"`
+	SessionID   string                     `json:"session_id"`
+	Target      contract.Target            `json:"target"`
+	Task        domain.Task                `json:"task"`
+	TaskDigest  string                     `json:"task_digest"`
+	RunID       string                     `json:"run_id"`
+	RunState    string                     `json:"run_state"`
+	Reason      string                     `json:"reason"`
+	Detail      string                     `json:"detail"`
+	CreatedAt   time.Time                  `json:"created_at"`
 }
 type attentionSubscription struct {
 	ID          string          `json:"id"`
@@ -50,9 +52,17 @@ func parentAttentionTx(ctx context.Context, q queryer, id string) (ParentAttenti
 	if err != nil || a.ID != id || parentAttentionID(a) != id || !a.Target.Valid() || a.TaskDigest != digest || a.SessionID != a.Task.ParentSessionID || a.Target.WaveID != a.Task.WaveID || a.Target.ScopeRevision != a.Task.ScopeRevision || a.Target.PolicyRevision != a.Task.PolicyRevision || a.CreatedAt.IsZero() {
 		return a, errors.New("parent attention source conflict")
 	}
+	if a.Preparation != nil {
+		digest, err := contentDigest(a.Preparation)
+		if err != nil || !preparationAttentionReason(a.Reason) || digest != a.Detail {
+			return a, errors.New("parent preparation attention conflict")
+		}
+	} else if preparationAttentionReason(a.Reason) {
+		return a, errors.New("parent preparation attention missing proof")
+	}
 	return a, nil
 }
-func (k *KernelStore) saveParentAttentionTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task, reason, detail string) (bool, error) {
+func (k *KernelStore) saveParentAttentionTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, task domain.Task, reason, detail string, preparation ...*ProductPreparationSummary) (bool, error) {
 	if wave.DispatchPaused() || wave.State == domain.WaveCompleted || wave.State == domain.WaveCanceled || !k.clock().Before(wave.Deadline) || task.Paused && !task.State.Terminal() {
 		return false, nil
 	}
@@ -73,6 +83,19 @@ func (k *KernelStore) saveParentAttentionTx(ctx context.Context, tx *sql.Tx, wav
 		detail = validUTF8Prefix(detail, 1024)
 	}
 	a := ParentAttention{SessionID: wave.OrchestratorSessionID, Target: wave.Target(), Task: task, TaskDigest: digest, RunID: active, Reason: reason, Detail: detail, CreatedAt: k.clock()}
+	if len(preparation) > 1 {
+		return false, errors.New("one preparation attention source required")
+	}
+	if len(preparation) == 1 {
+		if preparation[0] == nil {
+			return false, errors.New("preparation attention source required")
+		}
+		a.Preparation = preparation[0]
+		digest, err := contentDigest(a.Preparation)
+		if err != nil || digest != detail || !preparationAttentionReason(reason) {
+			return false, errors.New("preparation attention source mismatch")
+		}
+	}
 	if active != "" {
 		if err = tx.QueryRowContext(ctx, "SELECT state FROM kernel_run_bindings WHERE run_id=? AND session_id=?", active, task.SessionID).Scan(&a.RunState); err != nil {
 			return false, err
@@ -167,6 +190,7 @@ func (k *KernelStore) fanoutParentAttentionTx(ctx context.Context, tx *sql.Tx, i
 		return errors.New("parent attention subscription conflict")
 	}
 	n := Notification{ID: structureID("notification-", sub.ID, a.ID), SubscriptionID: sub.ID, SessionID: a.SessionID, Target: a.Target, SourceTarget: a.Task.Target(), EventID: a.ID, SourceEventID: a.ID, EventBoundary: intent.Sequence, ObservedVia: "event", Kind: "parent_attention", TaskID: a.Task.ID, TaskState: a.Task.State, ResultID: a.Task.ResultID, AttentionID: a.ID, Reason: a.Reason, Detail: a.Detail, State: "pending", CreatedAt: k.clock()}
+	n.Preparation = a.Preparation
 	raw, err = json.Marshal(n)
 	if err != nil {
 		return err
@@ -191,6 +215,9 @@ func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.
 	subID := structureID("attention-subscription-", a.SessionID, a.ID)
 	if b.Kind != "orchestrator" || a.SessionID != b.ID || n.ID != structureID("notification-", subID, a.ID) || n.SubscriptionID != subID || n.SessionID != a.SessionID || n.Target != a.Target || n.SourceTarget != a.Task.Target() || n.TaskID != a.Task.ID || n.TaskState != a.Task.State || n.ResultID != a.Task.ResultID || n.EventID != a.ID || n.SourceEventID != a.ID || n.Reason != a.Reason || n.Detail != a.Detail {
 		return errors.New("parent attention wake conflict")
+	}
+	if !reflect.DeepEqual(n.Preparation, a.Preparation) {
+		return errors.New("parent preparation notification conflict")
 	}
 	task, err := loadTask(ctx, tx, a.Task.ID)
 	if err != nil {
@@ -218,6 +245,23 @@ func (k *KernelStore) checkParentAttentionSourceTx(ctx context.Context, tx *sql.
 			return err
 		}
 		if state != a.RunState {
+			return ErrWakeHeld
+		}
+	}
+	if preparationAttentionReason(a.Reason) {
+		wave, err := loadWave(ctx, tx, a.Target.WaveID)
+		if err != nil {
+			return err
+		}
+		reason, summary, err := k.productPreparationAttentionTx(ctx, tx, wave, task)
+		if err != nil {
+			return err
+		}
+		digest, err := contentDigest(summary)
+		if err != nil {
+			return err
+		}
+		if reason != a.Reason || digest != a.Detail || !reflect.DeepEqual(summary, a.Preparation) {
 			return ErrWakeHeld
 		}
 	}

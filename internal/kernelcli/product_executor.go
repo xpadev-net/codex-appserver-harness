@@ -155,6 +155,10 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 		return productExecutorPipeline{}, err
 	}
 	executor := product.Executor{Store: k, Repositories: repositories, Runner: product.Runner{Store: k, Executable: exe, SocketPath: filepath.Join(k.Root, ipc.SocketName)}}
+	if c.Publication != nil {
+		sourceGate := product.KernelSourceGate{Store: k, Policies: sources, API: product.GitHubResourceAPI}
+		executor.BasePlanner = &product.BasePlanner{Executor: executor, Source: sourceGate.Check, API: product.GitHubResourceAPI}
+	}
 	every := time.Duration(c.EverySeconds) * time.Second
 	w := product.NewExecutionWorker(executor, every)
 	finalPlanner, finalRunner := productFinalPipeline(executor, mergePolicies, sources, exe)

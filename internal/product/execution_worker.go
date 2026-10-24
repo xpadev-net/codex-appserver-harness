@@ -36,7 +36,7 @@ func (w *ExecutionWorker) Hint() {
 }
 
 func executionPending(err error) bool {
-	return errors.Is(err, storage.ErrProductWorkspaceHeld) || errors.Is(err, storage.ErrProductSubjectHeld) || errors.Is(err, storage.ErrProductRunnerHeld) || errors.Is(err, storage.ErrProductQualityHeld) || errors.Is(err, storage.ErrTemplateNeedsMain) || errors.Is(err, storage.ErrExecutionCapacity)
+	return errors.Is(err, storage.ErrProductBasePlanHeld) || errors.Is(err, storage.ErrProductWorkspaceHeld) || errors.Is(err, storage.ErrProductSubjectHeld) || errors.Is(err, storage.ErrProductRunnerHeld) || errors.Is(err, storage.ErrProductQualityHeld) || errors.Is(err, storage.ErrTemplateNeedsMain) || errors.Is(err, storage.ErrExecutionCapacity)
 }
 
 func (w *ExecutionWorker) task(ctx context.Context, id string) (bool, error) {
@@ -50,14 +50,41 @@ func (w *ExecutionWorker) task(ctx context.Context, id string) (bool, error) {
 	}
 	switch task.State {
 	case contract.TaskReady:
-		// Preparing an already saved workspace is not permission to repeat Git.
-		if saved, err := k.ProductWorkspace(ctx, task.ID); err == nil && saved.State == "ready" {
-			return false, nil
-		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return false, err
+		saved, readErr := k.ProductWorkspace(ctx, task.ID)
+		if readErr != nil && readErr != sql.ErrNoRows {
+			changed, noticeErr := k.NotifyProductPreparationAttention(ctx, task.ID)
+			return changed, errors.Join(readErr, noticeErr)
 		}
-		_, err := w.Executor.Prepare(ctx, id)
-		return err == nil, err
+		if readErr == nil {
+			switch saved.State {
+			case "ready":
+				if saved.Value.Request.BasePlanID == "" {
+					return false, nil
+				}
+				refreshed, refreshErr := w.Executor.RefreshPreparedBase(ctx, id, saved)
+				noticed, noticeErr := k.NotifyProductPreparationAttention(ctx, task.ID)
+				return refreshed || noticed, errors.Join(refreshErr, noticeErr)
+			case "failed", "stale", "launching":
+				return k.NotifyProductPreparationAttention(ctx, task.ID)
+			}
+		}
+		_, prepareErr := w.Executor.Prepare(ctx, id)
+		if prepareErr == nil {
+			return true, nil
+		}
+		if ctx.Err() != nil {
+			return false, prepareErr
+		}
+		stopped, stopErr := k.FinishChangedUnstartedWorkspace(ctx, task.ID)
+		// No admission may exist when a source read failed before reservation.
+		if errors.Is(stopErr, sql.ErrNoRows) {
+			stopErr = nil
+		}
+		if stopped {
+			prepareErr = nil
+		}
+		noticed, noticeErr := k.NotifyProductPreparationAttention(ctx, task.ID)
+		return stopped || noticed, errors.Join(prepareErr, stopErr, noticeErr)
 	case contract.TaskCompleted:
 		if task.Spec.Kind == "review" {
 			wave, err := k.Wave(ctx, task.WaveID)
@@ -139,7 +166,9 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 			}
 		}
 		if tasksPending {
-			page, err := w.Executor.Store.ProductExecutionTasks(ctx, tasksAfter, 128)
+			// Bound synchronous source/HEAD reads before returning to runner
+			// reconciliation. The cursor carries remaining Tasks to the next page.
+			page, err := w.Executor.Store.ProductExecutionTasks(ctx, tasksAfter, 4)
 			if err != nil {
 				tasksAfter, tasksPending = "", false
 				report(err)
@@ -158,6 +187,11 @@ func (w *ExecutionWorker) Run(ctx context.Context) (runErr error) {
 			}
 		}
 		if tasksPending || jobsPending {
+			// Keep checking detached owners between Task pages, including when
+			// the preceding job sweep had already reached its end.
+			if tasksPending && !jobsPending {
+				jobsAfter, jobsPending = "", true
+			}
 			continue
 		}
 		select {
