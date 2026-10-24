@@ -500,33 +500,34 @@ func (k *KernelStore) CancelPreparedProductMerge(ctx context.Context, id, owner,
 	if job.Value.OwnerID != owner || job.Digest != digest {
 		return empty, ErrProductMergeHeld
 	}
+	job, err = k.cancelPreparedProductMergeTx(ctx, tx, job, proofID, reason)
+	if err != nil {
+		return empty, err
+	}
+	return job, tx.Commit()
+}
+
+func (k *KernelStore) cancelPreparedProductMergeTx(ctx context.Context, tx *sql.Tx, job ProductMerge, proofID, reason string) (ProductMerge, error) {
+	var empty ProductMerge
 	if job.State == "canceled" {
 		if job.Cancellation.ProofID != proofID || job.Cancellation.Reason != reason {
 			return empty, ErrProductMergeHeld
 		}
-		return job, tx.Commit()
+		return job, nil
 	}
 	if job.State != "prepared" {
 		return empty, ErrProductMergeHeld
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE kernel_resource_leases SET state='released' WHERE resource=? AND run_id=? AND generation=? AND state='held'", job.MutationLease.Resource, job.ID, job.MutationLease.Generation)
-	if err != nil {
+	if err := releaseProductMergeMutationTx(ctx, tx, job); err != nil {
 		return empty, err
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return empty, err
-	}
-	if n != 1 {
-		return empty, ErrProductMergeHeld
 	}
 	cancellation := ProductMergeCancellation{ProofID: proofID, Reason: reason, At: k.clock()}
 	job.State, job.Cancellation = "canceled", &cancellation
-	if err := kernelRecordTx(ctx, tx, "product_merge_cancel", id, job.Value.Product.Value.Target.WaveID, cancellation); err != nil {
+	if err := kernelRecordTx(ctx, tx, "product_merge_cancel", job.ID, job.Value.Product.Value.Target.WaveID, cancellation); err != nil {
 		return empty, err
 	}
 	if err := saveProductMergeTx(ctx, tx, job); err != nil {
 		return empty, err
 	}
-	return job, tx.Commit()
+	return job, nil
 }

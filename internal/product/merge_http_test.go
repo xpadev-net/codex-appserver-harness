@@ -22,6 +22,14 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 	t.Helper()
 	ctx := context.Background()
 	k := g.Cloud.Store
+	workerMode := ""
+	if strings.HasPrefix(mode, "worker_") {
+		workerMode = strings.TrimPrefix(mode, "worker_")
+		mode = "group"
+		if workerMode == "alias" {
+			mode = "peer"
+		}
+	}
 	driverMode := ""
 	if strings.HasPrefix(mode, "driver_") {
 		driverMode = strings.TrimPrefix(mode, "driver_")
@@ -38,11 +46,15 @@ func checkMergeHTTPWrapper(t *testing.T, g KernelMergeGate, saved storage.Produc
 			mode = "no_request"
 		}
 	}
-	job, err := k.PrepareProductMergeHTTP(ctx, requestID, "kernel-http-owner", "merge")
-	if err != nil {
-		t.Fatal(err)
+	var job storage.ProductMerge
+	var err error
+	if workerMode == "" {
+		job, err = k.PrepareProductMergeHTTP(ctx, requestID, "kernel-http-owner", "merge")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	if driverMode == "" {
+	if driverMode == "" && workerMode == "" {
 		if _, err := k.ClaimProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest); err != nil {
 			t.Fatal(err)
 		}
@@ -112,6 +124,10 @@ esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
+	}
+	if workerMode != "" {
+		checkMergeDispatchWorker(t, g, saved, requestID, bin, mode, workerMode)
+		return
 	}
 	if driverMode != "" {
 		checkMergeDriver(t, g, job, bin, mode, driverMode)
