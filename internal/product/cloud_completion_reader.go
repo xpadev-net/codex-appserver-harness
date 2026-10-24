@@ -16,7 +16,8 @@ import (
 )
 
 // CloudCompletionReader measures terminal provider responses for an original
-// request. Unlike formal merge assessment it permits a closed PR or newer head,
+// request. It requires the original comparison base; unlike formal merge
+// assessment it permits a closed PR or newer head,
 // but never adopts that head or returns an approval decision.
 type CloudCompletionReader struct {
 	Store  *storage.KernelStore
@@ -113,7 +114,7 @@ func (r CloudCompletionReader) Reconcile(ctx context.Context, id string) (storag
 	if err != nil {
 		return empty, err
 	}
-	if pr.Number != p.PRNumber || pr.Head.Repo.ID != p.WorkItem.RepositoryID || pr.Base.Repo.ID != p.WorkItem.RepositoryID || pr.Head.Ref != p.WorkItem.Branch || pr.State != "open" && pr.State != "closed" {
+	if pr.Number != p.PRNumber || pr.Head.Repo.ID != p.WorkItem.RepositoryID || pr.Base.Repo.ID != p.WorkItem.RepositoryID || pr.Head.Ref != p.WorkItem.Branch || pr.Base.Ref != p.BaseBranch || pr.Base.SHA != p.Candidate.BaseSHA || pr.State != "open" && pr.State != "closed" {
 		return empty, storage.ErrProductCloudHeld
 	}
 	comments, err := api.ResourcePages(ctx, fmt.Sprintf("issues/%d/comments?per_page=100", p.PRNumber), "")

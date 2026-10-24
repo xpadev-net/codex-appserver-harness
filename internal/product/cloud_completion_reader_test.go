@@ -14,7 +14,7 @@ import (
 )
 
 func TestCloudCompletionReaderMeasuresAssignedResponseWithoutCurrentApproval(t *testing.T) {
-	for _, mode := range []string{"commented", "closed", "new_head", "new_actor_config", "approved", "changes_requested", "dismissed", "legacy", "wrong_actor", "wrong_sha", "old_review", "pending", "future_review", "missing_comment", "edited_comment", "duplicate_comment", "duplicate_review", "changed_head", "changed_repository", "unknown_mapping", "unknown_request", "revoked", "read_error", "report_error"} {
+	for _, mode := range []string{"commented", "closed", "new_head", "new_actor_config", "approved", "changes_requested", "dismissed", "legacy", "wrong_actor", "wrong_sha", "wrong_base_ref", "wrong_base_sha", "old_review", "pending", "future_review", "missing_comment", "edited_comment", "duplicate_comment", "duplicate_review", "changed_head", "changed_repository", "unknown_mapping", "unknown_request", "revoked", "read_error", "report_error"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			r, requestAPI, saved, id := requestFixture(t)
@@ -72,6 +72,10 @@ func TestCloudCompletionReaderMeasuresAssignedResponseWithoutCurrentApproval(t *
 				api.reviews[0].User.ID = 92
 			case "wrong_sha":
 				api.reviews[0].CommitID = strings.Repeat("c", 40)
+			case "wrong_base_ref":
+				api.pr.Base.Ref = "retargeted"
+			case "wrong_base_sha":
+				api.pr.Base.SHA = strings.Repeat("c", 40)
 			case "old_review":
 				api.reviews[0].SubmittedAt = round.RequestedAt.Add(-time.Second)
 			case "pending":
