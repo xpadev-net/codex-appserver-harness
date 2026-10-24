@@ -67,6 +67,9 @@ func (k *KernelStore) ReadProductTaskPreparation(ctx context.Context, taskID str
 			return out, err
 		}
 	}
+	if err := k.productMergeDependenciesTx(ctx, tx, w, task); err != nil {
+		return out, err
+	}
 	registration, err := loadProductWorkItemRegistration(ctx, tx, task.Spec.WorkItemIDs[0])
 	if err != nil {
 		return out, err
