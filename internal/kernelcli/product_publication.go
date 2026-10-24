@@ -17,8 +17,10 @@ import (
 )
 
 // Publication is a second, explicit host opt-in; enabling local preparation
-// alone never starts GitHub writes. No setting enables merge or model readiness.
+// alone never starts GitHub writes. Merge needs another explicit host opt-in;
+// these settings do not enable model readiness.
 type ProductPublicationConfig struct {
+	Merge          *ProductMergeConfig         `json:"merge,omitempty"`
 	Workers        int                         `json:"workers"`
 	ReviewRoutes   []ProductReviewRouteConfig  `json:"review_routes"`
 	SourcePolicies []product.IssueSourcePolicy `json:"source_policies,omitempty"`

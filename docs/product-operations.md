@@ -667,7 +667,7 @@ fixtureでは257件超のページ、破損した先頭依頼の後の正常処�
 
 必須CI設定は1〜128件を要求し、CIはhost指定の名前・App ID・success条件の最新checkを選び、完了時刻も確認する。`head`と`test_merge`を明示設定し、後者はtest-merge commitの二親が現在head/baseと一致することを実APIで照合する。check/inline feedbackとrulesのCLEANを取得し、Cloud/PR/repositoryおよびCI/feedback/rulesを再取得して変化を拒否する。全体30秒・共有16 MiB、collection/API要求数も各readerで制限する。rules取得用`ResourceConditions`はboundedなread-only gh subprocessを使う。
 
-返す`MergeAssessment`は観測値であり、永続grant・送信許可・WorkItem/Wave完了ではない。daemon merge送信、専用journal、expected-head付きの一回限りの送信fenceとunknown復旧は後続実装で、この判定だけで自動mergeを有効にしない。fixtureでは現候補のAPPROVED、CIの発行元/最新性/二親、能力取消、読み取り中の変更、feedbackとoperator holdを確認する。実SQLite/Git/runnerと独立reviewで作った品質証拠を使う統合fixture（sourceは版確認のfixture）でも本gateを通すが、native Cloud/P実受入には数えない。
+返す`MergeAssessment`は観測値であり、永続grant・送信許可・WorkItem/Wave完了ではない。daemonの送信設定・専用journal・expected-head fence・復旧は末尾の接続手順を参照し、この判定だけで自動mergeを有効にしない。fixtureでは現候補のAPPROVED、CIの発行元/最新性/二親、能力取消、読み取り中の変更、feedbackとoperator holdを確認する。実SQLite/Git/runnerと独立reviewで作った品質証拠を使う統合fixture（sourceは版確認のfixture）でも本gateを通すが、native Cloud/P実受入には数えない。
 
 ### Merge journalの準備・claim・送信fence
 
@@ -677,7 +677,7 @@ fixtureでは257件超のページ、破損した先頭依頼の後の正常処�
 
 fence後は`unknown`にし、結果が確定するまではmutation leaseを保持する。preparedは再open後にclaimできるが、launching/unknownは同じowner名でも再claim・再送できず、head/history/claim/send/gateの欠落も権限を再生成しない。`CancelPreparedProductMerge`は物理claim前のpreparedだけを取り消し、leaseのowner/generationを指定して解放する。再送された古い取消は次のownerのleaseを解放しない。claim済み/unknownの取消にnot_startedを推測しない。
 
-この段階ではHTTP merge、物理終了・既知結果の保存、unknownの照合、WorkItem merged/Wave最終受入は未接続で、自動mergeを有効にしない。storage fixtureは外部gate事実を注入してjournalの認証・atomic性・二重実行防止を検証する。実qualityを使う統合fixtureでは、claim前のgate観測を拒否し、claim後に実行したgateのpacketが送信fenceと保存されることを確認する。これらをnative Cloud/P受入に数えない。
+HTTP merge・物理終了・既知結果とunknownの照合は末尾のregistered transport/daemonへ接続する。WorkItem merged/Wave最終受入は未接続で、このstorage portだけでは自動mergeを有効にしない。storage fixtureは外部gate事実を注入してjournalの認証・atomic性・二重実行防止を検証する。実qualityを使う統合fixtureでは、claim前のgate観測を拒否し、claim後に実行したgateのpacketが送信fenceと保存されることを確認する。これらをnative Cloud/P受入に数えない。
 
 ### Merge通信ownerの終了と既知結果
 
@@ -685,7 +685,7 @@ fence後は`unknown`にし、結果が確定するまではmutation leaseを保�
 
 未送信で停止した`stopped_unsent`と明示応答で拒否された`rejected`は自分のmutation leaseを解放し、PR枠を保持する。既知の`merged`応答は自分のmutation leaseと元PRの枠を同じtransactionで解放する。別の正当な観測が既に元PRをclosed/mergedで解放していれば、その既存proofを保存して保持する。`stopped_unknown`ではclientの物理終了を保存してもmutation leaseを保持し、open/未発見を未送信と推測したり再送したりしない。
 
-pause/cancel/新候補の後でも元の終了事実を保存し、現在Productをmergedへ変更せず、正式承認やWave受入を生成しない。終了receiptは不変とし、再open/再送が次ownerのleaseを解放しない。再起動したcontrollerは未保存の旧owner終了を捏造できず、欠落した終了証拠も再生成しない。fixtureで各disposition、旧結果/新候補、再open、次lease、rollbackと不正応答を検証する。実HTTP adapterとWorkItem/parent ledgerへの反映は後続であり、注入した応答事実をnative Cloud/P合格に数えない。
+pause/cancel/新候補の後でも元の終了事実を保存し、現在Productをmergedへ変更せず、正式承認やWave受入を生成しない。終了receiptは不変とし、再open/再送が次ownerのleaseを解放しない。再起動したcontrollerは未保存の旧owner終了を捏造できず、欠落した終了証拠も再生成しない。fixtureで各disposition、旧結果/新候補、再open、次lease、rollbackと不正応答を検証する。実HTTP adapterは末尾のregistered transportを使い、WorkItem/parent ledgerへの反映は後続であり、注入した応答事実をnative Cloud/P合格に数えない。
 
 
 `ConfirmProductMergeObserved`は`stopped_unknown`の保存済み終了receiptを前提に、別のtrusted read adapterが取得した元repository/PR/marker/head/branch/baseに一致するclosed+mergedとmerge SHAだけを記録する。open・closedだが未merge・別head・古い/未来の観測は保持する。再起動したreconcilerも保存済みの実終了proofを使えるが、未保存の物理終了を作れない。元のunknown stop/gateを変更せず、独立したreconciliation receiptとPR枠/mutation lease解放を同じtransactionに保存する。再送や権限の再付与は行わず、現在Productを巻き戻さない。fixtureで不正観測の拒否、cancel後/reopen後の正の結果、rollback、次owner保護とreceipt欠落時の再生成拒否を確認する。
@@ -694,7 +694,7 @@ pause/cancel/新候補の後でも元の終了事実を保存し、現在Product
 
 `MergeReconciler.Reconcile`は保存済みmerge journalを先に認証し、既知のmergedは再取得なしで返す。`stopped_unknown`の実終了receiptがある場合だけ、boundedなread-only APIでrepositoryのID/名前/default branchと元PRの番号・repository・marker・branch・head/base refを確認する。closed+mergedと有効なnative merge commit SHAを要求し、PR/repositoryを前後再取得して途中の変更を拒否する。30秒・共有8 MiBとreaderの要求数制限内で完了した正の事実だけをstorageのreconciliation portへ渡す。
 
-open/未merge/別head/retarget/別repository/marker欠落・取得失敗は保持し、実終了receiptがなければAPI照合で物理終了を推測しない。これは元PRが既にmergeされた事実の記録であり、比較baseの再承認や現在Product/Waveの受入を意味しない。cancel後も旧事実を保存する。実quality/runnerを持つ統合fixtureの注入APIで各拒否・前後照合・commit後のfact・既存receiptのAPI再取得なしを確認する。daemonの周期呼出しと実HTTP mergeは後続とし、このfixtureをnative P受入には数えない。
+open/未merge/別head/retarget/別repository/marker欠落・取得失敗は保持し、実終了receiptがなければAPI照合で物理終了を推測しない。これは元PRが既にmergeされた事実の記録であり、比較baseの再承認や現在Product/Waveの受入を意味しない。cancel後も旧事実を保存する。実quality/runnerを持つ統合fixtureの注入APIで各拒否・前後照合・commit後のfact・既存receiptのAPI再取得なしを確認する。daemonの周期照合と実HTTP送信は末尾の接続を使い、このfixtureをnative P受入には数えない。
 
 ### Merge照合workerの常駐接続
 
@@ -708,7 +708,7 @@ work listは`stopped_unknown`のheadを選び、まだphysical stopのないunkn
 
 登録前は`AbortUnactivatedProductMergeHTTP`が同じDB transactionで将来の登録を禁止し、`aborted_http`のproofを保存して自分のmutation leaseだけを解放できる。遅れて起動したwrapperは登録に失敗して送信できない。これは登録protocolが事前にpinされたintentだけの原子的な証明であり、旧intentのHTTP owner不在・file欠落・PR未発見を未送信と推測しない。登録が先に成立した場合は中止できず、実clientの終了確認が必要である。旧parentのstore epochを実HTTP ownerの停止証拠に読み替えることも禁止する。
 
-旧形式のdigestを保つためprotocolは省略可能だが、既存intentを後から昇格/降格させない。HTTP owner/abortの独立recordとheadの欠落も再生成しない。fixtureでは別process groupの実Go子processが自分を登録し、二重登録/別process/中止との競合、遅延wrapper、cancel/古いgate、rollback、reopen、次lease保護と旧形式拒否を確認する。実HTTP wrapper・responseファイルとdaemonからの送信は後続で、この登録port自体はGitHubへ書き込まずnative P受入にも数えない。
+旧形式のdigestを保つためprotocolは省略可能だが、既存intentを後から昇格/降格させない。HTTP owner/abortの独立recordとheadの欠落も再生成しない。fixtureでは別process groupの実Go子processが自分を登録し、二重登録/別process/中止との競合、遅延wrapper、cancel/古いgate、rollback、reopen、次lease保護と旧形式拒否を確認する。実HTTP wrapper・response file・daemon送信は後述の接続を使い、この登録port自体はGitHubへ書き込まずnative P受入にも数えない。
 
 
 `FinishProductMergeHTTP`は保存済みHTTP ownerのprocess groupを`process.WaitStopped`で独立に確認し、spec digest/元requestに結び付いたresponse/stopとHTTP停止witnessを同じtransactionで保存する。親controllerの再起動後も使用できる。生存/不明なgroup、別spec、欠落したowner/witnessは解放しない。登録後のtransport開始時刻はactivation時刻とし、親のsend fenceが先にあることを認証する。既知のmerged/rejectedは元のcapacity規則を使い、unknownは実終了を保存してもmutation leaseを保持し、正のmerged API照合だけで後日解放する。
@@ -725,7 +725,7 @@ wrapperは受け取った新しい測定packetで`MarkProductMergeHTTPMayHaveSen
 
 ghはwrapperと同じgroupを継承する。wrapperは応答保存後もsupervisorがgroup全体を停止するまでleaderを保持し、保存済みresultを物理停止に読み替えない。再起動したcontrollerも保存済みidentityでgroupを停止/確認してから`FinishProductMergeHTTP`へ渡す。応答fileなし/不正は未送信証拠にしない。isolated model/runnerにはHTTP spec/result directory・authority socket/lockもforbidden pathとして渡す。
 
-実Git/runner/独立reviewのquality fixtureから実Go subprocess・fake-ghを起動し、expected-head body、一回だけのPUT、unknown保持、metadata不一致、controller不在、直前pause、他PID拒否、応答後の生存descendant、spec改変/消失したnative-write証拠、private file制限を確認する。Cloud/CI/source応答とHTTP結果はfixtureであり、native P合格には数えない。daemonのmerge dispatch/authority起動と自動復旧ループは後続で、ここでは自動mergeを有効化しない。
+実Git/runner/独立reviewのquality fixtureから実Go subprocess・fake-ghを起動し、expected-head body、一回だけのPUT、unknown保持、metadata不一致、controller不在、直前pause、他PID拒否、応答後の生存descendant、spec改変/消失したnative-write証拠、private file制限を確認する。Cloud/CI/source応答とHTTP結果はfixtureであり、native P合格には数えない。daemonのmerge dispatch/authority起動と自動復旧は末尾の明示設定で接続する。wrapper単体では自動mergeを有効化しない。
 
 ### ControllerによるHTTP wrapperの監督と再起動回収
 
@@ -733,7 +733,7 @@ ghはwrapperと同じgroupを継承する。wrapperは応答保存後もsupervis
 
 `Recover`はモデル・HTTP送信・代替wrapperを起動しない。元のHTTP登録があれば5秒以内でgroupを停止し、その後private resultを再認証して`FinishProductMergeHTTP`へ渡す。result/specの欠落・不正は、native write recordがなくても`outcome_unknown`としてmutation leaseを保持する。HTTP登録前ならDB transactionで将来の登録を封じる既存abort protocolを使う。既存の停止/abort結果は保存済みreceiptを返し、再利用されたPIDへ触れない。
 
-実Go wrapper・fake-ghのfixtureで、成功と生存descendant、unknown、native送信中cancel後のgroup停止、明確な未開始、実行file欠落、別store epochでの回収、result欠落/不正spec、未登録intentのseal、再実行でPUTが増えないことを確認する。daemonの送信queue/authority起動は後続であり、自動mergeとnative P受入は引き続き未成立である。
+実Go wrapper・fake-ghのfixtureで、成功と生存descendant、unknown、native送信中cancel後のgroup停止、明確な未開始、実行file欠落、別store epochでの回収、result欠落/不正spec、未登録intentのseal、再実行でPUTが増えないことを確認する。daemonの送信queue/authority起動は末尾の明示設定を使う。native P受入は引き続き未成立である。
 
 ### 親merge gateからtrusted transportへの接続
 
@@ -741,7 +741,7 @@ ghはwrapperと同じgroupを継承する。wrapperは応答保存後もsupervis
 
 claim後のgate失敗/cancelでは、同じcontroller epochが親fence未成立を認証して`not_started`の停止receiptを保存する。fenceのcommit応答が不明な場合やspec/起動失敗は、再読したjournalに従ってregistered HTTPのseal/実group回収へ渡す。既存のclaimは別scanの起動権限にせず、保存済みterminal receiptは読み取りだけで返す。親gateは正式Cloud承認へ変換されず、driver結果もWave最終受入には使わない。
 
-実quality fixtureで初期hold後の再測定、claim後pause、fence直前cancel、spec作成失敗、既存claimの再送拒否、実wrapperによる成功とterminal replayを確認する。常駐queue/authority起動およびnative P受入は引き続き別途必要である。
+実quality fixtureで初期hold後の再測定、claim後pause、fence直前cancel、spec作成失敗、既存claimの再送拒否、実wrapperによる成功とterminal replayを確認する。常駐queue/authority起動は末尾の明示設定を使い、native P受入は引き続き別途必要である。
 
 ### 親claim直後の再起動windowの封鎖
 
@@ -757,4 +757,30 @@ registered protocolの`AbortUnactivatedProductMergeHTTP`は、親claim済み・�
 
 `CancelStalePreparedProductMerge`は正の候補/版変更、Wave取消/完了を同じtransactionで認証し、未claim intentの取消と自分のmutation lease解放だけを行う。pause/merge holdだけでは取り消さず、現在projectionの欠落・破損も古い候補の証拠にはしない。PR lifetimeと元履歴を保持し、claimed intentをこのportで取り消さない。
 
-fixtureは257件超のpage/reopen/破損行、request→journalの共通flight key、保留時の予約なしと回転抑制、host gate cleanupのjoin、実Go wrapper/fake-ghからの一回だけのPUTとgroup停止、候補更新後の取消、未fence回収、commit後通知とモデルrun数不変を確認する。daemonの明示的なmerge設定・authority起動とnative P受入は後続で、自動mergeはまだ有効化しない。
+fixtureは257件超のpage/reopen/破損行、request→journalの共通flight key、保留時の予約なしと回転抑制、host gate cleanupのjoin、実Go wrapper/fake-ghからの一回だけのPUTとgroup停止、候補更新後の取消、未fence回収、commit後通知とモデルrun数不変を確認する。daemonへの接続は次節の明示的なmerge設定を使う。native P受入は引き続き別途必要である。
+
+### Daemonの明示的なmerge設定
+
+private schema 1 product executor設定に`publication.merge`を追加した場合だけ、canonical merge gate・trusted HTTP supervisor・永続dispatch queueを接続する。publication単独ではmerge authorityを作らない。worker数は1〜8、repository設定は1〜128件とし、同じrepositoryのreview routeとその`cloud_reviewer_ids`が必要である。次は`publication.merge`の例であり、数値IDは導入先の実測値へ置き換える。
+
+```json
+{
+  "workers": 2,
+  "repositories": [{
+    "repository_id": 17,
+    "method": "merge",
+    "ci_ref_mode": "head",
+    "required_checks": [{"name": "unit", "app_id": 9, "allowed_conclusions": ["success"]}],
+    "trusted_reviewer_ids": [91],
+    "required_approvals": 1
+  }]
+}
+```
+
+methodは`merge`/`squash`/`rebase`、CI refは`head`/`test_merge`から明示する。必須CIは1〜128件の一意な名前・正のApp ID・successだけを要求する。trusted reviewerは同じCloud routeの割当actorの部分集合とし、必要承認数は1以上かつその人数以下である。好意的なcomment/reaction・ローカルreview・未割当actorは正式承認にしない。
+
+capability reportは同じreview routeのcanonical private `capabilities_path`から毎回読む。repository ID/name/default branchを設定と照合し、unknown/unsupportedのreportでも安全な待機のため設定の読込は認めるが、全merge能力のverified/evidence、現在SHAの有効なAPPROVED、未解消feedbackなし、正しいCIとrulesが成立するまで親/client gateを通さない。設定の存在やpolicy flagは能力を昇格せず、report fileは引き続きisolated workerから隠す。
+
+daemonは既存のroot排他の下でprivate authorityのsingleton lock/listenerを先に確保し、その後にpublication/observer/Cloud completion/merge reconciliationとmerge dispatchを共通pipelineで起動する。authorityは登録されたHTTP processだけから元intent/specの照会を受け、同じcanonical gateを直前に実行する。失敗/終了時は全workerをcancel/joinし、private authorityを閉じてから呼出元へ戻る。旧intentのseal/停止回収は既存journalを使い、設定のmethod変更を再送の許可にしない。
+
+設定境界・live reportの再読込・unknown/unsupported保持、実private socketの起動と未登録caller/重複owner拒否、publication単独時の不在、shutdown後のsocket cleanupと全worker join、モデルrun数不変をfixtureで確認する。製品モデルdispatchの`product_readiness_unavailable`、WorkItem/親最終受入・部分/後続工程とnative P受入は引き続き接続・検証中である。
