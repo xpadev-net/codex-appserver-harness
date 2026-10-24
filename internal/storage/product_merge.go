@@ -33,18 +33,20 @@ type ProductMergeCancellation struct {
 	At      time.Time `json:"at"`
 }
 type ProductMerge struct {
-	GateDigest      string                    `json:"gate_digest,omitempty"`
-	Cancellation    *ProductMergeCancellation `json:"cancellation,omitempty"`
-	ID              string                    `json:"id"`
-	Value           ProductMergeValue         `json:"value"`
-	Digest          string                    `json:"digest"`
-	State           string                    `json:"state"` // prepared, launching, unknown, canceled
-	MutationLease   ResourceLease             `json:"mutation_lease"`
-	CreatedAt       time.Time                 `json:"created_at"`
-	ClaimedAt       time.Time                 `json:"claimed_at"`
-	OwnerProcess    process.Identity          `json:"owner_process"`
-	OwnerInstanceID string                    `json:"owner_instance_id"`
-	MayHaveSentAt   time.Time                 `json:"may_have_sent_at"`
+	Stop              *ProductMergeStop         `json:"stop,omitempty"`
+	PRLifetimeRelease *OperationReleaseProof    `json:"pr_lifetime_release,omitempty"`
+	GateDigest        string                    `json:"gate_digest,omitempty"`
+	Cancellation      *ProductMergeCancellation `json:"cancellation,omitempty"`
+	ID                string                    `json:"id"`
+	Value             ProductMergeValue         `json:"value"`
+	Digest            string                    `json:"digest"`
+	State             string                    `json:"state"` // prepared, launching, unknown, canceled, stopped_unsent, stopped_unknown, rejected, merged
+	MutationLease     ResourceLease             `json:"mutation_lease"`
+	CreatedAt         time.Time                 `json:"created_at"`
+	ClaimedAt         time.Time                 `json:"claimed_at"`
+	OwnerProcess      process.Identity          `json:"owner_process"`
+	OwnerInstanceID   string                    `json:"owner_instance_id"`
+	MayHaveSentAt     time.Time                 `json:"may_have_sent_at"`
 }
 type ProductMergeClaim struct {
 	Merge ProductMerge `json:"merge"`
@@ -135,7 +137,8 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_merge_gate' AND id=?),EXISTS(SELECT 1 FROM records WHERE kind='product_merge_cancel' AND id=?)", id, id).Scan(&hasGate, &hasCancel); err != nil {
 		return job, true, err
 	}
-	if (job.State == "unknown") != hasGate || (job.State == "canceled") != hasCancel {
+	hasSent := !job.MayHaveSentAt.IsZero()
+	if hasSent != hasGate || (job.State == "canceled") != hasCancel {
 		return job, true, ErrTaskEvidence
 	}
 	switch job.State {
@@ -153,18 +156,18 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 			return job, true, ErrTaskEvidence
 		}
 
-	case "launching", "unknown":
+	case "launching", "unknown", "stopped_unsent", "stopped_unknown", "rejected", "merged":
 		if job.Cancellation != nil || claimErr != nil || claim.ID != id || claim.OwnerProcess != job.OwnerProcess || claim.OwnerInstanceID != job.OwnerInstanceID || !claim.ClaimedAt.Equal(job.ClaimedAt) || !job.OwnerProcess.Valid() || job.OwnerInstanceID == "" || job.ClaimedAt.Before(job.CreatedAt) {
 			return job, true, ErrTaskEvidence
 		}
-		if job.State == "launching" {
+		if job.State == "launching" || job.State == "stopped_unsent" {
 			if !errors.Is(sendErr, sql.ErrNoRows) || !job.MayHaveSentAt.IsZero() || job.GateDigest != "" {
 				return job, true, ErrTaskEvidence
 			}
 		} else if sendErr != nil || !send.Equal(job.MayHaveSentAt) || send.IsZero() || send.Before(job.ClaimedAt) {
 			return job, true, ErrTaskEvidence
 		}
-		if job.State == "unknown" {
+		if hasSent {
 			var gate ProductMergeGateObservation
 			if err = taskEvidenceRecord(ctx, q, "product_merge_gate", id, &gate); err != nil {
 				return job, true, err
@@ -181,6 +184,16 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 	default:
 		return job, true, ErrTaskEvidence
 	}
+	if err := validateProductMergeResult(ctx, q, job); err != nil {
+		return job, true, err
+	}
+	if (job.State == "stopped_unsent" || job.State == "stopped_unknown" || job.State == "rejected" || job.State == "merged") && job.Stop == nil {
+		return job, true, ErrTaskEvidence
+	}
+	if (job.State == "launching" || job.State == "unknown" || job.State == "prepared" || job.State == "canceled") && job.Stop != nil {
+		return job, true, ErrTaskEvidence
+	}
+
 	return job, true, nil
 }
 
@@ -247,7 +260,7 @@ func (k *KernelStore) readProductMergeTx(ctx context.Context, tx *sql.Tx, id str
 	if round.Digest != job.Value.RoundDigest || !reflect.DeepEqual(round.Product, job.Value.Product) {
 		return job, ErrTaskEvidence
 	}
-	if job.State == "canceled" {
+	if job.State == "canceled" || productMergeTerminal(job) {
 		return job, nil
 	}
 	var owner, state, wave string
