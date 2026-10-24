@@ -267,4 +267,23 @@ func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.Product
 	if _, err := e.Store.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "merge-gate-resume", Target: saved.Value.Target, Action: "resume", Reason: "restore fixture"}); err != nil {
 		t.Fatal(err)
 	}
+	job, err := e.Store.PrepareProductMerge(ctx, id, "kernel-merge-owner", "merge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Store.ClaimProductMerge(ctx, job.ID, job.Value.OwnerID, job.Digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Store.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, assessment); err == nil {
+		t.Fatal("pre-claim assessment reused at send fence")
+	}
+	fresh, err := g.Check(ctx, saved, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := e.Store.MarkProductMergeMayHaveSent(ctx, job.ID, job.Value.OwnerID, job.Digest, fresh)
+	if err != nil || sent.State != "unknown" || sent.GateDigest == "" {
+		t.Fatal("actual gate packet not journaled with send fence", sent, err)
+	}
+
 }
