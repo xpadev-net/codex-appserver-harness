@@ -6,7 +6,7 @@
 
 新しい registration/membership/version と、lineage の head/history/admission/request-key を一 transaction で保存する。Wave 内の key は別の後続 ID を作る再送に流用できず、同時要求でも一つだけ登録する。完全一致の replay は元の保存結果を返す。head/history/request-key/registration version/元 merge 証拠の欠落は再構成せず保留する。pause/cancel、方向修正待ち、期限は新規登録を止める。source hold 中は、認証した元 merge と新版に対応する metadata の継続登録だけを許可し、hold は解除しない。通常の新規登録と model/製品操作は引き続き保留する。
 
-この登録は Task/session、候補、model/Git/runner/外部操作を作らず、Wave の期限や累積予算を変更しない。読取は現在の新版 registration と元の merge 証拠を再照合する。旧形式の型・JSON/checksum は変更しない。
+この登録は Task/session、候補、model/Git/runner/外部操作を作らず、Wave の期限や累積予算を変更しない。読取は現在の registration の所属・source・後退しない版と、その不変 version、保存時の元 registration version、元 merge 証拠を再照合する。正当な次版への metadata 更新後も、元の系譜は同じ監査記録として読める。これは旧登録・候補・品質を現在の実行へ流用する許可ではない。旧形式の型・JSON/checksum は変更しない。
 
 実 SQLite の検査は、既知 merge→親 run の既存 turn を保持した停止・監査 archive→通常の方向修正による新版→新規登録、replay/reopen、元 PR/projection と予算の保持、同じ版・別 repo・不正条件・変更された元 projection・pause の拒否、保存途中の rollback、証拠喪失、同時 request-key 競合を確認する。HTTP/model の事実は fixture であり native P の受入ではない。
 

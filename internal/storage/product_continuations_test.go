@@ -322,3 +322,50 @@ func TestProductContinuationMetadataRefreshRetainsSourceHoldAndControls(t *testi
 		t.Fatal("metadata refresh cleared source prohibition", after, err)
 	}
 }
+
+func TestProductContinuationRetainsOriginalLineageAfterRegistrationRefresh(t *testing.T) {
+	ctx := context.Background()
+	k, request, _ := productContinuationFixture(t)
+	saved, err := k.RegisterProductContinuation(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := k.Wave(ctx, request.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direction := directionRequest(w)
+	direction.Key = "next-source-revision"
+	d, err := k.RequestWaveDirection(ctx, direction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ApplyWaveDirection(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err = k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := k.RegisterProductWorkItem(ctx, w.Target(), saved.Value.Registration.Digest, request.Definition)
+	if err != nil || updated.Digest == saved.Value.Registration.Digest {
+		t.Fatal(updated, err)
+	}
+	read, err := k.ReadProductContinuation(ctx, request.Definition.ID)
+	if err != nil || !reflect.DeepEqual(read, saved) {
+		t.Fatal("legitimate metadata refresh lost original lineage", read, err)
+	}
+	if replay, err := k.RegisterProductContinuation(ctx, request); err != nil || !reflect.DeepEqual(replay, saved) {
+		t.Fatal("refresh changed operation replay", replay, err)
+	}
+	var original ProductContinuation
+	if err := k.Record(ctx, "product_continuation_history", saved.ID, &original); err != nil || !reflect.DeepEqual(original, saved) {
+		t.Fatal("refresh rewrote historical registration", original, err)
+	}
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_work_item_registration_version' AND id=?", structureID("product-work-", request.Definition.ID, saved.Value.Registration.Digest)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReadProductContinuation(ctx, request.Definition.ID); err == nil {
+		t.Fatal("current metadata replaced lost original version evidence")
+	}
+}

@@ -229,7 +229,8 @@ func (k *KernelStore) checkProductContinuationTx(ctx context.Context, q queryer,
 	if err != nil {
 		return err
 	}
-	if !productRegistrationScope(r, w) || !reflect.DeepEqual(r, saved.Value.Registration) {
+	original := saved.Value.Registration
+	if !productRegistrationScope(r, w) || r.Value.WaveID != original.Value.WaveID || r.Value.Source != original.Value.Source || r.Value.SourceID != original.Value.SourceID || r.Value.ScopeRevision < original.Value.ScopeRevision || r.Value.PolicyRevision < original.Value.PolicyRevision || r.Value.Definition.ID != original.Value.Definition.ID || r.Value.Definition.Repository != original.Value.Definition.Repository || r.Value.Definition.RepositoryID != original.Value.Definition.RepositoryID {
 		return ErrProductContinuationHeld
 	}
 	var version ProductWorkItemRegistrationSnapshot
@@ -239,12 +240,18 @@ func (k *KernelStore) checkProductContinuationTx(ctx context.Context, q queryer,
 	if !reflect.DeepEqual(version, r) {
 		return ErrTaskEvidence
 	}
+	if err := taskEvidenceRecord(ctx, q, "product_work_item_registration_version", structureID("product-work-", original.Value.Definition.ID, original.Digest), &version); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(version, original) {
+		return ErrTaskEvidence
+	}
 	parent, err := k.continuationParentTx(ctx, q, saved.Value.Request, w)
 	if err != nil {
 		return err
 	}
 	p := parent.Value.Product.Value
-	if saved.Value.ParentWorkItemID != p.WorkItem.ID || saved.Value.ParentTarget != p.Target || saved.Value.ParentRegistrationDigest != parent.Value.RegistrationDigest || saved.Value.ParentProjectionDigest != parent.Value.Projection.After.Digest || saved.Value.ParentCandidateSHA != p.Candidate.SHA || saved.Value.ParentMergeSHA != parent.Value.MergeSHA || !reflect.DeepEqual(saved.Value.Request.Definition, r.Value.Definition) {
+	if saved.Value.ParentWorkItemID != p.WorkItem.ID || saved.Value.ParentTarget != p.Target || saved.Value.ParentRegistrationDigest != parent.Value.RegistrationDigest || saved.Value.ParentProjectionDigest != parent.Value.Projection.After.Digest || saved.Value.ParentCandidateSHA != p.Candidate.SHA || saved.Value.ParentMergeSHA != parent.Value.MergeSHA || !reflect.DeepEqual(saved.Value.Request.Definition, original.Value.Definition) {
 		return ErrTaskEvidence
 	}
 	return nil
