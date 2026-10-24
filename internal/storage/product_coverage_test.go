@@ -141,7 +141,7 @@ func TestProductCoverageRetainsOriginalPlanAndNeverCoversAnotherScopePolicyOrSou
 }
 
 func TestProductCoverageKeepsUnknownCorruptAndMissingHeadsUnavailable(t *testing.T) {
-	for _, mode := range []string{"unknown", "merge_head", "receipt_head", "receipt_history", "corrupt_first"} {
+	for _, mode := range []string{"unknown", "merge_head", "receipt_head", "receipt_history", "registration_version", "corrupt_first"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			kind := "merged"
@@ -161,6 +161,14 @@ func TestProductCoverageKeepsUnknownCorruptAndMissingHeadsUnavailable(t *testing
 			case "merge_head", "receipt_head", "receipt_history":
 				kind := map[string]string{"merge_head": "product_merge", "receipt_head": "product_merged_work_item", "receipt_history": "product_merged_work_item_history"}[mode]
 				if _, err := k.DB.Exec("DELETE FROM records WHERE kind=? AND id=?", kind, job.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "registration_version":
+				receipt, err := k.ReadProductMergedWorkItem(ctx, job.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_work_item_registration_version' AND id=?", structureID("product-work-", job.Value.Product.Value.WorkItem.ID, receipt.Value.RegistrationDigest)); err != nil {
 					t.Fatal(err)
 				}
 			case "corrupt_first":

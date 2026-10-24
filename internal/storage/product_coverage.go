@@ -149,7 +149,11 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 		fact := ProductCoverageFact{MergeID: id, ReceiptDigest: receipt.Digest, Target: p.Target, WorkItemID: p.WorkItem.ID, CandidateID: p.Candidate.ID, CandidateSHA: p.Candidate.SHA, MergeSHA: v.MergeSHA, RegistrationDigest: v.RegistrationDigest, Criteria: slices.Clone(v.Criteria)}
 		var registration ProductWorkItemRegistrationSnapshot
 		if err := taskEvidenceRecord(ctx, tx, "product_work_item_registration_version", structureID("product-work-", p.WorkItem.ID, v.RegistrationDigest), &registration); err != nil {
-			return ledger, err
+			if ctx.Err() != nil {
+				return ledger, ctx.Err()
+			}
+			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{MergeID: id, WorkItemID: p.WorkItem.ID, Reason: "registration_version_unavailable"})
+			continue
 		}
 		if p.Target.ScopeRevision != w.ScopeRevision || p.Target.PolicyRevision != w.Policy.Revision || registration.Value.Source != w.Source || registration.Value.SourceID != w.SourceID {
 			ledger.Value.Historical = append(ledger.Value.Historical, fact)
