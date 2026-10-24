@@ -1,0 +1,28 @@
+{
+  "all_managed_processes_stopped": true,
+  "authentication_subject_sha256": "3a4c3e142d779cc59c23ee5aa0c187c30b2dae038275caa39dfb847f8c5919ad",
+  "binary_version": "codex-cli 0.163.0",
+  "cloud_native_approval": "unknown_not_observed",
+  "credential_values_recorded": false,
+  "executed_tests": 1,
+  "formal_jobs": 1,
+  "full_p_acceptance": "not_accepted",
+  "github_operations": 0,
+  "local_execution": "completed_with_verified_local_quality",
+  "main_runs": 0,
+  "model": "gpt-6-luna",
+  "model_runs": 3,
+  "observed_at": "2026-10-24T11:55:07.654823338Z",
+  "private_paths_recorded": false,
+  "quality_digest": "06a88b273576e88e311ae0a062718098897bfa4d12f3dfd5d8ddde0ee6ec8a6f",
+  "stage": "native local product implementation/verification/runner/review",
+  "task_kinds": [
+    "work",
+    "verification",
+    "review"
+  ],
+  "task_sessions_unique": true,
+  "task_threads_unique": true,
+  "tested_sha": "79782b0c35c7d242c7ee1ba47c8e7202953bfcef",
+  "token_limit": 500000
+}

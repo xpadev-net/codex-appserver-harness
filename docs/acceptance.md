@@ -94,3 +94,7 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 [測定結果](../evidence/background-wave/kernel/notification-latency.json): 100 samples、p95 64.032 ms、max 79.840 ms、測定区間合計7.952秒で、NFR-012のSHOULD目標1秒以内を満たした。通知保存呼出し直前から、永続wakeを選択した有界Source.Readyの終了後までの保守的な上限を測る。モデル応答時間・実プロセスcold startは含めず、[native起動/停止/RSS](../evidence/background-wave/runtime/parallel-native.json)と[隔離launcher](../evidence/background-wave/runtime/isolated-launcher.json)へ分ける。hostとGo/OS/CPU、上限、全sampleはJSONに保存する。この参照負荷単独をK全体合格とはしない。
 
 再現: `HARNESS_KERNEL_LATENCY_EVIDENCE=/absolute/path/to/evidence.json go test ./internal/control -run '^TestKernelSourceNotificationReservationReferenceLoad$' -count=1 -v`。runtime policyは試験rootだけTaskAttempts=51へ明示設定し、製品既定値を変更しない。従来の試験用WorkSourceによる[component測定](../evidence/background-wave/runtime/notification-latency-race.json)とは別の証拠である。
+
+## P ローカルモデル工程（全体未受入）
+
+実modelの実装・独立検証・正式runner・read-only reviewは[実接続記録](product-local-native.md)と[証跡](../evidence/background-wave/product/native-local-quality.json)を参照する。host採用済み計画のローカル品質確認であり、正式Cloud承認・PR/merge・親最終受入は未実行。P全体と#20は未達のままとする。
