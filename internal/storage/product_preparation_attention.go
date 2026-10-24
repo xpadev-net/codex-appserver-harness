@@ -147,7 +147,7 @@ func (k *KernelStore) NotifyProductPreparationAttention(ctx context.Context, tas
 	if err != nil {
 		return false, err
 	}
-	changed, err := k.saveParentAttentionTx(ctx, tx, w, task, reason, detail, summary)
+	changed, err := k.saveParentAttentionTx(ctx, tx, w, task, reason, detail, parentAttentionInput{Preparation: summary})
 	if err != nil {
 		return false, err
 	}
