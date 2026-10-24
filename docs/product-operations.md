@@ -614,3 +614,12 @@ local実行・PR dispatcher・source照合はmodel loopの外で動き、終了/
 `publication`を有効にしたdaemonはPR観測workerも同じ周期/worker上限で起動し、保存済みPR bindingと自動購読からコメント・review・reaction・CI・状態更新を取得する。resource snapshotと通知outboxのcommit後にmodel loopへhintを送り、外部本文を命令や正式承認へ変換しない。`--pr-observer`を明示した場合は、その独立設定のworkerを使い、publication側では二重起動しない。公開設定なしのlocal実行だけではPR観測を暗黙に追加しない。観測workerも他のpipeline workerと共にshutdownまでjoinする。
 
 実subprocessのfake `gh` GET経路で、確定済みPR→コメント取得→snapshot/通知outbox保存→hint、standalone設定時のGET重複なし、model run増加ゼロを確認する。publicationの固定候補品質や正式APPROVED/CI/mergeの判定を観測snapshotで置き換えず、実GitHub/Cloud/native P受入は別途必要である。
+
+
+### 保存済みCloud review roundと正式reviewの読取
+
+`ReadProductCloudRound(operationID)`は完了済みの`pr_review_request`に対し、元tool operation、Product/Candidate digest、送信claim、依頼payload、確定comment/PR、購読、Cloud予約を同一transactionで照合する。送信済み/既存comment照合の受付を区別し、live mutation leaseは依頼確定時に解放済みなので要求しない。pauseや新scopeで古い依頼の履歴を読めなくせず、未確定/欠落/矛盾を新しいroundや承認へ読み替えない。
+
+`CloudReviewReader.Read`はホストのreview policy/report readerとread-only resource APIを明示し、repository/PR head/base/WorkItem markerと確定request commentを新しく取得する。native reviewを30秒・128要求/16 MiB内で読み、PRとrepositoryを再取得して変化を拒否し、最後にcapability reportを再読込する。`cloud_request`・`cloud_native_approval`・`review_sha`のverified/evidenceとホストpolicyの両方を満たす場合だけ、信頼するreviewerの現在SHAへの有効な正式APPROVEDを判定できる。unknown/unsupported、証拠なし、古いSHA/round、COMMENTED、後続CHANGES_REQUESTED/DISMISSEDを承認へ変換しない。取得中の能力取消、欠落/編集/曖昧なrequest comment、未来時刻・PR/base変更も拒否/不承認へ反映する。
+
+roundの時刻は依頼commentのhost側確定観測時刻を保守的な閾値として使い、それ以前に提出されたreviewは同じSHAでも受け入れない。実Cloudの早すぎる結果やround関連付けが立証できない場合に、古い承認へfallbackしない。このreaderはfresh factsの読取portであり、approval権限の永続化、Cloud枠の解放、merge送信、Wave受入は行わない。後続のmergeはsource/quality/CI/rules/操作許可を別途直前照合する。fixtureのAPPROVED/reportは実Cloud能力の証拠に数えない。
