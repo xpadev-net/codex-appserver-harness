@@ -83,7 +83,11 @@ func (k *KernelStore) PrepareProductPublication(ctx context.Context, target cont
 		return saved, err
 	}
 	var scope *ProductPublicationScope
-	if len(registration.Value.Definition.Criteria) != len(w.Criteria) {
+	full, err := productPublicationFullScope(w, registration)
+	if err != nil {
+		return saved, err
+	}
+	if !full {
 		value, err := k.prepareProductPublicationScopeTx(ctx, tx, target, workID)
 		if err != nil {
 			return saved, err
@@ -184,10 +188,14 @@ func (k *KernelStore) checkProductPublicationScopeTx(ctx context.Context, tx *sq
 	if err != nil {
 		return err
 	}
-	if w.Target() != p.Target || !productRegistrationScope(registration, w) {
+	if w.Target() != p.Target {
 		return ErrProductPublicationScopeHeld
 	}
-	if len(registration.Value.Definition.Criteria) == len(w.Criteria) {
+	full, err := productPublicationFullScope(w, registration)
+	if err != nil {
+		return err
+	}
+	if full {
 		if ready.Value.Scope != nil {
 			return ErrTaskEvidence
 		}

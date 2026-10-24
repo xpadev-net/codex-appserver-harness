@@ -40,6 +40,27 @@ func productPublicationScopeKey(target contract.Target, workID string) string {
 	return structureID("product-publication-scope-head-", digest, workID)
 }
 
+func productPublicationFullScope(w domain.Wave, r ProductWorkItemRegistrationSnapshot) (bool, error) {
+	if !productRegistrationScope(r, w) {
+		return false, ErrProductPublicationScopeHeld
+	}
+	known := map[string]bool{}
+	for _, c := range w.Criteria {
+		known[c.ID] = true
+	}
+	seen := map[string]bool{}
+	if len(r.Value.Definition.Criteria) == 0 {
+		return false, ErrTaskEvidence
+	}
+	for _, c := range r.Value.Definition.Criteria {
+		if !known[c] || seen[c] {
+			return false, ErrTaskEvidence
+		}
+		seen[c] = true
+	}
+	return len(seen) == len(known), nil
+}
+
 func publicationScopeRegistrationTx(ctx context.Context, tx *sql.Tx, w domain.Wave, id string) (ProductWorkItemRegistrationSnapshot, error) {
 	r, err := loadProductWorkItemRegistration(ctx, tx, id)
 	if err != nil {
@@ -65,21 +86,8 @@ func publicationScopeRegistrationTx(ctx context.Context, tx *sql.Tx, w domain.Wa
 	if member.Target.WaveID != w.ID || member.Target.ScopeRevision != w.ScopeRevision || member.Target.PolicyRevision != w.Policy.Revision {
 		return r, ErrProductPublicationScopeHeld
 	}
-	known := map[string]bool{}
-	for _, c := range w.Criteria {
-		known[c.ID] = true
-	}
-	seen := map[string]bool{}
-	if len(r.Value.Definition.Criteria) == 0 {
-		return r, ErrTaskEvidence
-	}
-	for _, c := range r.Value.Definition.Criteria {
-		if !known[c] || seen[c] {
-			return r, ErrTaskEvidence
-		}
-		seen[c] = true
-	}
-	return r, nil
+	_, err = productPublicationFullScope(w, r)
+	return r, err
 }
 
 // Derive only from authenticated current heads and immutable registration

@@ -56,8 +56,12 @@ func (e Executor) PublicationGate(ctx context.Context, saved storage.ProductTarg
 	if wave.Target() != p.Target {
 		return publication, storage.ErrProductQualityHeld
 	}
-	if len(registration.Value.Definition.Criteria) != len(wave.Criteria) && ready.Value.Scope == nil {
-		return publication, fmt.Errorf("%w: partial publication requires residual evidence", storage.ErrProductQualityHeld)
+	if ready.Value.Scope == nil {
+		for _, criterion := range wave.Criteria {
+			if !slices.Contains(registration.Value.Definition.Criteria, criterion.ID) {
+				return publication, fmt.Errorf("%w: partial publication requires residual evidence", storage.ErrProductQualityHeld)
+			}
+		}
 	}
 	proof := ready.Value.Quality
 	var body strings.Builder
