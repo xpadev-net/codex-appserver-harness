@@ -632,3 +632,14 @@ roundの時刻は依頼commentのhost側確定観測時刻を保守的な閾値�
 省略した旧設定/旧packetはprovider不明のまま保持し、送信者をproviderへ自動補完しない。依頼本文とround markerは従来どおりで、provider ID集合はモデルのtool引数へ追加しない。保存したroundのdigestにも集合が含まれ、pause/再open後も元の集合を保持する。これはCloud側の実完了と予約枠解放を照合するための入力準備であり、この設定だけで完了・正式APPROVED・mergeを許可しない。
 
 fixtureで集合のcopy/canonical replay/immutable変更拒否、private設定の重複/過大/不正ID拒否、送信前の集合変更による未送信保持、順序のみ変更した依頼と旧packetの互換性を確認する。実providerのIDとrequest/SHA関連付けは導入時の接続証拠で確認し、fixture IDを実Cloud能力の証拠には数えない。
+
+
+### Cloud作業の完了記録と予約枠の解放
+
+`RecordProductCloudReviewCompleted`はhost readerが正規化したnative reviewのID・provider ID・state・SHA・提出時刻と、取得時刻/接続reportを受ける。モデル由来の完了Booleanやcallerが選んだactor集合は受けない。元の確定round/digest・依頼packetに保存したprovider・元候補SHAに一致し、依頼確定観測以後/取得時刻以前の実応答があり、同じrepository/baseに対する`cloud_request`と`review_sha`が証拠付きverifiedの場合だけ、当該依頼のCloud枠を解放する。PENDING・空の応答・不明のprovider/能力・古いSHA/round・未来時刻・重複IDは保留する。
+
+COMMENTED/APPROVED/CHANGES_REQUESTED/DISMISSEDはproviderの作業終了を記録できるが、正式承認・quality・PR merge・WorkItem/Wave受入を生成しない。`cloud_native_approval`がunknownでも、検証済みの実応答に基づく枠解放と承認不可を分ける。現在のpause/cancelや新しい候補の存在は、古い依頼自身の既知結果を保存することを妨げない。
+
+completionのhead/history/checksumと所有予約の解放は同一transactionで保存し、rollback時は枠を保持する。同じ事実の再送/再openは元receiptを返し、次のreview ownerの枠を解放しない。providerを持つpacketには独立したactor pinのhistory/checksumも保存し、head/history欠落やactor書換えを再生成しない。旧packetのprovider不明、またはpinの証拠がない状態へ自動で完了権限を付与しない。
+
+fixtureでpause/cancel/別SHAの新候補後の旧結果保存、予約枠だけの解放、元Productの不変性、偽/不明/過去のfacts拒否、transaction rollback、receipt/actor履歴欠落、次ownerを保護した再送を確認する。実API adapter/daemonの自動呼出しは後続であり、このportのfixtureを実Cloud/P合格には数えない。

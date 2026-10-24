@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"time"
@@ -31,6 +32,15 @@ func (k *KernelStore) ReadProductCloudRound(ctx context.Context, id string) (Pro
 		return round, err
 	}
 	defer tx.Rollback()
+	round, err = k.productCloudRoundTx(ctx, tx, id)
+	if err != nil {
+		return round, err
+	}
+	return round, tx.Commit()
+}
+
+func (k *KernelStore) productCloudRoundTx(ctx context.Context, tx *sql.Tx, id string) (ProductCloudRound, error) {
+	var round ProductCloudRound
 	intent, state, err := prIntentTx(ctx, tx, id)
 	if err != nil {
 		return round, err
@@ -52,6 +62,9 @@ func (k *KernelStore) ReadProductCloudRound(ctx context.Context, id string) (Pro
 	actors, err := CanonicalCloudReviewerIDs(packet.CloudReviewerIDs)
 	if err != nil || !reflect.DeepEqual(actors, packet.CloudReviewerIDs) {
 		return round, ErrTaskEvidence
+	}
+	if err := validateCloudActorHistory(ctx, tx, packet); err != nil {
+		return round, err
 	}
 	p := claim.Product.Value
 	digest, err := contentDigest(p)
@@ -104,5 +117,5 @@ func (k *KernelStore) ReadProductCloudRound(ctx context.Context, id string) (Pro
 	if err != nil {
 		return round, err
 	}
-	return round, tx.Commit()
+	return round, nil
 }
