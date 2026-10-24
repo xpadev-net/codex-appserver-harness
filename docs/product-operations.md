@@ -796,3 +796,15 @@ daemonは既存のroot排他の下でprivate authorityのsingleton lock/listener
 merge dispatch workerはnative成功後にこのreceiptを保存してからwakeを送る。保存前に終了したmerged journalも起動時/定期queueから回収する。正のunknown照合でmergedになったjournalも同じ経路を使い、native PUTを再送しない。親のversion付きcriterion ledger・最終受入と製品モデルreadinessは引き続き別途必要である。
 
 fixtureで同一候補の反映、元quality/criterion対応、実wrapper/group停止からの通知前receipt、unknownからの正のmerge、pause/hold保持、新候補/cancel後の旧事実だけの保存、reopen/replay、legacy/不明/未停止の拒否、rollbackと各履歴欠落を確認する。fixtureのnative応答や能力reportは実Cloud/P受入に数えない。
+
+### 親向けの版付きmerge coverage ledger
+
+P Waveの親manifestは`product_merge_coverage`を持つ。ledgerは現在target/source/criterion定義と、再認証したmerge receiptのID/digest・元target・WorkItem/candidate・native merge SHA・registration/criterion対応を固定し、全体digestを付ける。新しいplanでは元plan targetを保持した同じscope/policyの事実を参照できるが、別scope/policy/sourceのmergeはhistoricalへ分け、現在のcoverageへ読み替えない。
+
+現在のregistrationとMERGED projectionが同じ候補/PR/base/branchを指す事実だけをcurrent mergedへ入れる。同じscopeでも新候補が準備された場合は旧事実をhistoricalへ戻し、新しいmerge intentがまだなくても`unmerged_work_items`と`residual`へ残す。未知の操作、まだWorkItem receiptへ反映されていないmerged結果は`pending`、欠落/破損したhead/history/registration/projectionは`unavailable`に残す。独立admission/historyからもopaque IDを発見し、head欠落で作業を消さない。破損した先頭操作があっても、同じWaveの他の正しい事実は独立に読める。
+
+ledgerは受入ではなく、coverage事実と未完了一覧である。これだけではcriterion/Waveを完了せず、正式承認・再送権限・モデルreadinessを生成しない。親の正常停止結果による最終受入と現在gateの再照合は別途必要である。
+
+本文は既存のscoped manifest referenceで渡し、inline wakeへ全merge情報を展開しない。Taskには親全体のledgerを渡さない。保存済みinputは元bytes/digestのまま保持し、新しいmerge後は新しいmanifest/referenceを作る。1 Waveあたり1024件のmerge metadataとledger JSON 1 MiBを参照境界とし、超過時は`unavailable_product_coverage`を表示して保留し、履歴を削除/切り詰めない。
+
+fixtureでpending→保存済みcoverage、元identity/criterion対応、旧scope/policy/sourceの非再利用、plan targetの保持、新候補の残作業、未知/欠落/破損、reopen、親だけのreference入力、旧inputの不変性、metadata上限とモデルreadinessの保留維持を確認する。native Cloud/P受入には数えない。

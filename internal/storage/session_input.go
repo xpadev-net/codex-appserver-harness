@@ -64,6 +64,8 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductMergeCoverage        *ProductCoverageLedger                     `json:"product_merge_coverage,omitempty"`
+	UnavailableProductCoverage  string                                     `json:"unavailable_product_coverage,omitempty"`
 	ProductVerificationPolicy   *ProductVerificationPolicyInput            `json:"product_verification_policy,omitempty"`
 	ProductSubject              *ProductCandidateSubjectSnapshot           `json:"product_subject,omitempty"`
 	ProductSubjects             map[string]ProductCandidateSubjectSnapshot `json:"product_subjects,omitempty"`
@@ -334,6 +336,16 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 	m.ProductWorkItems, m.UnavailableProductWorkItems, err = k.productWorkItemInputsTx(ctx, tx, b, w)
 	if err != nil {
 		return m, err
+	}
+	if b.Kind == "orchestrator" && w.Policy.Stage == "P" && w.Policy.Product {
+		coverage, err := k.productCoverageTx(ctx, tx, w)
+		if errors.Is(err, ErrProductCoverageHeld) {
+			m.UnavailableProductCoverage = "coverage_metadata_exceeds_bound"
+		} else if err != nil {
+			return m, err
+		} else {
+			m.ProductMergeCoverage = &coverage
+		}
 	}
 	m.ProductWorkspace, err = k.productWorkspaceInputTx(ctx, tx, b, w)
 	if err != nil {
