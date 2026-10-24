@@ -566,3 +566,12 @@ Git process開始前の`ClaimProductBranchPublication`と、push直前の`MarkPr
 `RecordProductBranchStopped`は実際の同期Git ownerだけが呼ぶ。開始/終了時刻・送信fence・固定source/remote/refを照合し、停止証拠/historyとGit枠解放を一transactionで保存する。remote outcomeが不明ならstoppedのままとし、保存した停止proofに結び付く新しいreadが同じSHAを確認した時だけ`ConfirmProductBranchRemote`でpublishedへ進める。remote headだけで未確認physical ownerを解放しない。未開始prepared intentのみ、Wave cancel後も`CancelPreparedProductBranch`でnot_startedとして解放できる。
 
 storage fixtureはclaim/送信の二重実行拒否、source/metadata/owner/時刻の不一致、再openと未知owner、品質の失効、履歴欠落、停止記録rollback、既存SHAのno-op、pause/cancel後の停止と未開始cancelを確認する。これはhost-only保存portで、PR/承認/merge成功を生成しない。物理Git primitiveとのadapter・daemon送信・未知processの外部quiescence手順は後続であり、unknown ownerを推測して再送しない。
+
+
+### 新journalのbranch公開とCloud review依頼gate
+
+`BranchPublisher` は canonical quality/seal から得た固定checkoutと、ホストAPIで取得したrepository ID・default branch・clone URLを結んだbranch公開journalを使う。Git subprocessの前にphysical claimを保存し、push直前に別の一度限りの送信fenceと最新quality・remote metadataを確認する。`workspace.PublishPinned`を明示して渡し、停止確認済みのGit処理だけが終了記録を保存してGit枠を解放する。停止不明のownerはremote SHAが一致していても解放・再起動しない。エラー時の途中観測は成功へ変換せず、保存済み停止後の新しいreadだけで確定する。`Publisher.Branch`からHTTP送信前に呼び、PRの送信fenceは独立に維持する。
+
+`KernelReviewGate.Check` は新journalのpublication quality、確定したPR番号・WorkItem marker・同一repositoryのhead/base ref・固定head/base SHA・open/non-draftを検査する。PRの関連付けでprojectionが変わった場合は、host workerによる同じ候補の公開準備更新を待つ。ホスト設定の`CloudReviewRoute.ReadReport`は毎回信頼できるcapability reportを再読込し、同じrepository ID/name/default branchの`cloud_request=verified`と取得可能な証拠を要求する。取得不能・unknown・unsupportedは依頼を保留する。remote/report read後にも品質を再検査し、`ReviewRequester`はHTTP送信直前にgateを再実行するため、準備後の依頼能力取消ではwriteしない。
+
+依頼gateは`cloud_native_approval`の確認・正式APPROVED・CI/rules・merge許可を生成しない。実checkout/seal/runner/local reviewに注入したpublication/review transportとreportを使い、PR関連付け後の品質更新、identity/head/base/marker/状態の変更、report欠落・取消、送信前の再評価、未送信retryと一回だけの依頼を確認する。daemonへの公開/review worker結線、実Cloud能力とP受入、部分公開とmerge後の後続は引き続き未接続であり、このfixtureをその合格には数えない。

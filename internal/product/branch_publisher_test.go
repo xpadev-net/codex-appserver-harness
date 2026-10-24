@@ -135,6 +135,9 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 		if _, err = p.Publish(ctx, id, owner); err != nil || pushes != 1 || api.writes != 1 {
 			t.Fatal("replay repeated publication", pushes, api.writes, err)
 		}
+		if mode == "publication_push" {
+			checkKernelReviewGate(t, e, saved, api)
+		}
 		return
 	}
 	if err == nil || api.writes != 0 {
