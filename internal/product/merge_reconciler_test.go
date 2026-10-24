@@ -73,7 +73,7 @@ func checkMergeReconciler(t *testing.T, k *storage.KernelStore, job storage.Prod
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged, err := reader.Reconcile(ctx, job.ID)
+	merged, err := checkMergeReconciliationWorker(t, reader, job, api)
 	if err != nil || merged.State != "merged" || merged.Reconciliation == nil || merged.Reconciliation.MergeSHA != baselinePR.MergeCommitSHA || api.pulls != 2 || api.metadata != 2 {
 		t.Fatal(merged, err, api.pulls, api.metadata)
 	}
