@@ -834,3 +834,13 @@ P Waveの親manifestの`product_final_verification`は、current selectionが指
 現在の別候補や要求版は旧計画を`stale`にする。runner head/terminal/claim/selection/plan/receiptの欠損は`unavailable`として残し、他の認証可能なjobは独立に表示する。current indexを失った場合も既存の計画履歴やrunner予約があれば未計画へ戻さない。上限は1024 profile job・集約JSON 1 MiBで、超過時は親manifestに`unavailable_product_final_verification`を示して保留する。
 
 集約は既存scoped manifest reference経由で親だけに渡し、Task/K Waveへは渡さない。保存済みinputのbytes/digestは変えず、新しい停止結果から新しいmanifestを作る。private argv、local repository/root、log path、結果本文は親の要約へ出さない。集約は保存済み実行事実であり、remote HEAD/sourceの新しい観測、control/予算・進行中操作の照合、親の正常停止結果による明示的な最終受入は引き続き別途必要である。
+
+### 親の正常停止結果による製品Waveの最終受入
+
+親の`MainResult`は`action: accept`と`product_acceptance`で、全ての元criterion ID、coverage digest、最終計画ID/digest、最終検証結果digestを提案する。汎用Kの`acceptance`とは排他的で、汎用Artifact受入をPの代わりに使わない。task/workerや結果集約の読取だけではWaveを完了しない。
+
+controllerは実際の正常完了・停止済みmain runとsnapshot/budget/turnの結付きを確認した後、そのsnapshotのmanifest referenceと保存済みread grant、manifestのsession/target/hash/bytesを照合する。入力に含まれた全範囲merge coverageとpassedの最終検証digestが提案と一致し、現在再計算した結果とも一致する場合だけ進める。親の入力後に得られた成功を、古いpending入力の代わりに採用しない。
+
+さらに現在の要求版・criterion定義・source・計画、30秒以内のHEAD/source selection、全Phaseの必要作業完了、pause/cancel/deadlineを照合する。未知/未完了のtool operation、未解放のrunner/Git/PR/Cloud枠、停止未確認のmanaged processが一つでもあれば保留する。複数Waveの提案はK/Pを含め全件を先に検証し、途中保存の失敗ではproof・Wave状態・event・main適用を一緒にrollbackする。
+
+採用時は`product_wave_completion`に元target、実main run、snapshot/manifest、提案digest、計画digest、直前のselectionを保存し、Waveをcompletedにして既存のterminal通知へ配送する。`MainResultApplication.product_completions`は製品proofを返し、汎用proofへ変換しない。replay/reopenは元receiptを返し、新しいモデルや外部操作を起動しない。このportはGitHub Issueを閉じる外部操作を送信せず、daemonの最終工程dispatch・元要求の再観測・製品readiness・native P受入は引き続き接続/検証が必要である。

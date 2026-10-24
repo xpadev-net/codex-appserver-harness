@@ -283,6 +283,54 @@
               }
             ]
           },
+          "product_acceptance": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "coverage_digest": {
+                    "maxLength": 16384,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "criterion_ids": {
+                    "items": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "final_plan_digest": {
+                    "maxLength": 16384,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "final_plan_id": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "final_verification_digest": {
+                    "maxLength": 16384,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "coverage_digest",
+                  "final_plan_id",
+                  "final_plan_digest",
+                  "final_verification_digest",
+                  "criterion_ids"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "remaining": {
             "items": {
               "maxLength": 16384,

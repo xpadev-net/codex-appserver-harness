@@ -17,6 +17,8 @@ var ErrMainResultInvalid = errors.New("main result is outside its saved contract
 var ErrMainResultHeld = errors.New("main result is held by policy or unapplied Task work")
 
 type MainResultApplication struct {
+	ProductCompletions []ProductWaveCompletion `json:"product_completions,omitempty"`
+
 	SessionID   string               `json:"session_id"`
 	RunID       string               `json:"run_id"`
 	ThreadID    string               `json:"thread_id"`
@@ -182,7 +184,11 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 			}
 		}
 		if decision.Action == "accept" {
-			if _, err = k.checkArtifactAcceptanceTx(ctx, tx, decision.Target, *decision.Acceptance); err != nil {
+			if decision.ProductAcceptance != nil {
+				if _, err = k.checkProductAcceptanceTx(ctx, tx, b, snapshot, decision.Target, *decision.ProductAcceptance); err != nil {
+					return receipt, mainAcceptanceError(err)
+				}
+			} else if _, err = k.checkArtifactAcceptanceTx(ctx, tx, decision.Target, *decision.Acceptance); err != nil {
 				return receipt, mainAcceptanceError(err)
 			}
 		}
@@ -217,11 +223,19 @@ func (k *KernelStore) ApplyMainResult(ctx context.Context, sessionID, runID stri
 			}
 		}
 		if decision.Action == "accept" {
-			completion, err := k.completeGenericWaveTx(ctx, tx, b, runID, decision.Target, *decision.Acceptance, decision.Summary)
-			if err != nil {
-				return receipt, mainAcceptanceError(err)
+			if decision.ProductAcceptance != nil {
+				completion, err := k.completeProductWaveTx(ctx, tx, b, runID, snapshot, decision.Target, *decision.ProductAcceptance, decision.Summary)
+				if err != nil {
+					return receipt, mainAcceptanceError(err)
+				}
+				receipt.ProductCompletions = append(receipt.ProductCompletions, completion)
+			} else {
+				completion, err := k.completeGenericWaveTx(ctx, tx, b, runID, decision.Target, *decision.Acceptance, decision.Summary)
+				if err != nil {
+					return receipt, mainAcceptanceError(err)
+				}
+				receipt.Completions = append(receipt.Completions, completion)
 			}
-			receipt.Completions = append(receipt.Completions, completion)
 		}
 		if decision.Action == "plan" {
 			if accepted, ok := acceptedPlans[decision.Target.WaveID]; ok {
@@ -354,6 +368,9 @@ func (k *KernelStore) requeueCurrentMainInputsTx(ctx context.Context, tx *sql.Tx
 // Reference/evidence errors are durable reconciliation holds, not retrying local
 // flights. Real DB and OS I/O failures retain their original error semantics.
 func mainAcceptanceError(err error) error {
+	if errors.Is(err, ErrProductAcceptanceHeld) {
+		return errors.Join(ErrMainResultHeld, err)
+	}
 	if errors.Is(err, ErrArtifactAcceptanceHeld) {
 		return errors.Join(ErrMainResultInvalid, err)
 	}

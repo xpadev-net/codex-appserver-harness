@@ -14,6 +14,8 @@ type MainResult struct {
 	Decisions     []MainDecision `json:"decisions"`
 }
 type MainDecision struct {
+	ProductAcceptance *ProductAcceptance `json:"product_acceptance,omitempty"`
+
 	Target          Target              `json:"target"`
 	Action          string              `json:"action"` // plan, wait, report, accept
 	Plan            *PlanProposal       `json:"plan"`
@@ -43,25 +45,29 @@ func (r MainResult) Validate() error {
 		}
 		switch d.Action {
 		case "plan":
-			if d.Plan == nil || d.Acceptance != nil || len(d.SubscriptionIDs) != 0 {
+			if d.Plan == nil || d.Acceptance != nil || d.ProductAcceptance != nil || len(d.SubscriptionIDs) != 0 {
 				return errors.New("plan decision requires only a plan")
 			}
 			if err := d.Plan.Validate(); err != nil {
 				return err
 			}
 		case "wait":
-			if d.Plan != nil || d.Acceptance != nil || len(d.SubscriptionIDs) == 0 {
+			if d.Plan != nil || d.Acceptance != nil || d.ProductAcceptance != nil || len(d.SubscriptionIDs) == 0 {
 				return errors.New("waiting requires durable subscriptions")
 			}
 		case "report":
-			if d.Plan != nil || d.Acceptance != nil || len(d.SubscriptionIDs) != 0 {
+			if d.Plan != nil || d.Acceptance != nil || d.ProductAcceptance != nil || len(d.SubscriptionIDs) != 0 {
 				return errors.New("report cannot change a plan or waiting conditions")
 			}
 		case "accept":
-			if d.Acceptance == nil || d.Plan != nil || len(d.SubscriptionIDs) != 0 || len(d.Remaining) != 0 || len(d.Blockers) != 0 {
+			if (d.Acceptance == nil) == (d.ProductAcceptance == nil) || d.Plan != nil || len(d.SubscriptionIDs) != 0 || len(d.Remaining) != 0 || len(d.Blockers) != 0 {
 				return errors.New("acceptance requires evidence references and no unresolved work")
 			}
-			if err := d.Acceptance.Validate(); err != nil {
+			if d.Acceptance != nil {
+				if err := d.Acceptance.Validate(); err != nil {
+					return err
+				}
+			} else if err := d.ProductAcceptance.Validate(); err != nil {
 				return err
 			}
 		default:
@@ -80,6 +86,7 @@ func MainResultSchema() map[string]any {
 	}
 	fields["action"].(map[string]any)["enum"] = []string{"plan", "wait", "report", "accept"}
 	fields["plan"].(map[string]any)["anyOf"] = []any{PlanSchema(), map[string]any{"type": "null"}}
+	fields["product_acceptance"].(map[string]any)["anyOf"] = []any{ProductAcceptanceSchema(), map[string]any{"type": "null"}}
 	fields["acceptance"].(map[string]any)["anyOf"] = []any{ArtifactAcceptanceSchema(), map[string]any{"type": "null"}}
 	return schema
 }
