@@ -10,7 +10,7 @@
 
 実 SQLite の検査は、既知 merge→親 run の既存 turn を保持した停止・監査 archive→通常の方向修正による新版→新規登録、replay/reopen、元 PR/projection と予算の保持、同じ版・別 repo・不正条件・変更された元 projection・pause の拒否、保存途中の rollback、証拠喪失、同時 request-key 競合を確認する。HTTP/model の事実は fixture であり native P の受入ではない。
 
-source 登録と読取に加え、後述の Task 入力・workspace admission を接続している。旧 WorkItem を historical とする coverage の切替、親 tool/CLI、GitHub source 改訂の信頼された採用は後続で接続する。登録だけで全範囲 merge 後の製品 Wave を復旧済みとは判定しない。動的な Issue 分割・子 Issue 作成とも区別する。
+source 登録と読取に加え、後述の Task 入力・workspace admission を接続している。旧 WorkItem を historical とする coverage の切替は後述する。親 tool/CLI、GitHub source 改訂の信頼された採用は後続で接続する。登録だけで全範囲 merge 後の製品 Wave を復旧済みとは判定しない。動的な Issue 分割・子 Issue 作成とも区別する。
 
 ## Task 入力・workspace 準備への接続
 
@@ -20,4 +20,12 @@ source 登録と読取に加え、後述の Task 入力・workspace admission �
 
 後続 work/fix の workspace reserve/claim は、系譜を入力に結び付けた固定 base 計画を必須とする。base の ancestry 必須集合には各元作業の merge SHA を加える。古い host 初期 SHA だけを渡すと Git owner を予約せず保留する。base 計画を準備済みでも、claim 前に系譜を失えば開始しない。検証・review は通常の固定候補と独立品質 gate を使う。
 
-実 SQLite の検査は、新 plan の新 Task/session、manifest と入力 digest の対応、安全な要約、証拠欠落時の準備/scheduler 保留と復旧、base 計画なしの reserve 拒否、元 merge SHA の ancestry 指定、計画後の証拠喪失による claim 拒否、過去 node の監査と現在入力の区別を確認する。base 観測・物理取得の事実は trusted fixture であり、実 GitHub の新 HEAD/後続実装や native P の受入には含めない。coverage の旧版切替と CLI/tool/source 改訂の採用は引き続き別に接続する。
+実 SQLite の検査は、新 plan の新 Task/session、manifest と入力 digest の対応、安全な要約、証拠欠落時の準備/scheduler 保留と復旧、base 計画なしの reserve 拒否、元 merge SHA の ancestry 指定、計画後の証拠喪失による claim 拒否、過去 node の監査と現在入力の区別を確認する。base 観測・物理取得の事実は trusted fixture であり、実 GitHub の新 HEAD/後続実装や native P の受入には含めない。coverage の旧版切替は次節、CLI/tool/source 改訂の採用は引き続き別に接続する。
+
+## 現在 coverage と旧版の退役
+
+coverage は現在版の登録から全系譜を照合し、元の登録 digest が残る旧版 WorkItem だけを `retired` に列挙する。各退役は現在の後続 WorkItem、根拠となる continuation ID/digest、元登録 digest を持つ。旧 merge は元 target/receipt/SHA のまま `historical` に残り、現在の `merged` や criterion の達成に加算しない。新 WorkItem は自分自身の候補・独立品質・正式 gate・merge が必要である。
+
+旧登録自体が現在版へ更新された場合は、新たな現在の義務として残し、系譜を根拠に消さない。元登録 head、どちらかの不変 registration version、系譜の head/history/admission/request-key、元 merge receipt/history/projection の欠落は退役を許可せず、旧作業を unavailable/unmerged、criterion を residual として保留する。系譜がない旧版も自動退役しない。読取と再起動は Wave、予算、元 PR、保存済み入力を変更しない。後続のない既存 JSON では任意の `retired` を省略する。
+
+実 SQLite fixture で、通常の方向修正→後続登録→退役、元 merge の履歴保持、親 manifest、残作業・予算・旧 projection の保持、再起動、各証拠の喪失・復旧、旧登録を現在版へ更新した場合の退役拒否を確認する。これも metadata の component 検査であり、新候補の実 GitHub merge、source 改訂採用、native P の受入を意味しない。
