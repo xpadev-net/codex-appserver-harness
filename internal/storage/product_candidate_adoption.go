@@ -44,6 +44,9 @@ func sealedProductEvidence(ctx context.Context, q queryer, taskID, runID string)
 	if saved.State != "sealed" || saved.Candidate == nil || saved.Proof == nil || saved.Proof.Frozen == nil || saved.Value.Workspace.Proof == nil {
 		return saved, ErrProductSealHeld
 	}
+	if err := validateProductSealResolution(saved.Value.Workspace, *saved.Proof); err != nil {
+		return saved, err
+	}
 	var history productSealRecord
 	if err := taskEvidenceRecord(ctx, q, "product_seal_history", saved.ID, &history); err != nil {
 		return saved, err
@@ -182,6 +185,9 @@ func (k *KernelStore) ReadProductTaskCandidate(ctx context.Context, resultID str
 }
 
 func (k *KernelStore) adoptProductCandidateTx(ctx context.Context, tx *sql.Tx, task domain.Task, resultID string, sealed ProductSeal, baseBranch string) error {
+	if err := k.productWorkspaceOriginCurrentTx(ctx, tx, sealed.Value.Workspace); err != nil {
+		return err
+	}
 	w, err := loadWave(ctx, tx, task.WaveID)
 	if err != nil {
 		return err

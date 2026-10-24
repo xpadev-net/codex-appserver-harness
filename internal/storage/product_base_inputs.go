@@ -63,6 +63,16 @@ func (k *KernelStore) productBaseInputTx(ctx context.Context, tx *sql.Tx, taskID
 			return out, ErrTaskEvidence
 		}
 		prep.Task.InputDigest = fixed.Value.InputDigest
+		plan, err := k.baseWorkspacePlanTx(ctx, tx, fixed.Value)
+		if err != nil {
+			return out, err
+		}
+		original := plan.Value.Input.Value.Preparation.Product
+		if prep.Product != nil && original != nil && sameProductExecutionOrigin(*prep.Product, *original) {
+			// A merge-only control is live publication state, not a new local
+			// execution origin. Keep same-HEAD read refreshes on the same plan.
+			prep.Product = original
+		}
 	}
 	pinned, err := loadProductVerificationPolicy(ctx, tx, w.ID, w.Policy.Revision, prep.Registration.Value.Definition.RepositoryID)
 	if err != nil {

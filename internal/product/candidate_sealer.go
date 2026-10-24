@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -57,9 +58,39 @@ func (s CandidateSealer) Seal(ctx context.Context, taskID, runID string) (storag
 			}
 		}
 		pinned := workspace.PinnedCheckout{Repository: v.Request.Repository, CWD: v.CWD, Branch: v.Branch, GitDir: prepared.GitDir, CommonDir: prepared.CommonDir, BaseSHA: saved.Value.Workspace.SealBaseSHA()}
-		frozen, err := workspace.FreezePinned(ctx, pinned, "Harness candidate "+saved.ID)
-		if err != nil {
-			return err
+		var frozen workspace.FrozenCheckout
+		if saved.Value.Workspace.PreparedBaseConflict() {
+			resolution, err := workspace.FreezeResolvedBase(ctx, pinned, v.ComparisonBaseSHA, "Harness conflict resolution "+saved.ID, func(ctx context.Context) error {
+				if err := s.Store.CheckProductSealBeforeFreeze(ctx, taskID, runID, saved.Digest); err != nil {
+					return err
+				}
+				head, err := workspace.Resolve(ctx, v.CWD, "HEAD")
+				if err != nil {
+					return err
+				}
+				mergeHead, err := workspace.Git(ctx, v.CWD, "rev-parse", "--verify", "MERGE_HEAD^{commit}")
+				if err != nil {
+					return err
+				}
+				if head != prepared.HeadSHA || strings.TrimSpace(mergeHead) != v.ComparisonBaseSHA {
+					return storage.ErrProductSealHeld
+				}
+				return nil
+			})
+			proof.Resolution = &resolution
+			if err != nil {
+				return err
+			}
+			if resolution.Frozen == nil {
+				return storage.ErrProductSealHeld
+			}
+			frozen = *resolution.Frozen
+		} else {
+			var err error
+			frozen, err = workspace.FreezePinned(ctx, pinned, "Harness candidate "+saved.ID)
+			if err != nil {
+				return err
+			}
 		}
 		if input := saved.Value.Verification; input != nil {
 			if err := verification.CheckChanges(ctx, v.CWD, input.Subject.Value.Candidate.SHA, input.Policy.Value.VerifierPaths); err != nil {

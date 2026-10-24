@@ -90,6 +90,12 @@ func (s ProductWorkspace) SealBaseSHA() string {
 	return s.Value.Request.BaseSHA
 }
 
+// PreparedBaseConflict describes a proof shape, not authority. Store readers
+// authenticate its fixed plan and fresh fix reference before any admission.
+func (s ProductWorkspace) PreparedBaseConflict() bool {
+	return s.Value.Request.BasePlanID != "" && s.Proof != nil && s.Proof.Outcome == "prepared" && !s.Proof.Clean && s.Proof.BaseMerge != nil && s.Proof.BaseMerge.Outcome == "conflict"
+}
+
 type productWorkspaceRecord struct {
 	Workspace ProductWorkspace `json:"workspace"`
 	Digest    string           `json:"digest"`
@@ -454,10 +460,18 @@ func (k *KernelStore) FinishProductWorkspace(ctx context.Context, taskID string,
 			}
 		}
 		expectedHead := saved.Value.Request.BaseSHA
+		expectedClean := true
 		if proof.BaseMerge != nil {
 			expectedHead = proof.BaseMerge.HeadSHA
+			if proof.BaseMerge.Outcome == "conflict" {
+				plan, err := k.baseWorkspacePlanTx(ctx, tx, saved.Value)
+				if err != nil || !productBaseConflictPreparation(plan, &proof) {
+					return saved, errors.Join(ErrTaskEvidence, err)
+				}
+				expectedClean = false
+			}
 		}
-		if proof.CWD != saved.Value.CWD || proof.Branch != saved.Value.Branch || !fixedSHA(expectedHead) || proof.HeadSHA != expectedHead || !proof.Clean || !filepath.IsAbs(proof.GitDir) || filepath.Clean(proof.GitDir) != proof.GitDir || !strings.HasPrefix(proof.GitDir, common+string(filepath.Separator)+"worktrees"+string(filepath.Separator)) || proof.CommonDir != common {
+		if proof.CWD != saved.Value.CWD || proof.Branch != saved.Value.Branch || !fixedSHA(expectedHead) || proof.HeadSHA != expectedHead || proof.Clean != expectedClean || !filepath.IsAbs(proof.GitDir) || filepath.Clean(proof.GitDir) != proof.GitDir || !strings.HasPrefix(proof.GitDir, common+string(filepath.Separator)+"worktrees"+string(filepath.Separator)) || proof.CommonDir != common {
 			return saved, errors.New("workspace proof does not match pinned Git resources/base")
 		}
 		_, task, b, ownerErr := k.productWorkspaceOwnerTx(ctx, tx, saved.Value)

@@ -181,6 +181,7 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 		return sameUserDirectory(saved.Value.CWD, true)
 	}()
 	proof := storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "failed", Reason: "local workspace preparation failed after Git owner stopped"}
+	var conflictReady *storage.ProductWorkspaceProof
 	if createErr == nil && basePlan != nil && basePlan.Value.Input.Value.Preparation.Product != nil {
 		// The new Task owns a fresh checkout of the original candidate. Its
 		// comparison base is the candidate's old base, never its divergent HEAD.
@@ -202,20 +203,30 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 				})
 				merged, createErr = &observation, err
 				if createErr == nil && observation.Outcome == "conflict" {
-					createErr = storage.ErrProductWorkspaceHeld
+					if basePlan.Value.Input.Value.Preparation.Task.Spec.ProductBaseConflict == nil {
+						createErr = storage.ErrProductWorkspaceHeld
+					} else {
+						prepared.Clean = false
+						prepared.Reason = "fixed merge conflict preserved for the new authenticated fix Task"
+						conflictReady = &prepared
+					}
 				}
 			}
 		}
 	}
 	if createErr == nil {
-		var verified storage.ProductWorkspaceProof
-		head := request.BaseSHA
-		if merged != nil {
-			head = merged.HeadSHA
-		}
-		verified, createErr = verifyPreparedWorkspaceHead(ctx, saved, head)
-		if createErr == nil {
-			proof = verified
+		if conflictReady != nil {
+			proof = *conflictReady
+		} else {
+			var verified storage.ProductWorkspaceProof
+			head := request.BaseSHA
+			if merged != nil {
+				head = merged.HeadSHA
+			}
+			verified, createErr = verifyPreparedWorkspaceHead(ctx, saved, head)
+			if createErr == nil {
+				proof = verified
+			}
 		}
 	}
 	if createErr == nil && request.BasePlanID != "" {
