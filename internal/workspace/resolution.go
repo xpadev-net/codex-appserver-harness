@@ -142,6 +142,11 @@ func FreezeResolvedBase(ctx context.Context, p PinnedCheckout, base, message str
 		if _, err := pinnedGit(ctx, p.CWD, "add", "--all"); err != nil {
 			return out, err
 		}
+		// Previously untracked files are now visible to the cached check.
+		// A rejected file leaves an observed staging failure, never a commit.
+		if err := resolutionMarkers(ctx, p); err != nil {
+			return out, err
+		}
 		unmerged, err := unresolvedMergePaths(ctx, p.CWD)
 		if err != nil || len(unmerged) != 0 {
 			return out, errors.Join(errors.New("resolution retains an unmerged index"), err)

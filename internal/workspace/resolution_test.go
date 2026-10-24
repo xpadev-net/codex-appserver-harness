@@ -216,3 +216,23 @@ func TestFreezeResolvedBaseDoesNotCommitLateChangesAfterMerge(t *testing.T) {
 		t.Fatal("late files changed the two-parent merge", parents, err)
 	}
 }
+
+func TestFreezeResolvedBaseRejectsMarkersInNewFilesBeforeCommit(t *testing.T) {
+	ctx := context.Background()
+	p, original, base := baseResolutionFixture(t)
+	if err := os.WriteFile(filepath.Join(p.CWD, "change.txt"), []byte("resolved file\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	markers := "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> incoming\n"
+	if err := os.WriteFile(filepath.Join(p.CWD, "new.txt"), []byte(markers), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := FreezeResolvedBase(ctx, p, base, "Resolve fixed base conflict", func(context.Context) error { return nil })
+	if err == nil || !got.Attempted || got.Frozen != nil || got.Failure == nil || got.Failure.HeadSHA != original || got.Failure.MergeHeadSHA != base || got.Failure.Clean {
+		t.Fatal("untracked markers were committed", got, err)
+	}
+	staged, err := Git(ctx, p.CWD, "show", ":new.txt")
+	if err != nil || staged != markers {
+		t.Fatal("rejected staged contents were lost", staged, err)
+	}
+}
