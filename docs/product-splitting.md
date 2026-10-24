@@ -21,3 +21,15 @@ head/history/admission と Wave 内 request-key を同じ transaction で保存�
 SQLite 検査は、初期 root の受付、完全 part 対応、元 Wave/予算の保持、exact retry/reopen、不正対応・循環・上限・旧登録・巨大入力の拒否、保存途中 rollback、各証拠と複数 index の喪失・復旧、別親 key の拒否、pause 中の読取と新 intent の拒否を確認する。legacy splitting の検査を外部 test package にして production validator を kernel から再利用し、legacy の子作成処理は新 port から呼ばない。
 
 監査読取の pause 許可は Wave の pause を指す。WorkItem 自身の pause を含む親 projection の変更は、candidate/scope/policy と同じく現在 intent の照合を保留する。保存済み history を削除・書換えず、元の監査事実は保持する。
+
+## 子 intent の一括準備
+
+PrepareProductSplitChildPlan は、現在照合できる root proposal から子ごとの安定 ID / 将来の WorkItem ID / marker / Issue body / 依存先 ID を作る trusted controller port である。元の local criterion と parent criterion の part 対応・根拠をそのまま保存し、子 depth は親 proposal の depth + 1、repository は親の immutable 登録から得る。body は要求・対応 JSON・照合 marker を含み、独立した Issue-pool Wave を生成する harness-scope は付与しない。親候補の private workspace 情報を子 body に転記しない。
+
+全子の head/history/admission と集合の head/history/admission を一つの transaction で保存する。同じ request は同じ集合を返す。各 admission に親 head 参照を残し、親 proposal や集合の index が失われても、残った子証拠を検出した場合は再構成を保留する。失われた証拠の代わりに新しい marker を作らない。
+
+ReadProductSplitChildPlan と既存集合の exact replay は、保存された proposal・元登録・全子証拠を照合する静的な監査読取であり、pause や後続 scope によって消えない。新規集合の作成には現在の source/policy/上限/親候補と未 pause の target を必要とする。監査読取は送信許可を与えない。
+
+この段階では WorkItem を登録せず、Wave 全体の子数・実行予算も予約しない。外部送信、未知応答の照合、physical stop、子 part scope の実行系への接続、親退役は後続段階で別途認証・予約・照合する必要がある。Task/session/model、HTTP、親状態、既存 lifetime 予算には変更を加えない。
+
+SQLite 検査は、完全な part 対応と依存先、exact replay/reopen、遅い INSERT 失敗の全 rollback、各証拠の喪失と exact 復旧、子 admission だけ残る複合喪失、別 request・改変記録の拒否、pause/方向修正前後の新規作成と監査読取の違いを確認する。

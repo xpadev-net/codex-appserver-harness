@@ -195,7 +195,7 @@ func loadProductSplitProposal(ctx context.Context, tx *sql.Tx, r ProductSplitPro
 	err := taskEvidenceRecord(ctx, tx, "product_split_proposal", head, &saved)
 	if errors.Is(err, sql.ErrNoRows) {
 		var known bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_request' AND work_item_id=? AND json_extract(payload,'$.head_id')=?)", head, head, r.Target.WaveID, head).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_request' AND work_item_id=? AND json_extract(payload,'$.head_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children','product_split_children_history','product_split_child_intent','product_split_child_intent_history') AND json_extract(payload,'$.value.parent_head_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children_admission','product_split_child_intent_admission') AND json_extract(payload,'$.parent_head_id')=?)", head, head, r.Target.WaveID, head, head, head).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
@@ -337,6 +337,12 @@ func (k *KernelStore) ReadProductSplitProposal(ctx context.Context, target contr
 		return saved, err
 	}
 	defer tx.Rollback()
+	return k.readProductSplitProposalTx(ctx, tx, target, parentID)
+}
+
+func (k *KernelStore) readProductSplitProposalTx(ctx context.Context, tx *sql.Tx, target contract.Target, parentID string) (ProductSplitProposal, error) {
+	var saved ProductSplitProposal
+	var err error
 	saved, err = loadProductSplitProposal(ctx, tx, ProductSplitProposalRequest{Target: target, ParentWorkItemID: parentID})
 	if err != nil {
 		return saved, err
