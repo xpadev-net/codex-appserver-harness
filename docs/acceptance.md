@@ -98,3 +98,7 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 ## P ローカルモデル工程（全体未受入）
 
 実modelの実装・独立検証・正式runner・read-only reviewは[実接続記録](product-local-native.md)と[証跡](../evidence/background-wave/product/native-local-quality.json)を参照する。host採用済み計画のローカル品質確認であり、正式Cloud承認・PR/merge・親最終受入は未実行。P全体と#20は未達のままとする。
+
+## P 最終 HEAD の取得 component
+
+[固定 commit の取得](product-final-fetch.md)は共有 Git lease・一度限りの送信・実停止証拠を使い、取得した SHA を正式 runner へ渡す。GitHub 観測/承認は fixture として検査した component であり、daemon の自動最終工程や P 全体の native 受入とは区別する。
