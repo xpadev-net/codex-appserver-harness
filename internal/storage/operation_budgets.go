@@ -15,6 +15,7 @@ var ErrOperationBudget = errors.New("Wave operation budget exhausted")
 // Adopted once from trusted configuration when a Wave is admitted. Profiles
 // retain their separately trusted definitions and timeout policy.
 type WaveOperationLimits struct {
+	BranchRetries    int   `json:"branch_retries,omitempty"`
 	ValidationJobs   int   `json:"validation_jobs"`
 	RunnerRetries    int   `json:"runner_retries"`
 	CandidateReviews int   `json:"candidate_reviews"`
@@ -23,16 +24,18 @@ type WaveOperationLimits struct {
 }
 
 func DefaultWaveOperationLimits() WaveOperationLimits {
-	return WaveOperationLimits{ValidationJobs: 100, RunnerRetries: 1, CandidateReviews: 2, TurnSeconds: 1800, ReviewSeconds: 3600}
+	return WaveOperationLimits{BranchRetries: 1, ValidationJobs: 100, RunnerRetries: 1, CandidateReviews: 2, TurnSeconds: 1800, ReviewSeconds: 3600}
 }
 func (l WaveOperationLimits) Validate() error {
 	const maxSeconds = int64((1<<63 - 1) / time.Second)
-	if l.ValidationJobs < 1 || l.RunnerRetries < 0 || l.CandidateReviews < 1 || l.TurnSeconds < 1 || l.TurnSeconds > maxSeconds || l.ReviewSeconds < 1 || l.ReviewSeconds > maxSeconds {
+	if l.BranchRetries < 0 || l.BranchRetries > 32 || l.ValidationJobs < 1 || l.RunnerRetries < 0 || l.CandidateReviews < 1 || l.TurnSeconds < 1 || l.TurnSeconds > maxSeconds || l.ReviewSeconds < 1 || l.ReviewSeconds > maxSeconds {
 		return errors.New("invalid Wave operation limits")
 	}
 	return nil
 }
 func waveOperationLimitsTx(ctx context.Context, q queryer, waveID string) (WaveOperationLimits, error) {
+	// Do not overlay new defaults: a pre-branch-retry record deliberately
+	// retains zero automatic branch retries. Defaults apply at new admission.
 	var l WaveOperationLimits
 	if err := completionRecord(ctx, q, "wave_operation_limits", waveID, &l); err != nil {
 		return l, err
@@ -199,6 +202,7 @@ func validateKernelOperationBudgetFormat(db *sql.DB) error {
 }
 
 type WaveOperationBudget struct {
+	BranchRetries    int                 `json:"branch_retries,omitempty"`
 	WaveID           string              `json:"wave_id"`
 	Limits           WaveOperationLimits `json:"limits"`
 	ValidationJobs   int                 `json:"validation_jobs"`
@@ -218,6 +222,10 @@ func (k *KernelStore) WaveOperationBudget(ctx context.Context, waveID string) (W
 		return result, err
 	}
 	result.ValidationJobs, err = operationBudgetCountTx(ctx, tx, waveID, "validation_job", "")
+	if err != nil {
+		return result, err
+	}
+	result.BranchRetries, err = branchRetryBudgetCountTx(ctx, tx, waveID)
 	if err != nil {
 		return result, err
 	}

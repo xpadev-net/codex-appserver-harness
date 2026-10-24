@@ -80,7 +80,7 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 }
 
 func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "publication", "publication_push", "publication_noop", "publication_unknown", "publication_partial", "publication_stopped", "publication_metadata", "publication_cancel", "publication_fence", "publication_pause", "product_change", "missing_test"} {
+	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "publication", "publication_push", "publication_noop", "publication_unknown", "publication_partial", "publication_stopped", "publication_metadata", "publication_cancel", "publication_retry_twice", "publication_fence", "publication_pause", "product_change", "missing_test"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) {

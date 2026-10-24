@@ -64,7 +64,16 @@ func (p BranchPublisher) Publish(ctx context.Context, claim storage.PRDispatchCl
 		return err
 	}
 	switch job.State {
-	case "published", "stopped":
+	case "stopped":
+		if job.Stop != nil && !job.Stop.Observation.Attempted && job.MayHaveSentAt.IsZero() {
+			job, err = p.Store.ReserveProductBranchUnsentRetry(ctx, claim.OperationID, claim.OwnerID, job.Digest)
+			if err != nil {
+				return err
+			}
+			break
+		}
+		fallthrough
+	case "published":
 		head, err := api.BranchHead(ctx, job.Value.Branch)
 		if err != nil {
 			return err

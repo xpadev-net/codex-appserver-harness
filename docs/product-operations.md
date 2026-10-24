@@ -600,3 +600,12 @@ privateな`--product-executor`のschema 1設定へ、次の`publication`項目�
 direct依頼は保存した現行版を使う。Issue由来の公開には採用時と同じ`source_policies`が必要で、公開準備・Git push・PR HTTP送信・review依頼のgateでrepositoryとIssueを再取得し、内容/label/状態/policyの変化・取得不能を保存済み禁止へ反映する。送信前のreadとGitHub writeを外部のatomic transactionにはできないが、定期pollのreadyだけで送信しない。設定済みsourceをstartup/周期でも順番に再照合するため、取得失敗等の保留が回復すればdispatch preflightへ再び進める。scope編集は明示的な版付き同期まで保留し、手動pauseを解除しない。
 
 local実行・PR dispatcher・source照合はmodel loopの外で動き、終了/異常時は他workerをcancelして全てjoinする。同期Git/HTTPの停止確認中にcontroller lock/Storeを解放せず、停止不明を成功や未送信へ変換しない。private設定/route境界、reportの差替え・権限変更、sourceのfresh readと既存readyの失効、実`gh` argvを模したGET subprocess、commit後hint、worker間の異常伝播・daemon lock保持をfixtureで検証する。global製品model readiness、正式APPROVED/CI/rules/merge、部分公開・versioned continuation、native P/M受入は引き続き未接続である。
+
+
+### branch公開の未送信retry
+
+同期Git ownerの停止記録があり、remote送信fence未消費かつpush未実行だった操作だけ、`ReserveProductBranchUnsentRetry`で新しいprepared intentを保存できる。古いancestor digestの再送は、停止済み/公開済みを含む現在の後続記録を返し、追加予算を使わない。さらにretryする要求だけが最新の停止digestを指定する。既存head/history/stop/reservationは変更せず、元の固定source・remote・quality/readiness・Product targetを保持した後続IDと`retry_of`/attemptを保存する。claimと送信fenceは後続ごとに一度だけで、最新の操作許可・quality・resource generationを再検査する。daemonのbranch adapterが未送信停止を再発見した際にこのportを使う。
+
+採用済み`WaveOperationLimits.branch_retries`はWave全体で共有し、新Waveの既定は1、許可範囲は0..32とする。旧記録で項目がない場合は0として自動retryを有効にしない。これは互換性方針であり、新Waveの既定値を既存Waveへoverlayして新たな実行権限を付与しない。後続の予約・Git枠・予算ledgerとreceipt・historyは同一transactionで保存し、並行予約/再送/再openで二重計上しない。予算の集計は残存ledgerだけに依存せず、後続のhead/history/receipt/dispatch admissionも照合する。欠落証拠で予算を復活させず、古い停止結果へ戻らない。
+
+送信fenceを通った操作、push実行済み、物理停止不明、公開済み、pause/Candidate等の変更はこのretry許可を得ない。送信後の不明結果は保存済み停止後に固定remote SHAを読んで照合し、未確定なら保留する。実fixtureでキャンセルによる未送信停止→後続→公開、並行予約と一回だけのclaim、既存履歴保持、再open後の上限、transaction rollback、証拠/ledger欠落、禁止状態を確認する。送信後の外部quiescenceやnative P受入の証拠は生成しない。
