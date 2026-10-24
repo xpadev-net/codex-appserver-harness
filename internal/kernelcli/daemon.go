@@ -115,6 +115,10 @@ func controllerLock(root string) (func(), error) {
 type daemonWorker func(context.Context, *storage.KernelStore, func(), func(error)) error
 
 func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runtime, diagnostics io.Writer, background ...daemonWorker) error {
+	return runDaemonWithHint(ctx, k, runtime, diagnostics, nil, background...)
+}
+
+func runDaemonWithHint(ctx context.Context, k *storage.KernelStore, runtime control.Runtime, diagnostics io.Writer, hintExecution func(), background ...daemonWorker) error {
 	unlock, err := controllerLock(k.Root)
 	if err != nil {
 		return err
@@ -127,7 +131,13 @@ func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runt
 	defer stopReporting()
 	report := diagnosticReporter(reporting, diagnostics)
 	source.Report, loop.Report = report, report
-	server, err := ipc.Listen(k.Root, k, loop.Wake)
+	wake := func() {
+		loop.Wake()
+		if hintExecution != nil {
+			hintExecution()
+		}
+	}
+	server, err := ipc.Listen(k.Root, k, wake)
 	if err != nil {
 		return err
 	}
@@ -147,7 +157,7 @@ func runDaemon(ctx context.Context, k *storage.KernelStore, runtime control.Runt
 	start("kernel IPC server", func() error { return server.Serve(serving) })
 	start("kernel dispatch loop", func() error { return loop.Run(serving) })
 	for _, worker := range background {
-		start("kernel background worker", func() error { return worker(serving, k, loop.Wake, report) })
+		start("kernel background worker", func() error { return worker(serving, k, wake, report) })
 	}
 	var failures []error
 	for remaining := 2 + len(background); remaining > 0; remaining-- {

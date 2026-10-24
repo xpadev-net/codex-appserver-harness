@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -14,11 +15,11 @@ import (
 // ExecutionRepository is private host configuration. Repository identity, fixed
 // initial SHA and base branch are resolved by the host, never Issue/model data.
 type ExecutionRepository struct {
-	Name       string
-	BaseBranch string
-	InitialSHA string
-	Policy     storage.ProductVerificationPolicy
-	Runner     storage.ProductRunnerRuntime
+	Name       string                            `json:"name"`
+	BaseBranch string                            `json:"base_branch"`
+	InitialSHA string                            `json:"initial_sha"`
+	Policy     storage.ProductVerificationPolicy `json:"policy"`
+	Runner     storage.ProductRunnerRuntime      `json:"runner"`
 }
 
 // Executor composes synchronous Git owners and detached runner owners. The
@@ -168,7 +169,7 @@ func (e Executor) AdvanceVerification(ctx context.Context, planID string) (stora
 			if readErr != nil {
 				effectErr = readErr
 			} else if job.Value.RetryOf != "" {
-				_, effectErr = e.Runner.StartRetry(ctx, job.Value.RetryOf)
+				_, effectErr = e.startRetry(ctx, job.Value.RetryOf, repo.Runner)
 			} else {
 				_, effectErr = e.Runner.Start(ctx, planID, observed.ProfileID, repo.Runner)
 			}
@@ -176,7 +177,7 @@ func (e Executor) AdvanceVerification(ctx context.Context, planID string) (stora
 			_, effectErr = e.Runner.Reconcile(ctx, observed.JobID)
 		case "completed":
 			if observed.Completion.Result.Status == "infrastructure_failure" {
-				_, effectErr = e.Runner.StartRetry(ctx, observed.JobID)
+				_, effectErr = e.startRetry(ctx, observed.JobID, repo.Runner)
 			}
 		}
 		waitingForFiles := observed.State == "launching" && os.IsNotExist(effectErr)
@@ -186,4 +187,17 @@ func (e Executor) AdvanceVerification(ctx context.Context, planID string) (stora
 	}
 	latest, readErr := e.Store.ReadProductVerificationEvidence(ctx, planID)
 	return latest, errors.Join(append(failures, readErr)...)
+}
+
+func (e Executor) startRetry(ctx context.Context, previousID string, runtime storage.ProductRunnerRuntime) (storage.ProductRunnerJob, error) {
+	previous, err := e.Store.ReadProductRunnerJob(ctx, previousID)
+	if err != nil {
+		return previous, err
+	}
+	s := previous.Value.Spec
+	frozen := storage.ProductRunnerRuntime{Root: s.Root, LauncherContract: s.LauncherContract, Launcher: s.Launcher, ForbiddenPaths: s.ForbiddenPaths}
+	if !reflect.DeepEqual(frozen, runtime) {
+		return previous, storage.ErrProductRunnerHeld
+	}
+	return e.Runner.StartRetry(ctx, previousID)
 }
