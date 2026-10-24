@@ -27,7 +27,7 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.ThreadID, b.PreparationID = "verification-thread", "verification-preparation"
+	b.ThreadID, b.PreparationID = "verification-thread-"+task.ID, "verification-preparation-"+task.ID
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 	if err := contract.DecodeStrict(raw, &contract.TaskResult{}); err != nil {
 		t.Fatal(err)
 	}
-	run := contract.SessionRun{ID: "verification-run", ThreadID: b.ThreadID, TurnID: "verification-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
+	run := contract.SessionRun{ID: "verification-run-" + task.ID, ThreadID: b.ThreadID, TurnID: "verification-turn-" + task.ID, State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
 	task.State, task.Attempts = contract.TaskRunning, 1
 	budget := storage.RunBudgetBinding{RunID: run.ID, SessionID: b.ID, TaskID: task.ID, ThreadID: b.ThreadID, SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, Targets: []contract.Target{task.Target()}}
 	tx, err := k.DB.BeginTx(ctx, nil)
@@ -79,10 +79,17 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 }
 
 func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "product_change", "missing_test"} {
+	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "host_executor", "publication", "product_change", "missing_test"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
-			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) { plan.Phases[1].Tasks[0].Kind = "verification" })
+			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) {
+				plan.Phases[1].Tasks[0].Kind = "verification"
+				if mode == "publication" {
+					verifier := plan.Phases[1].Tasks[0]
+					review := contract.TaskSpec{ID: "publication-review", Kind: "review", Instruction: "independently evaluate the fixed code/tests against original AC", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: verifier.ID}}, InputArtifactIDs: []string{}, WorkItemIDs: append([]string{}, verifier.WorkItemIDs...)}
+					plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "local-quality", Tasks: []contract.TaskSpec{review}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{review.ID}}, FailurePolicy: "drain_and_block"})
+				}
+			})
 			input, err := s.Seal(ctx, producer.ID, run.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -113,7 +120,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			}
 			var ready storage.ProductWorkspace
 			var host Executor
-			if mode == "host_executor" {
+			if mode == "host_executor" || mode == "publication" {
 				repo := executorRepositoryFixture(implementation.Value.Request)
 				pinned, readErr := s.Store.ReadProductVerificationPolicy(ctx, task.Target(), repo.Policy.RepositoryID)
 				if readErr != nil {
@@ -187,7 +194,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 				t.Fatal("local sealing bypassed host adoption", p, err)
 			}
 			var receipt storage.ResultApplication
-			if mode == "host_executor" {
+			if mode == "host_executor" || mode == "publication" {
 				receipt, err = host.Apply(ctx, task.ID, verificationRun.ID)
 			} else {
 				receipt, err = s.Store.AdoptProductVerificationTaskResult(ctx, task.SessionID, verificationRun.ID, "trunk")
@@ -207,7 +214,10 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *sealed.Candidate || p.Value.WorkItem.Phase != domain.Verifying {
 				t.Fatal("adoption invented runner pass", p, err)
 			}
-			if mode == "host_executor" {
+			if mode == "publication" {
+				checkProductExecutorVerification(t, s.Store, canonical)
+				checkKernelPublicationGate(t, host, canonical)
+			} else if mode == "host_executor" {
 				checkProductExecutorVerification(t, s.Store, canonical)
 			} else if mode == "runner_retry" {
 				checkProductRunnerRetryExecution(t, s.Store, canonical)

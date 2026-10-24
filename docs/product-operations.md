@@ -540,3 +540,11 @@ IPC/runner hintとruntimeのcommit後hintはworkerとmodel loopへ配送し、�
 このworkerのopt-inはPのモデルdispatch/正式承認能力を宣言しない。`product_readiness_unavailable`、新journalからの公開/Cloud/merge、versioned post-merge continuation、P/M受入の残件は別の接続で解消する。
 
 二つのqueueはそれぞれ最終pageまで一回ずつ進め、完了した短いqueueを他方の継続中に再走査しない。読取エラーが起きたqueueは次のhint/tickまで待ち、最終pageの後は両cursorを先頭へ戻す。128/129/256/257件と二回の走査を境界fixtureで確認する。runner retryは保存したruntimeと現在のhost設定（launcher/保護path/root）が一致する場合だけ開始し、設定が変わった後に旧保護pathで再起動しない。
+
+### 新journalの公開準備とlocal品質gate
+
+`PrepareProductPublication(target, workItem)` は新kernel journalの正常停止Task結果・実Artifact bytes・全必須runner・固定Candidateの全独立review roleと元criterion評価を同一transactionで検査し、WorkItemを`VERIFYING`から`REVIEWING`へ一度だけ進める。Candidate・PR番号・予算・正式承認・Wave受入は変更せず、品質proofとtargetを結んだhead/historyと通知を保存する。completed reviewを走査するhost workerがこのportを呼び、未評価roleやrunner待ちはmodelを増やさず待つ。再送は同じreceiptを返し、欠落head/historyやrollbackでは権限を再生成しない。
+
+`Executor.PublicationGate` は旧service Storeに依存せず、公開準備のhead/history、現在の投影、品質、host設定と固定verification policyを読み直す。既存`Publisher`のGate portに渡し、payload保存前とHTTP送信直前の両方で呼ぶためのread-only portである。本文にはscope/policy版、固定SHAと比較base、評価したcriterion、machine/reviewのproof digestを安定順で載せる。argv/認証本文/modelの成功要約を公開せず、Issueを自動closeする文章を拒否する。
+
+現時点ではWorkItemがWaveの全criterionを持つ公開を扱い、部分公開の残作業・親Issue ledgerは専用の証拠接続まで保留する。公開準備はCloud/native承認へ変換せず、candidate branchのpush、daemonのPR送信、正式review/CI/merge、versioned post-merge continuation、P/M総合受入は後続である。実Gitの実装→verification→runner→独立reviewからworkerの公開準備/gateまで、履歴欠落、pause/merge hold、rollback、host policy変更の拒否と再送の不変性をfixtureで確認する。

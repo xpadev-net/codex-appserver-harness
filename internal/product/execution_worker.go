@@ -36,7 +36,7 @@ func (w *ExecutionWorker) Hint() {
 }
 
 func executionPending(err error) bool {
-	return errors.Is(err, storage.ErrProductWorkspaceHeld) || errors.Is(err, storage.ErrProductSubjectHeld) || errors.Is(err, storage.ErrProductRunnerHeld) || errors.Is(err, storage.ErrTemplateNeedsMain) || errors.Is(err, storage.ErrExecutionCapacity)
+	return errors.Is(err, storage.ErrProductWorkspaceHeld) || errors.Is(err, storage.ErrProductSubjectHeld) || errors.Is(err, storage.ErrProductRunnerHeld) || errors.Is(err, storage.ErrProductQualityHeld) || errors.Is(err, storage.ErrTemplateNeedsMain) || errors.Is(err, storage.ErrExecutionCapacity)
 }
 
 func (w *ExecutionWorker) task(ctx context.Context, id string) (bool, error) {
@@ -44,6 +44,9 @@ func (w *ExecutionWorker) task(ctx context.Context, id string) (bool, error) {
 	task, err := k.Task(ctx, id)
 	if err != nil {
 		return false, err
+	}
+	if len(task.Spec.WorkItemIDs) != 1 {
+		return false, storage.ErrProductWorkspaceHeld
 	}
 	switch task.State {
 	case contract.TaskReady:
@@ -56,6 +59,15 @@ func (w *ExecutionWorker) task(ctx context.Context, id string) (bool, error) {
 		_, err := w.Executor.Prepare(ctx, id)
 		return err == nil, err
 	case contract.TaskCompleted:
+		if task.Spec.Kind == "review" {
+			wave, err := k.Wave(ctx, task.WaveID)
+			if err != nil {
+				return false, err
+			}
+			before, beforeErr := k.ReadProductPublicationReadiness(ctx, wave.Target(), task.Spec.WorkItemIDs[0])
+			after, err := k.PrepareProductPublication(ctx, wave.Target(), task.Spec.WorkItemIDs[0])
+			return err == nil && (beforeErr != nil || before.Digest != after.Digest), err
+		}
 		if task.Spec.Kind != "verification" {
 			return false, nil
 		}
