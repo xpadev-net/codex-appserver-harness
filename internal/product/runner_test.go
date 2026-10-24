@@ -16,6 +16,14 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == "_merge-http" {
+		err := ServeMergeHTTP(context.Background(), os.Args[2])
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	if len(os.Args) >= 3 && os.Args[1] == "_runner" {
 		raw, err := os.ReadFile(os.Args[2])
 		var spec runner.Spec

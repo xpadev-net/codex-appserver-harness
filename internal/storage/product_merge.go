@@ -34,6 +34,7 @@ type ProductMergeCancellation struct {
 	At      time.Time `json:"at"`
 }
 type ProductMerge struct {
+	HTTPWrite         *ProductMergeHTTPWrite      `json:"http_write,omitempty"`
 	HTTPStop          *ProductMergeHTTPStop       `json:"http_stop,omitempty"`
 	HTTP              *ProductMergeHTTPOwner      `json:"http,omitempty"`
 	HTTPAbort         *ProductMergeHTTPAbort      `json:"http_abort,omitempty"`
@@ -188,6 +189,9 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 
 	default:
 		return job, true, ErrTaskEvidence
+	}
+	if err := validateProductMergeHTTPWrite(ctx, q, job); err != nil {
+		return job, true, err
 	}
 	if err := validateProductMergeHTTP(ctx, q, job); err != nil {
 		return job, true, err

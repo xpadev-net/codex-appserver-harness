@@ -57,7 +57,7 @@ func validateProductMergeStop(job ProductMerge, proof ProductMergeStop) error {
 		// A no-request result is trusted only for the registered, physically
 		// checked client. No activation must use the atomic abort protocol; it
 		// cannot be certified by a caller's no-request claim.
-		if job.Value.HTTPProtocol != productMergeHTTPProtocol || job.HTTP == nil || proof.Response != nil {
+		if job.Value.HTTPProtocol != productMergeHTTPProtocol || job.HTTP == nil || proof.Response != nil || job.HTTPWrite != nil {
 			return ErrProductMergeHeld
 		}
 		return nil
