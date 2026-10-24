@@ -2,6 +2,7 @@ package product
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 func checkMergeDispatchWorker(t *testing.T, g KernelMergeGate, saved storage.ProductTargetSnapshot, requestID, bin, httpMode, mode string) {
@@ -248,5 +250,57 @@ func checkMergeDispatchWorker(t *testing.T, g KernelMergeGate, saved storage.Pro
 func TestMergeWorkerSoleCancellationPreservesJoinedFailures(t *testing.T) {
 	if !mergeSoleCause(errors.Join(context.Canceled), context.Canceled) || mergeSoleCause(errors.Join(context.Canceled, errors.New("stop unconfirmed")), context.Canceled) || mergeSoleCause(errors.New("context canceled"), context.Canceled) {
 		t.Fatal("joined unrelated failure suppressed")
+	}
+}
+
+// database/sql may finish its automatic rollback before Commit sees the
+// cancellation. In that ordering the real error is ErrTxDone, not ctx.Err().
+func TestMergeDispatchCancellationHandlesActualAutomaticRollback(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	k, err := storage.OpenKernel(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tx, err := k.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	cancel()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		_, readErr := tx.ExecContext(context.Background(), "SELECT 1")
+		if errors.Is(readErr, sql.ErrTxDone) {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("automatic rollback did not complete")
+		case <-tick.C:
+		}
+	}
+	commitErr := tx.Commit()
+	if commitErr != sql.ErrTxDone {
+		t.Fatal("did not exercise actual automatic rollback", commitErr)
+	}
+	if !mergeDispatchCancellation(commitErr, ctx.Err()) {
+		t.Fatal("expected canceled SQL transaction was reported as a new failure")
+	}
+	for _, other := range []error{errors.Join(commitErr, workspace.ErrGitStopUnconfirmed), errors.New(commitErr.Error())} {
+		if mergeDispatchCancellation(other, ctx.Err()) {
+			t.Fatal("unrelated or stop failure hidden", other)
+		}
+	}
+	if mergeDispatchCancellation(commitErr, nil) {
+		t.Fatal("active-context transaction failure hidden")
 	}
 }
