@@ -161,6 +161,14 @@ func FreezeResolvedBase(ctx context.Context, p PinnedCheckout, base, message str
 			return out, err
 		}
 		out.Attempted = status != ""
+		if out.Attempted {
+			if _, err := pinnedGit(ctx, p.CWD, "add", "--all"); err != nil {
+				return out, err
+			}
+			if err := resolutionMarkers(ctx, p); err != nil {
+				return out, err
+			}
+		}
 	}
 	var frozen FrozenCheckout
 	if out.MergeHeadSHA != "" {

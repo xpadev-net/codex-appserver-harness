@@ -218,17 +218,38 @@ func TestFreezeResolvedBaseDoesNotCommitLateChangesAfterMerge(t *testing.T) {
 }
 
 func TestFreezeResolvedBaseRejectsMarkersInNewFilesBeforeCommit(t *testing.T) {
+	for _, mode := range []string{"pending_merge", "already_committed"} {
+		t.Run(mode, func(t *testing.T) { checkNewResolutionMarkers(t, mode == "already_committed") })
+	}
+}
+
+func checkNewResolutionMarkers(t *testing.T, alreadyCommitted bool) {
+	t.Helper()
 	ctx := context.Background()
 	p, original, base := baseResolutionFixture(t)
 	if err := os.WriteFile(filepath.Join(p.CWD, "change.txt"), []byte("resolved file\n"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	mergeHead := base
+	if alreadyCommitted {
+		for _, args := range [][]string{{"add", "--all"}, {"commit", "-m", "fixture resolved merge"}} {
+			if _, err := Git(ctx, p.CWD, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var err error
+		original, err = Resolve(ctx, p.CWD, "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mergeHead = ""
 	}
 	markers := "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> incoming\n"
 	if err := os.WriteFile(filepath.Join(p.CWD, "new.txt"), []byte(markers), 0600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := FreezeResolvedBase(ctx, p, base, "Resolve fixed base conflict", func(context.Context) error { return nil })
-	if err == nil || !got.Attempted || got.Frozen != nil || got.Failure == nil || got.Failure.HeadSHA != original || got.Failure.MergeHeadSHA != base || got.Failure.Clean {
+	if err == nil || !got.Attempted || got.Frozen != nil || got.Failure == nil || got.Failure.HeadSHA != original || got.Failure.MergeHeadSHA != mergeHead || got.Failure.Clean {
 		t.Fatal("untracked markers were committed", got, err)
 	}
 	staged, err := Git(ctx, p.CWD, "show", ":new.txt")
