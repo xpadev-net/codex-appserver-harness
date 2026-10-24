@@ -70,3 +70,13 @@ publication 設定がある daemon は、既存候補を扱う unused な work/f
 model 入力には元候補 SHA と、準備済み HEAD・新比較 base の固定 SHA を区別して渡す。private path・取得先・raw proof は渡さない。writer 完了後の sealing は準備済み merge commit の ancestry を再確認し、worker が merge を取り消した成果を採用しない。採用候補の比較 base は新 HEAD とし、WorkItem は Verifying へ戻す。以前の検証・レビュー・承認の成功へ読み替えない。
 
 実 temp Git/SQLite の統合検査は、固定 SHA の実取得と通常 merge の両変更/両親、already_current の無送信、競合内容保持、merge 前の source 保留、merge 後の HEAD 変更、停止未確認の lease 保持、replay、正常停止 writer の sealing/新版採用と新比較 base、準備済み merge を取り消した候補の拒否を確認する。GitHub 観測と model run は fixture であり native P の受入ではない。競合から新 fix Task/session への引渡しは未完了である。
+
+## 競合を新しい fix 入力へ渡す契約
+
+親への `product_base_merge_conflict` 通知は、停止済み Task/workspace と workspace/proof digest の `conflict` 参照、元候補・旧比較 base・新 base・HEAD の固定 SHA を含む。path の要約は先頭4件かつ合計4,096 bytes を上限とし、全件数も渡す。完全な未解決 path と private Git metadata は停止証拠側へ保持する。同じ証拠の通知は ACK や定期照合で増やさない。
+
+親は `TaskSpec.product_base_conflict` にこの参照を指定し、同じ WorkItem の新しい fix Task を計画できる。古い Task/session を再利用せず、通常の親再計画・fix・Task 予算を消費する。unused な元 Task の実停止、claim/send/terminal/history、登録版、元候補の現在の一致と capacity 解放を認証し、その候補だけを新 plan revision へ同じ transaction で引き継ぐ。通常の親再計画で全候補を暗黙に引き継がない。保存失敗では Task 作成・元 Task の取消し・計画・予算・候補を共に rollback する。
+
+新入力の digest は参照先の停止証拠に結び付き、固定 base 計画は元の競合 base も ancestry の必須集合に加える。再起動後も証拠欠落・改変・未停止 owner・候補更新・scope/policy 変更は保留する。optional field を未使用の旧 plan/input/通知は従来の JSON/checksum を保持する。
+
+この節は実 SQLite の親通知・新 Task/session・入力/admission component である。競合中の checkout を新 fix の model に開放する physical adapter と解消後の sealing 接続は後続へ残り、この参照だけでは model 起動や Git の再実行を許可しない。native P の受入には含めない。

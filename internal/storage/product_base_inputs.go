@@ -16,9 +16,10 @@ type ProductBaseDependency struct {
 	BaseBranch   string              `json:"base_branch"`
 }
 type ProductBaseInputValue struct {
-	Preparation  ProductTaskPreparation            `json:"preparation"`
-	Policy       ProductVerificationPolicySnapshot `json:"policy"`
-	Dependencies []ProductBaseDependency           `json:"dependencies"`
+	ConflictBaseSHA string                            `json:"conflict_base_sha,omitempty"`
+	Preparation     ProductTaskPreparation            `json:"preparation"`
+	Policy          ProductVerificationPolicySnapshot `json:"policy"`
+	Dependencies    []ProductBaseDependency           `json:"dependencies"`
 }
 type ProductBaseInput struct {
 	Value  ProductBaseInputValue `json:"value"`
@@ -68,6 +69,16 @@ func (k *KernelStore) productBaseInputTx(ctx context.Context, tx *sql.Tx, taskID
 		return out, err
 	}
 	out.Value = ProductBaseInputValue{Preparation: prep, Policy: pinned, Dependencies: []ProductBaseDependency{}}
+	conflict, err := k.productBaseConflictInputTx(ctx, tx, w, prep.Task.Spec)
+	if err != nil {
+		return out, err
+	}
+	if conflict != nil {
+		if _, err := k.baseConflictCurrentProductTx(ctx, tx, w, *conflict); err != nil {
+			return out, err
+		}
+		out.Value.ConflictBaseSHA = conflict.Proof.BaseMerge.BaseSHA
+	}
 	required := map[string]bool{}
 	for _, dep := range prep.Task.Spec.DependsOn {
 		prior, err := loadTask(ctx, tx, structureID("task-", w.ID, dep.TaskID))
@@ -123,6 +134,16 @@ func baseInputAncestors(input ProductBaseInput, initial string) ([]string, error
 		return nil, ErrProductBasePlanHeld
 	}
 	ancestors := []string{seed}
+	if ref := prep.Task.Spec.ProductBaseConflict; ref != nil {
+		// The authenticated source digest is part of preparation input. The
+		// source base is added below by the private input snapshot.
+		if !fixedSHA(input.Value.ConflictBaseSHA) {
+			return nil, ErrProductBasePlanHeld
+		}
+		ancestors = append(ancestors, input.Value.ConflictBaseSHA)
+	} else if input.Value.ConflictBaseSHA != "" {
+		return nil, ErrProductBasePlanHeld
+	}
 	for _, dep := range input.Value.Dependencies {
 		if dep.RepositoryID == prep.Registration.Value.Definition.RepositoryID {
 			ancestors = append(ancestors, dep.Fact.MergeSHA)
