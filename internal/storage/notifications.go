@@ -34,6 +34,7 @@ type Subscription struct {
 // grant read access; artifact_read still checks the receiving Task's own grants.
 // Delivery ack, run binding, and decision application are separate facts.
 type Notification struct {
+	Sealing              *ProductSealingSummary     `json:"product_sealing,omitempty"`
 	Preparation          *ProductPreparationSummary `json:"product_preparation,omitempty"`
 	ID                   string                     `json:"id"`
 	SubscriptionID       string                     `json:"subscription_id"`

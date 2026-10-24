@@ -101,3 +101,11 @@ model manifest は実際の新 checkout の固定 SHA・安全な conflict path 
 比較 base は固定した新 HEAD とし、採用後は Verifying へ戻す。sealing 後から採用 transaction までに別候補が選ばれても、その候補を古い結果で上書きしない。merge-only hold は現在の値を保持し、local fix や同じ HEAD の時刻更新だけを妨げない。pause/cancel、候補・source・scope/policy の変更は引き続き保留する。
 
 実 Git/SQLite の統合検査は、通知→参照付き親計画→新 Task/session/checkout→解消ファイル→host sealing/新版採用、元の競合内容保持、marker/新規 marker/abort 拒否、現在の permission と lease、停止証拠の全 identity、採用直前の候補変更、merge hold を維持する model readiness と同じ HEAD の再観測、証拠喪失による起動保留を確認する。model run/停止と GitHub 応答は fixture であり、実 model の競合解消・P全体の native 受入を示さない。正式な独立検証・review・Cloud approval/CI/rules・merge と最終受入の gate は維持する。
+
+## sealing 例外の親通知
+
+正常停止した model run の成果を controller が sealing・採用できない場合、保存済み seal の失敗、未解決 owner、証拠欠落、採用直前の元候補変更を `product_sealing` の安全な要約として親へ通知する。Task/session/run/input/output と保存済み証拠を照合し、run・workspace・seal の識別子と digest、固定 SHA、結果・未解決件数を渡す。private path、command、remote、raw error/log、model の成果本文は含めない。
+
+同一原因の ACK・定期照合は通知を増やさず、利用時にも現在の原因を再確認する。通常の capacity 待ちや未着手 prepared seal は通知しない。通知は Task の成果を適用せず、候補・品質を変更せず、Git/model の再実行も許可しない。停止未確認 owner は launching と lease を保持する。pause/cancel と期限は従来の通知 gate を使う。
+
+SQLite の検査は通知改変・証拠欠落・解決後の古い通知・ACK 重複・通常待機を確認する。実 Git/SQLite の worker 検査は未解消 marker、既存の未解決 owner、sealing 後の候補変更を確認する。model の正常停止は fixture であり native P の受入には含めない。
