@@ -99,7 +99,34 @@ func TestProductCloudRoundMissingOrConflictingEvidenceCannotBecomeApproval(t *te
 					if mode == "digest" {
 						claim.Product.Digest = "changed"
 					} else {
+						// Keep the Product internally valid and align every digest so only
+						// its candidate reference differs from the admitted tool operation.
 						claim.Product.Value.Candidate.ID = "changed"
+						claim.Product.Value.WorkItem.Candidate = "changed"
+						digest, err := contentDigest(claim.Product.Value)
+						if err != nil {
+							t.Fatal(err)
+						}
+						claim.Product.Digest = digest
+						var packet PRReviewRequestPayload
+						if err := k.Record(ctx, "product_pr_review_payload", id, &packet); err != nil {
+							t.Fatal(err)
+						}
+						packet.ProductDigest = digest
+						if err := k.Put(ctx, "product_pr_review_payload", id, "fixture", packet); err != nil {
+							t.Fatal(err)
+						}
+						var intent PROperationIntent
+						if err := k.Record(ctx, "product_pr_intent", id, &intent); err != nil {
+							t.Fatal(err)
+						}
+						intent.ProductDigest = digest
+						if intent.Candidate.CandidateID == claim.Product.Value.Candidate.ID || claim.Product.Value.validate() != nil {
+							t.Fatal("candidate fixture did not isolate admitted reference")
+						}
+						if err := k.Put(ctx, "product_pr_intent", id, "fixture", intent); err != nil {
+							t.Fatal(err)
+						}
 					}
 					if err := k.Put(ctx, "product_pr_dispatch", id, "fixture", claim); err != nil {
 						t.Fatal(err)
