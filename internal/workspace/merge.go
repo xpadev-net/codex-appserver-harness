@@ -9,19 +9,32 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
+
+var ErrBaseMergeUnsettled = errors.New("base merge requires explicit state reconciliation")
+
+// BaseMergeFailure is a bounded observation after a known-stopped failed
+// mutation. It is diagnostic evidence, never a release or retry permission.
+type BaseMergeFailure struct {
+	HeadSHA      string   `json:"head_sha"`
+	MergeHeadSHA string   `json:"merge_head_sha,omitempty"`
+	Clean        bool     `json:"clean"`
+	Unresolved   []string `json:"unresolved"`
+}
 
 // BaseMerge is a physical Git observation. A conflict keeps its original HEAD
 // and unresolved index for the owning controller to capture and reconcile. It
 // grants no candidate adoption, Task success, verification or publication.
 type BaseMerge struct {
-	Source    FrozenCheckout `json:"source"`
-	BaseSHA   string         `json:"base_sha"`
-	Attempted bool           `json:"attempted"`
-	Outcome   string         `json:"outcome,omitempty"`
-	HeadSHA   string         `json:"head_sha,omitempty"`
-	Conflicts []string       `json:"conflicts,omitempty"`
+	Failure   *BaseMergeFailure `json:"failure,omitempty"`
+	Source    FrozenCheckout    `json:"source"`
+	BaseSHA   string            `json:"base_sha"`
+	Attempted bool              `json:"attempted"`
+	Outcome   string            `json:"outcome,omitempty"`
+	HeadSHA   string            `json:"head_sha,omitempty"`
+	Conflicts []string          `json:"conflicts,omitempty"`
 }
 
 func mergeIdle(p PinnedCheckout) error {
@@ -81,8 +94,28 @@ func baseMergeSource(ctx context.Context, frozen FrozenCheckout, base string) er
 // caller owns Git/worktree leases and a durable one-use mutation fence, and has
 // stopped all users of this checkout. Unknown stop or any error retains that
 // ownership; replay decisions belong to the durable controller, not this port.
-func MergePinnedBase(ctx context.Context, frozen FrozenCheckout, base string, beforeMerge func(context.Context) error) (BaseMerge, error) {
-	out := BaseMerge{Source: frozen, BaseSHA: base}
+func MergePinnedBase(ctx context.Context, frozen FrozenCheckout, base string, beforeMerge func(context.Context) error) (out BaseMerge, retErr error) {
+	out = BaseMerge{Source: frozen, BaseSHA: base}
+	defer func() {
+		if retErr == nil || !out.Attempted {
+			return
+		}
+		out.Outcome, out.HeadSHA, out.Conflicts = "", "", nil
+		if errors.Is(retErr, ErrGitStopUnconfirmed) {
+			return
+		}
+		// Only read state after the mutation owner is known stopped. A canceled
+		// caller still receives a bounded observation; failure of these reads keeps
+		// the mutation unknown and retains the original error/ownership.
+		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer stop()
+		observation, err := observeBaseMergeFailure(WithStoppedCommands(cleanup), frozen.PinnedCheckout)
+		if err != nil {
+			retErr = errors.Join(retErr, err)
+			return
+		}
+		out.Failure = &observation
+	}()
 	if beforeMerge == nil {
 		return out, errors.New("host base merge fence required")
 	}
@@ -107,7 +140,8 @@ func MergePinnedBase(ctx context.Context, frozen FrozenCheckout, base string, be
 	}
 	out.Attempted = true
 	// Explicit strategy/options override branch.mergeOptions and repository
-	// settings. No hook, filter, rerere, editor, signer or autostash may run here.
+	// settings. pinnedGit uses the shared Git helper, including core.hooksPath=/dev/null.
+	// No hook, filter, rerere, editor, signer or autostash may run here.
 	args := []string{"-c", "branch." + frozen.Branch + ".mergeOptions=", "-c", "rerere.enabled=false", "-c", "merge.autoStash=false", "-c", "merge.stat=false", "-c", "merge.log=false", "-c", "merge.verifySignatures=false", "-c", "commit.gpgsign=false", "merge", "--no-commit", "--no-ff", "--no-autostash", "--no-verify", "--no-verify-signatures", "--no-edit", "-s", "ort", "--", base}
 	_, mergeErr := pinnedGit(ctx, frozen.CWD, args...)
 	if errors.Is(mergeErr, ErrGitStopUnconfirmed) || ctx.Err() != nil {
@@ -117,23 +151,13 @@ func MergePinnedBase(ctx context.Context, frozen FrozenCheckout, base string, be
 		if !errors.As(mergeErr, &exit) || exit.ExitCode() != 1 {
 			return out, mergeErr
 		}
-		raw, err := pinnedGit(ctx, frozen.CWD, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--diff-filter=U", "-z")
+		paths, err := unresolvedMergePaths(ctx, frozen.CWD)
 		if err != nil {
 			return out, errors.Join(mergeErr, err)
 		}
-		if len(raw) == 0 || len(raw) > 1<<20 || !strings.HasSuffix(raw, "\x00") {
-			return out, errors.Join(mergeErr, errors.New("bounded unresolved merge evidence required"))
+		if len(paths) == 0 {
+			return out, errors.Join(mergeErr, ErrBaseMergeUnsettled)
 		}
-		paths := strings.Split(strings.TrimSuffix(raw, "\x00"), "\x00")
-		if len(paths) > 256 {
-			return out, errors.New("base merge conflicts exceed bound")
-		}
-		for _, p := range paths {
-			if !utf8.ValidString(p) || p == "" || p == "." || p == ".." || path.IsAbs(p) || path.Clean(p) != p || strings.HasPrefix(p, "../") {
-				return out, errors.New("invalid unresolved merge path")
-			}
-		}
-		slices.Sort(paths)
 		out.Conflicts = paths
 		head, err := verifyPinned(ctx, frozen.PinnedCheckout)
 		if err != nil {
@@ -172,4 +196,61 @@ func MergePinnedBase(ctx context.Context, frozen FrozenCheckout, base string, be
 	}
 	out.Outcome, out.HeadSHA = "merged", head
 	return out, ctx.Err()
+}
+
+func unresolvedMergePaths(ctx context.Context, cwd string) ([]string, error) {
+	raw, err := pinnedGit(ctx, cwd, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--diff-filter=U", "-z")
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if len(raw) > 1<<20 || !strings.HasSuffix(raw, "\x00") {
+		return nil, errors.New("bounded unresolved merge evidence required")
+	}
+	paths := strings.Split(strings.TrimSuffix(raw, "\x00"), "\x00")
+	if len(paths) > 256 {
+		return nil, errors.New("base merge conflicts exceed bound")
+	}
+	for _, p := range paths {
+		if !utf8.ValidString(p) || p == "" || p == "." || p == ".." || path.IsAbs(p) || path.Clean(p) != p || strings.HasPrefix(p, "../") {
+			return nil, errors.New("invalid unresolved merge path")
+		}
+	}
+	slices.Sort(paths)
+	return paths, nil
+}
+func observeBaseMergeFailure(ctx context.Context, p PinnedCheckout) (BaseMergeFailure, error) {
+	var out BaseMergeFailure
+	head, err := verifyPinned(ctx, p)
+	if err != nil {
+		return out, err
+	}
+	out.HeadSHA = head
+	if info, err := os.Lstat(filepath.Join(p.GitDir, "MERGE_HEAD")); err == nil {
+		if !info.Mode().IsRegular() {
+			return out, errors.New("invalid failed merge metadata")
+		}
+		raw, err := pinnedGit(ctx, p.CWD, "rev-parse", "--verify", "MERGE_HEAD^{commit}")
+		if err != nil {
+			return out, err
+		}
+		out.MergeHeadSHA = strings.TrimSpace(raw)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return out, err
+	}
+	out.Unresolved, err = unresolvedMergePaths(ctx, p.CWD)
+	if err != nil {
+		return out, err
+	}
+	raw, err := pinnedGit(ctx, p.CWD, "status", "--porcelain", "--untracked-files=all", "-z")
+	if err != nil {
+		return out, err
+	}
+	if len(raw) > 1<<20 {
+		return out, errors.New("failed merge status exceeds bound")
+	}
+	out.Clean = raw == ""
+	return out, nil
 }

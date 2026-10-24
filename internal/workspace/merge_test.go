@@ -42,12 +42,14 @@ func TestMergePinnedBasePreservesHistoryAndSuppressesRepositoryCommands(t *testi
 	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	hooks := t.TempDir()
 	for _, hook := range []string{"pre-merge-commit", "pre-commit", "commit-msg", "post-merge", "post-commit"} {
-		if err := os.WriteFile(filepath.Join(frozen.CommonDir, "hooks", hook), []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0700); err != nil {
+		if err := os.WriteFile(filepath.Join(hooks, hook), []byte("#!/bin/sh\ntouch '"+marker+"'\nexit 1\n"), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, args := range [][]string{
+		{"config", "core.hooksPath", hooks},
 		{"config", "branch." + frozen.Branch + ".mergeOptions", "-s ours --autostash"},
 		{"config", "commit.gpgsign", "true"}, {"config", "gpg.program", script},
 		{"config", "merge.verifySignatures", "true"}, {"config", "merge.autoStash", "true"},
@@ -259,5 +261,32 @@ func TestMergePinnedBaseCancellationNeverReportsCompletedMerge(t *testing.T) {
 	head, err := Resolve(context.Background(), frozen.CWD, "HEAD")
 	if err != nil || head != frozen.SHA {
 		t.Fatal("canceled fixture changed HEAD", head, err)
+	}
+}
+
+func TestMergePinnedBaseNonConflictFailureReturnsReconciliationObservation(t *testing.T) {
+	frozen, base := baseMergeFixture(t, false)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	// Actually stage the complete merge, then lose the successful exit. This
+	// leaves no unmerged paths, but its index/worktree/MERGE_HEAD did change.
+	script := "#!/bin/sh\ncase \"$*\" in\n *' merge --no-commit '*) '" + realGit + "' \"$@\" || exit $?; exit 1 ;;\nesac\nexec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	got, err := MergePinnedBase(context.Background(), frozen, base, func(context.Context) error { return nil })
+	if !errors.Is(err, ErrBaseMergeUnsettled) || !got.Attempted || got.Outcome != "" || got.Failure == nil {
+		t.Fatal("partial mutation disappeared or became success", got, err)
+	}
+	f := got.Failure
+	if f.HeadSHA != frozen.SHA || f.MergeHeadSHA != base || f.Clean || len(f.Unresolved) != 0 {
+		t.Fatal("lost stopped partial merge state", f)
+	}
+	if _, err := MergePinnedBase(context.Background(), frozen, base, func(context.Context) error { t.Fatal("partial merge replayed"); return nil }); err == nil {
+		t.Fatal("partial merge did not hold")
 	}
 }
