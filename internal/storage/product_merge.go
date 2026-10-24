@@ -18,6 +18,7 @@ import (
 var ErrProductMergeHeld = errors.New("product merge requires fresh gates or reconciliation")
 
 type ProductMergeValue struct {
+	HTTPProtocol    string                `json:"http_protocol,omitempty"`
 	RequestID       string                `json:"request_id"`
 	RoundDigest     string                `json:"round_digest"`
 	OwnerID         string                `json:"owner_id"`
@@ -33,6 +34,9 @@ type ProductMergeCancellation struct {
 	At      time.Time `json:"at"`
 }
 type ProductMerge struct {
+	HTTPStop          *ProductMergeHTTPStop       `json:"http_stop,omitempty"`
+	HTTP              *ProductMergeHTTPOwner      `json:"http,omitempty"`
+	HTTPAbort         *ProductMergeHTTPAbort      `json:"http_abort,omitempty"`
 	Reconciliation    *ProductMergeReconciliation `json:"reconciliation,omitempty"`
 	Stop              *ProductMergeStop           `json:"stop,omitempty"`
 	PRLifetimeRelease *OperationReleaseProof      `json:"pr_lifetime_release,omitempty"`
@@ -41,7 +45,7 @@ type ProductMerge struct {
 	ID                string                      `json:"id"`
 	Value             ProductMergeValue           `json:"value"`
 	Digest            string                      `json:"digest"`
-	State             string                      `json:"state"` // prepared, launching, unknown, canceled, stopped_unsent, stopped_unknown, rejected, merged
+	State             string                      `json:"state"` // prepared, launching, unknown, canceled, stopped_unsent, stopped_unknown, rejected, merged, aborted_http
 	MutationLease     ResourceLease               `json:"mutation_lease"`
 	CreatedAt         time.Time                   `json:"created_at"`
 	ClaimedAt         time.Time                   `json:"claimed_at"`
@@ -157,7 +161,7 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 			return job, true, ErrTaskEvidence
 		}
 
-	case "launching", "unknown", "stopped_unsent", "stopped_unknown", "rejected", "merged":
+	case "launching", "unknown", "stopped_unsent", "stopped_unknown", "rejected", "merged", "aborted_http", "stopped_before_http":
 		if job.Cancellation != nil || claimErr != nil || claim.ID != id || claim.OwnerProcess != job.OwnerProcess || claim.OwnerInstanceID != job.OwnerInstanceID || !claim.ClaimedAt.Equal(job.ClaimedAt) || !job.OwnerProcess.Valid() || job.OwnerInstanceID == "" || job.ClaimedAt.Before(job.CreatedAt) {
 			return job, true, ErrTaskEvidence
 		}
@@ -185,10 +189,13 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 	default:
 		return job, true, ErrTaskEvidence
 	}
+	if err := validateProductMergeHTTP(ctx, q, job); err != nil {
+		return job, true, err
+	}
 	if err := validateProductMergeResult(ctx, q, job); err != nil {
 		return job, true, err
 	}
-	if (job.State == "stopped_unsent" || job.State == "stopped_unknown" || job.State == "rejected" || job.State == "merged") && job.Stop == nil {
+	if (job.State == "stopped_unsent" || job.State == "stopped_unknown" || job.State == "rejected" || job.State == "merged" || job.State == "stopped_before_http") && job.Stop == nil {
 		return job, true, ErrTaskEvidence
 	}
 	if (job.State == "launching" || job.State == "unknown" || job.State == "prepared" || job.State == "canceled") && job.Stop != nil {
@@ -279,6 +286,9 @@ func (k *KernelStore) readProductMergeTx(ctx context.Context, tx *sql.Tx, id str
 // no HTTP send or formal approval: the trusted adapter must freshly run all
 // source/quality/Cloud/CI/rules gates before the separate one-use send fence.
 func (k *KernelStore) PrepareProductMerge(ctx context.Context, requestID, owner, method string) (ProductMerge, error) {
+	return k.prepareProductMerge(ctx, requestID, owner, method, "")
+}
+func (k *KernelStore) prepareProductMerge(ctx context.Context, requestID, owner, method, protocol string) (ProductMerge, error) {
 	var empty ProductMerge
 	if !validPRProofID(owner) || (method != "merge" && method != "squash" && method != "rebase") {
 		return empty, ErrProductMergeHeld
@@ -298,7 +308,7 @@ func (k *KernelStore) PrepareProductMerge(ctx context.Context, requestID, owner,
 		if err != nil {
 			return empty, err
 		}
-		if old.Value.OwnerID != owner || old.Value.Method != method {
+		if old.Value.OwnerID != owner || old.Value.Method != method || old.Value.HTTPProtocol != protocol {
 			return empty, ErrProductMergeHeld
 		}
 		return old, tx.Commit()
@@ -322,7 +332,7 @@ func (k *KernelStore) PrepareProductMerge(ctx context.Context, requestID, owner,
 	if err != nil {
 		return empty, err
 	}
-	value := ProductMergeValue{RequestID: requestID, RoundDigest: round.Digest, OwnerID: owner, Method: method, Product: round.Product, ReadinessID: ready.ID, ReadinessDigest: ready.Digest, PRReservationID: seat.ID}
+	value := ProductMergeValue{HTTPProtocol: protocol, RequestID: requestID, RoundDigest: round.Digest, OwnerID: owner, Method: method, Product: round.Product, ReadinessID: ready.ID, ReadinessDigest: ready.Digest, PRReservationID: seat.ID}
 	digest, err := contentDigest(value)
 	if err != nil {
 		return empty, err
@@ -357,6 +367,12 @@ func (k *KernelStore) ClaimProductMerge(ctx context.Context, id, owner, digest s
 	if job.Value.OwnerID != owner || job.Digest != digest {
 		return out, ErrProductMergeHeld
 	}
+	// Terminal receipts are readonly acknowledgements. In particular a
+	// protocol abort seals every delayed physical/native start permanently.
+	if productMergeTerminal(job) || job.State == "canceled" {
+		return out, tx.Commit()
+	}
+
 	if job.State != "prepared" {
 		return out, tx.Commit()
 	}
@@ -412,7 +428,7 @@ func (k *KernelStore) MarkProductMergeMayHaveSent(ctx context.Context, id, owner
 	if err != nil {
 		return empty, err
 	}
-	if job.Value.OwnerID != owner || job.Digest != digest || job.State != "launching" || !job.MayHaveSentAt.IsZero() || job.OwnerProcess != process.Identify(os.Getpid()) || job.OwnerInstanceID != instance {
+	if job.Value.OwnerID != owner || job.Digest != digest || job.State != "launching" || job.HTTPAbort != nil || !job.MayHaveSentAt.IsZero() || job.OwnerProcess != process.Identify(os.Getpid()) || job.OwnerInstanceID != instance {
 		return empty, ErrProductMergeHeld
 	}
 	round, err := k.productCloudRoundTx(ctx, tx, job.Value.RequestID)

@@ -26,7 +26,7 @@ func (k *KernelStore) MergeReconciliationTargets(ctx context.Context, after stri
 	defer tx.Rollback()
 	ids, err := inputIDsTx(ctx, tx, `SELECT id FROM records WHERE kind='product_merge' AND id>?
  AND CASE WHEN json_valid(payload) THEN COALESCE(json_extract(payload,'$.merge.state'),'') NOT IN
- ('prepared','launching','unknown','canceled','stopped_unsent','rejected','merged') ELSE 1 END
+ ('prepared','launching','unknown','canceled','stopped_unsent','rejected','merged','aborted_http','stopped_before_http') ELSE 1 END
  ORDER BY id LIMIT ?`, after, limit+1)
 	if err != nil {
 		return page, err

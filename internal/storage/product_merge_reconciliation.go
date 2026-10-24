@@ -38,7 +38,7 @@ func (k *KernelStore) ConfirmProductMergeObserved(ctx context.Context, id, owner
 	if err != nil {
 		return empty, err
 	}
-	if job.Value.OwnerID != owner || job.Digest != digest || validateProductMergeReconciliation(job, proof) != nil || proof.Observation.ObservedAt.After(k.clock()) {
+	if job.HTTPAbort != nil || job.Value.OwnerID != owner || job.Digest != digest || validateProductMergeReconciliation(job, proof) != nil || proof.Observation.ObservedAt.After(k.clock()) {
 		return empty, ErrProductMergeHeld
 	}
 	if job.Reconciliation != nil {

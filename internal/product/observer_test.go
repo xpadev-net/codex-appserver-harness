@@ -140,11 +140,39 @@ func TestPRObserverFailuresDoNotStarveOthersAndReadOnlyRestartsDeduplicate(t *te
 	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_pr_scan' AND json_extract(payload,'$.notification_state')='pending'").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), 150*time.Millisecond)
+
+	scans := func(number int) int {
+		var count int
+		if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_pr_scan' AND json_extract(payload,'$.resource_key')=?", fmt.Sprintf("github:17:pull:%d", number)).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	before43, before44 := scans(43), scans(44)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := o.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	go func() { done <- o.Run(ctx) }()
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
+	for scans(43) < before43+1 || scans(44) < before44+1 {
+		select {
+		case err := <-done:
+			t.Fatal("restart stopped before both unchanged scans committed", err)
+		case <-poll.C:
+		}
+	}
+	// Observe the cooldown only after both successful restart scans exist.
+	// A fixed total runtime conflates a slow initial read with a busy loop.
+	select {
+	case err := <-done:
+		t.Fatal("restart stopped during cooldown observation", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+
 	var after int
 	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_pr_scan' AND json_extract(payload,'$.notification_state')='pending'").Scan(&after); err != nil || after != before {
 		t.Fatal("restart created duplicate changed observations", before, after, err)
