@@ -37,6 +37,10 @@ func resolvedBaseState(ctx context.Context, p PinnedCheckout, base string) (head
 	if err := verifyRepositoryPin(ctx, RepositoryPin{Repository: p.CWD, GitDir: p.GitDir, CommonDir: p.CommonDir}); err != nil {
 		return "", "", err
 	}
+	available, err := pinnedCommitAvailable(ctx, pin, base)
+	if err != nil || !available {
+		return "", "", errors.Join(errors.New("fixed resolution base is unavailable locally"), err)
+	}
 	head, err = verifyPinned(ctx, p)
 	if err != nil {
 		return "", "", err
@@ -153,9 +157,23 @@ func FreezeResolvedBase(ctx context.Context, p PinnedCheckout, base, message str
 		}
 		out.Attempted = status != ""
 	}
-	frozen, err := FreezePinned(ctx, p, message)
-	if err != nil {
-		return out, err
+	var frozen FrozenCheckout
+	if out.MergeHeadSHA != "" {
+		// The pending merge was just committed. Verify it without allowing a
+		// second commit to absorb files changed after that mutation.
+		sha, err := verifyPinned(ctx, p)
+		if err != nil {
+			return out, err
+		}
+		if err := Clean(ctx, p.CWD); err != nil {
+			return out, err
+		}
+		frozen = FrozenCheckout{PinnedCheckout: p, SHA: sha}
+	} else {
+		frozen, err = FreezePinned(ctx, p, message)
+		if err != nil {
+			return out, err
+		}
 	}
 	if err := mergeIdle(p); err != nil {
 		return out, err

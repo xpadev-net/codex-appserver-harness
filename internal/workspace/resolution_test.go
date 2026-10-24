@@ -92,7 +92,7 @@ func TestFreezeResolvedBaseStagesWorkerFilesAndRetainsBothParents(t *testing.T) 
 }
 
 func TestFreezeResolvedBaseRejectsUnresolvedOrChangedOwnerBeforeStaging(t *testing.T) {
-	for _, mode := range []string{"markers", "unknown_base", "merge_head", "aborted", "other_operation", "partial_clone", "held", "late_markers", "late_head", "cancel", "unknown_stop", "no_fence"} {
+	for _, mode := range []string{"markers", "unknown_base", "missing_object", "merge_head", "aborted", "other_operation", "partial_clone", "held", "late_markers", "late_head", "cancel", "unknown_stop", "no_fence"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -127,6 +127,11 @@ func TestFreezeResolvedBaseRejectsUnresolvedOrChangedOwnerBeforeStaging(t *testi
 			switch mode {
 			case "unknown_base":
 				base = strings.Repeat("a", 40)
+			case "missing_object":
+				base = strings.Repeat("a", 40)
+				if err := os.WriteFile(filepath.Join(p.GitDir, "MERGE_HEAD"), []byte(base+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
 			case "merge_head":
 				if err := os.WriteFile(filepath.Join(p.GitDir, "MERGE_HEAD"), []byte(original+"\n"), 0600); err != nil {
 					t.Fatal(err)
@@ -183,5 +188,31 @@ func TestFreezeResolvedBaseObservesStoppedPartialMutationWithoutSuccess(t *testi
 	got, err := FreezeResolvedBase(ctx, p, base, "Resolve fixed base conflict", func(context.Context) error { return nil })
 	if err == nil || !got.Attempted || got.Frozen != nil || got.Failure == nil || got.Failure.HeadSHA != original || got.Failure.MergeHeadSHA != base || len(got.Failure.Unresolved) != 0 {
 		t.Fatal("staging followed by commit failure lost physical facts", got, err)
+	}
+}
+
+func TestFreezeResolvedBaseDoesNotCommitLateChangesAfterMerge(t *testing.T) {
+	ctx := context.Background()
+	p, original, base := baseResolutionFixture(t)
+	if err := os.WriteFile(filepath.Join(p.CWD, "change.txt"), []byte("resolved file\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := t.TempDir()
+	script := "#!/bin/sh\nfor arg do\n if [ \"$arg\" = commit ]; then\n  '" + realGit + "' \"$@\" || exit $?\n  printf late > '" + filepath.Join(p.CWD, "late.txt") + "'\n  exit 0\n fi\ndone\nexec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := FreezeResolvedBase(ctx, p, base, "Resolve fixed base conflict", func(context.Context) error { return nil })
+	if err == nil || !got.Attempted || got.Frozen != nil || got.Failure == nil || got.Failure.Clean || got.Failure.MergeHeadSHA != "" {
+		t.Fatal("late files became another successful commit", got, err)
+	}
+	parents, err := Git(ctx, p.CWD, "rev-list", "--parents", "-n", "1", "HEAD")
+	if err != nil || !reflect.DeepEqual(strings.Fields(parents), []string{got.Failure.HeadSHA, original, base}) {
+		t.Fatal("late files changed the two-parent merge", parents, err)
 	}
 }
