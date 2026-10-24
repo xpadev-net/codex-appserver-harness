@@ -501,7 +501,7 @@ scope/policy/Candidateが同じで、親planが完了結果・元inputを明示c
 
 ### 製品 findings の有界 template 展開
 
-Pの末尾review Phaseでは、`ExpandReviewTemplates`と共通の自動template照合が、固定Candidateの正常停止・適用済み報告、保存plan/template、全source Phase、既知のrunner完了を検査する。`implementation_defect`は新fix Task、その後の別verification Taskへ、`test_defect`はtest-path/schema v3の新verification Taskへ戻す。分類不明・曖昧なowner・template変更・上限超過は親の例外再計画へ戻し、runner結果待ちではmodelを起動しない。終了済みの環境障害・timeout・cancelは未完了と区別して親attentionを一度だけ保存し、未接続のretryを待つだけで止めない。
+Pのreview Phaseでは、`ExpandReviewTemplates`と共通の自動template照合が、固定Candidateの正常停止・適用済み報告、保存plan/template、全source Phase、既知のrunner完了を検査する。`implementation_defect`は新fix Task、その後の別verification Taskへ、`test_defect`はtest-path/schema v3の新verification Taskへ戻す。分類不明・曖昧なowner・template変更・上限超過は親の例外再計画へ戻し、runner結果待ちではmodelを起動しない。終了済みの環境障害・timeout・cancelは未完了と区別して親attentionを一度だけ保存し、未接続のretryを待つだけで止めない。
 
 複数ownerは実装修復→検証修復の順に一意に並べ、元の全review役割を新sessionへ保持する。新reviewは最終verification結果へ依存する。実runner成功の生成は行わず、最終Candidateの全profile成功がない間は品質gateを通さない。元report/raw finalは保持し、保存したreplacement lineageから全役割の新clean報告を確認した場合だけ旧報告の役割を置き換える。同じSHAに残るfindingsの拒否は維持する。
 
@@ -510,3 +510,5 @@ adopted plan、product targetの明示CAS更新、生成Task/lineage/receipt/his
 後続の生成fixは、直前のCandidateが変わった場合に限り、未使用session・attemptゼロ・thread/run未作成・全依存完了・元の生成spec/history・現在Candidate SHAを検査して、workspace予約と同じtransactionで入力を固定する。既存workspaceや使用済みsnapshotを再束縛しない。
 
 P自動展開は中間review Phaseも扱い、後続の未使用Taskを新ID/sessionへ複製し、依存と将来templateのrootを更新する。peer reviewの暗黙出力依存と元のPhase境界を再reviewへ保持する。使用済みTask/process、roleの自己依存・統合、旧Artifact IDを特定する明示selectorの再配置は理由付き親再計画とし、権限を黙って広げない。daemonの製品dispatch/readiness、実model/隔離launcher/Cloudを含むP受入、環境障害のrunner retryとmerge経路は引き続き未接続である。fixtureは実行factsを明示し、Kのtemplate回帰と共に分類、複数owner/role、修復→再検証→再review→品質、rollback/history欠落、繰返し上限、main/worker run増加ゼロを検証する。
+
+後続へ複製した同じWorkItemのwork/fix Taskは、新規workspace予約時だけ、完了した直接依存の唯一のCandidateを取り込める。保存した展開のhead/history・作成Task/spec・clone対応を照合し、現行Candidateの固定SHAとの一致、全依存の正常適用、未使用session（thread/preparation/run/予約/processなし）を確認してTaskとplanの入力digestを同一transactionで更新する。旧SHA、欠落・矛盾した履歴、使用済みsession、未完了依存では予約も入力変更も行わない。既存workspaceの再送とClaimは固定済み入力を変更しない。

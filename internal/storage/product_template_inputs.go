@@ -3,19 +3,21 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"reflect"
 	"slices"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-// Only an unstarted controller-generated repair can capture a completed
-// predecessor's new Candidate. Existing workspace/run snapshots are immutable.
-func (k *KernelStore) captureProductTemplateFixInputTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, value ProductWorkspaceValue) (bool, error) {
-	if task.Spec.Kind != "fix" || value.Target.Valid() || value.InputDigest != "" {
+// Only an unstarted controller-generated repair or future writer clone can
+// capture a completed predecessor's new Candidate. Existing workspace/run
+// snapshots are immutable.
+func (k *KernelStore) captureProductTemplateWriterInputTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task, value ProductWorkspaceValue) (bool, error) {
+	if (task.Spec.Kind != "work" && task.Spec.Kind != "fix") || value.Target.Valid() || value.InputDigest != "" {
 		return false, nil
 	}
-	keys, err := inputIDsTx(ctx, tx, `SELECT id FROM records WHERE kind='template_expansion' AND work_item_id=? AND json_extract(payload,'$.product') IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(json_extract(payload,'$.product.repairs')) WHERE value=?) ORDER BY id`, w.ID, task.LocalID)
+	keys, err := inputIDsTx(ctx, tx, `SELECT id FROM records WHERE kind='template_expansion' AND work_item_id=? AND json_extract(payload,'$.product') IS NOT NULL AND (EXISTS(SELECT 1 FROM json_each(json_extract(payload,'$.product.repairs')) WHERE value=?) OR EXISTS(SELECT 1 FROM json_each(json_extract(payload,'$.product.future_clones')) WHERE value=?)) ORDER BY id`, w.ID, task.LocalID, task.ID)
 	if err != nil {
 		return false, err
 	}
@@ -26,8 +28,17 @@ func (k *KernelStore) captureProductTemplateFixInputTx(ctx context.Context, tx *
 	if err != nil {
 		return false, err
 	}
-	if !slices.Contains(expansion.Admission.CreatedTaskIDs, task.ID) || expansion.Admission.Target != task.Target() {
+	if !slices.Contains(expansion.Admission.CreatedTaskIDs, task.ID) || expansion.Admission.Target != task.Target() || len(task.Spec.WorkItemIDs) != 1 || task.Spec.WorkItemIDs[0] != expansion.Product.WorkItemID {
 		return false, ErrTaskEvidence
+	}
+	if !slices.Contains(expansion.Product.Repairs, task.LocalID) {
+		var clone templateTaskClone
+		if err := taskEvidenceRecord(ctx, tx, "template_future_clone", task.ID, &clone); err != nil {
+			return false, errors.Join(ErrTaskEvidence, err)
+		}
+		if clone.ExpansionKey != keys[0] || expansion.Product.FutureClones[clone.OriginalID] != task.ID {
+			return false, ErrTaskEvidence
+		}
 	}
 	matched := false
 	for _, phase := range expansion.Admission.Plan.Phases {
@@ -40,17 +51,8 @@ func (k *KernelStore) captureProductTemplateFixInputTx(ctx context.Context, tx *
 	if !matched {
 		return false, ErrTaskEvidence
 	}
-	b, err := sessionBindingTx(ctx, tx, task.SessionID)
-	if err != nil {
-		return false, err
-	}
-	var active string
-	var stopped, creating, used bool
-	if err := tx.QueryRowContext(ctx, "SELECT active_run_id,process_stopped,creating,EXISTS(SELECT 1 FROM kernel_run_bindings WHERE session_id=?) FROM kernel_sessions WHERE id=?", b.ID, b.ID).Scan(&active, &stopped, &creating, &used); err != nil {
-		return false, err
-	}
-	if b.Closed || b.ThreadID != "" || active != "" || !stopped || creating || used {
-		return false, ErrProductWorkspaceHeld
+	if err := k.productFutureTaskUnusedTx(ctx, tx, w, task); err != nil {
+		return false, errors.Join(ErrProductWorkspaceHeld, err)
 	}
 	product, err := loadProductTargetTx(ctx, tx, w.Target(), expansion.Product.WorkItemID)
 	if err != nil {
