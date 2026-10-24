@@ -547,7 +547,7 @@ IPC/runner hintとruntimeのcommit後hintはworkerとmodel loopへ配送し、�
 
 `Executor.PublicationGate` は旧service Storeに依存せず、公開準備のhead/history、現在の投影、品質、host設定と固定verification policyを読み直す。既存`Publisher`のGate portに渡し、payload保存前とHTTP送信直前の両方で呼ぶためのread-only portである。本文にはscope/policy版、固定SHAと比較base、評価したcriterion、machine/reviewのproof digestを安定順で載せる。argv/認証本文/modelの成功要約を公開せず、Issueを自動closeする文章を拒否する。
 
-現時点ではWorkItemがWaveの全criterionを持つ公開を扱い、部分公開の残作業・親Issue ledgerは専用の証拠接続まで保留する。公開準備はCloud/native承認へ変換せず、candidate branchのpush、daemonのPR送信、正式review/CI/merge、versioned post-merge continuation、P/M総合受入は後続である。実Gitの実装→verification→runner→独立reviewからworkerの公開準備/gateまで、履歴欠落、pause/merge hold、rollback、host policy変更の拒否と再送の不変性をfixtureで確認する。
+WorkItemがWaveの一部のcriterionを持つ場合は、範囲外の全条件を別の登録済みtracking WorkItemへ結び付けるscope証拠を品質準備と同じtransactionで保存し、公開・merge gateで再照合する。[部分PRの公開範囲と追跡先](product-partial-scope.md)に保存契約・本文・検証範囲を記す。公開準備はCloud/native承認へ変換しない。実Gitの実装→verification→runner→独立reviewからworkerの公開準備/gateまで、履歴欠落、pause/merge hold、rollback、host policy変更の拒否と再送の不変性をfixtureで確認する。Issue分割の外部作成・継続作業の自動計画、versioned post-merge continuation、P/M総合受入は別に確認する。
 
 ### 固定Candidateのbranch push primitive
 

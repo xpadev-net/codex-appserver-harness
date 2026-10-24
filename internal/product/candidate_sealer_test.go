@@ -20,9 +20,14 @@ import (
 // seeded in SQLite. This is no evidence of real model dispatch or P acceptance.
 func candidateSealerFixture(t *testing.T, configure ...func(*contract.PlanProposal)) (CandidateSealer, storage.ProductWorkspace, domain.Task, contract.SessionRun) {
 	t.Helper()
+	return candidateSealerFixtureWithAdmission(t, nil, configure...)
+}
+
+func candidateSealerFixtureWithAdmission(t *testing.T, request *storage.ProductWaveRequest, configure ...func(*contract.PlanProposal)) (CandidateSealer, storage.ProductWorkspace, domain.Task, contract.SessionRun) {
+	t.Helper()
 	ctx := context.Background()
-	p, request, _, task := workspacePreparerFixture(t, configure...)
-	ready, err := p.Prepare(ctx, request)
+	p, workspaceRequest, _, task := workspacePreparerFixtureWithAdmission(t, request, configure...)
+	ready, err := p.Prepare(ctx, workspaceRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

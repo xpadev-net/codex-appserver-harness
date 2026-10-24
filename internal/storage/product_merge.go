@@ -250,6 +250,9 @@ func (k *KernelStore) mergePreflightTx(ctx context.Context, tx *sql.Tx, round Pr
 	if err != nil {
 		return empty, seat, err
 	}
+	if err := k.checkProductPublicationScopeTx(ctx, tx, ready); err != nil {
+		return empty, seat, err
+	}
 	quality, err := k.productQualityTx(ctx, tx, p.Target, p.WorkItem.ID)
 	if err != nil {
 		return empty, seat, err

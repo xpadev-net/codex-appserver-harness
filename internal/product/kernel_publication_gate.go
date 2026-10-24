@@ -53,9 +53,10 @@ func (e Executor) PublicationGate(ctx context.Context, saved storage.ProductTarg
 	if err != nil {
 		return publication, err
 	}
-	// Partial publication needs its own validated residual/parent ledger. Until
-	// that port is connected, a narrower WorkItem cannot imply full coverage.
-	if wave.Target() != p.Target || len(registration.Value.Definition.Criteria) != len(wave.Criteria) {
+	if wave.Target() != p.Target {
+		return publication, storage.ErrProductQualityHeld
+	}
+	if len(registration.Value.Definition.Criteria) != len(wave.Criteria) && ready.Value.Scope == nil {
 		return publication, fmt.Errorf("%w: partial publication requires residual evidence", storage.ErrProductQualityHeld)
 	}
 	proof := ready.Value.Quality
@@ -72,6 +73,21 @@ func (e Executor) PublicationGate(ctx context.Context, saved storage.ProductTarg
 	}
 	for _, id := range sortedProofKeys(proof.Value.Reviews) {
 		fmt.Fprintf(&body, "\n- Independent review `%s`: `%s`", id, proof.Value.Reviews[id])
+	}
+	if scope := ready.Value.Scope; scope != nil {
+		for _, id := range sortedProofKeys(proof.Value.Results) {
+			fmt.Fprintf(&body, "\n- Task result `%s`: `%s`", id, proof.Value.Results[id])
+		}
+		fmt.Fprintf(&body, "\n\nPartial publication scope: `%s` (`%s`).\n\nCriteria outside this PR: %s.\nTracked work remains subject to its own verification, review and merge; parent acceptance remains separate.\n", scope.ID, scope.Digest, strings.Join(scope.Value.OutsideCriteria, ", "))
+		for _, outside := range scope.Value.Outside {
+			var criteria []string
+			for _, c := range outside.Value.Definition.Criteria {
+				if slices.Contains(scope.Value.OutsideCriteria, c) {
+					criteria = append(criteria, c)
+				}
+			}
+			fmt.Fprintf(&body, "\n- Tracking WorkItem `%s` (`%s`): %s", outside.Value.Definition.ID, outside.Digest, strings.Join(criteria, ", "))
+		}
 	}
 	fmt.Fprintln(&body)
 	publication = Publication{Title: "Harness implementation " + p.WorkItem.ID, Body: body.String()}

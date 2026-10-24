@@ -216,6 +216,15 @@ func (k *KernelStore) PrepareProductPublicationScope(ctx context.Context, target
 		return saved, err
 	}
 	defer tx.Rollback()
+	saved, err = k.prepareProductPublicationScopeTx(ctx, tx, target, workID)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) prepareProductPublicationScopeTx(ctx context.Context, tx *sql.Tx, target contract.Target, workID string) (ProductPublicationScope, error) {
+	var saved ProductPublicationScope
 	w, err := loadWave(ctx, tx, target.WaveID)
 	if err != nil {
 		return saved, err
@@ -232,7 +241,7 @@ func (k *KernelStore) PrepareProductPublicationScope(ctx context.Context, target
 		if !reflect.DeepEqual(prior, saved) {
 			return saved, ErrProductPublicationScopeHeld
 		}
-		return prior, tx.Commit()
+		return prior, nil
 	}
 	if !errors.Is(readErr, sql.ErrNoRows) {
 		return saved, readErr
@@ -251,7 +260,7 @@ func (k *KernelStore) PrepareProductPublicationScope(ctx context.Context, target
 	if err := kernelRecordTx(ctx, tx, "product_publication_scope", key, key, saved); err != nil {
 		return saved, err
 	}
-	return saved, tx.Commit()
+	return saved, nil
 }
 
 // ReadProductPublicationScope authenticates saved scope and rechecks all current
@@ -263,6 +272,11 @@ func (k *KernelStore) ReadProductPublicationScope(ctx context.Context, target co
 		return saved, err
 	}
 	defer tx.Rollback()
+	return k.readProductPublicationScopeTx(ctx, tx, target, workID)
+}
+
+func (k *KernelStore) readProductPublicationScopeTx(ctx context.Context, tx *sql.Tx, target contract.Target, workID string) (ProductPublicationScope, error) {
+	var saved ProductPublicationScope
 	w, err := loadWave(ctx, tx, target.WaveID)
 	if err != nil {
 		return saved, err
