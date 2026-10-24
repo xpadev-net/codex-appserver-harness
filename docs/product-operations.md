@@ -714,3 +714,15 @@ work listは`stopped_unknown`のheadを選び、まだphysical stopのないunkn
 `FinishProductMergeHTTP`は保存済みHTTP ownerのprocess groupを`process.WaitStopped`で独立に確認し、spec digest/元requestに結び付いたresponse/stopとHTTP停止witnessを同じtransactionで保存する。親controllerの再起動後も使用できる。生存/不明なgroup、別spec、欠落したowner/witnessは解放しない。登録後のtransport開始時刻はactivation時刻とし、親のsend fenceが先にあることを認証する。既知のmerged/rejectedは元のcapacity規則を使い、unknownは実終了を保存してもmutation leaseを保持し、正のmerged API照合だけで後日解放する。
 
 registered clientがnative requestを開始しなかったとtrusted wrapperの結果で確定し、実groupの停止も確認できる場合は`client_not_started`/`stopped_before_http`を記録できる。fileの欠落や空のAPI結果をこの証拠にはせず、モデル由来のBooleanも受け付けない。raw response/resultの取得はtrusted adapterの責務であり、このstorage fixtureでは事実を注入する。実Go子processを生存させた拒否、停止後/reopen後の各結果、cancel後の旧結果、unknown→正のmerged照合、rollbackとwitness欠落/再送の次owner保護を確認する。旧形式の不正な`aborted_http`は、record checksumが整合していてもprotocol検証で拒否する。
+
+### Trusted Go HTTP wrapperと送信直前のcontroller gate
+
+内部`_merge-http`はDBから導いたprivate specだけを受け、credential・任意command/URL・モデルのapproval Booleanをspecへ入れない。spec/resultはcanonicalなprivate directory内の同一user所有・単一linkの通常fileに限定し、symlink/FIFO/公開mode/サイズ超過を拒否する。specはO_EXCL・fsyncで保存し、実byteのdigestをHTTP ownerへpinする。結果も上書きせず、spec/merge/process/時刻/応答のidentityを再認証する。
+
+wrapperは自分のgroupを登録し、実repositoryのID/名前/default branchをGETで照合する。その後、既存のread-only/hint IPCとは別のprivate `merge-authorize.sock`へ、元intentとspec digestだけで照会する。controller側はSO_PEERCREDのUID/PID/boot/start ticksを保存済みHTTP ownerと照合し、canonical source/quality・Cloud正式承認・CI・rulesを直前に再評価する。scope/prompt/resultを受けるendpointではなく、モデルworkerから到達させない。private socketとlockの所有・inode、長いprivate rootの/proc directory FD経由bind、接続数8/要求8 KiB/応答1 MiB/30秒とcancel/joinを制限する。
+
+wrapperは受け取った新しい測定packetで`MarkProductMergeHTTPMayHaveSent`の別の一回限りのfenceを取得し、現在controls/quality/元head/base/round/登録processをDBで再確認した直後に、固定の`PUT pulls/N/merge`を実行する。bodyはjournal由来のexpected `sha`と`merge_method`だけとし、再送しない。controller不在・取消・gate不成立・他PID・native fence取得失敗ではPUTを送らない。native CLIの出力はio.Copy経由でも1 MiB以内にし、missing/不正応答はunknown、構造化されたmerged応答は実merge SHAを必須とする。
+
+ghはwrapperと同じgroupを継承する。wrapperは応答保存後もsupervisorがgroup全体を停止するまでleaderを保持し、保存済みresultを物理停止に読み替えない。再起動したcontrollerも保存済みidentityでgroupを停止/確認してから`FinishProductMergeHTTP`へ渡す。応答fileなし/不正は未送信証拠にしない。isolated model/runnerにはHTTP spec/result directory・authority socket/lockもforbidden pathとして渡す。
+
+実Git/runner/独立reviewのquality fixtureから実Go subprocess・fake-ghを起動し、expected-head body、一回だけのPUT、unknown保持、metadata不一致、controller不在、直前pause、他PID拒否、応答後の生存descendant、spec改変/消失したnative-write証拠、private file制限を確認する。Cloud/CI/source応答とHTTP結果はfixtureであり、native P合格には数えない。daemonのmerge dispatch/authority起動と自動復旧ループは後続で、ここでは自動mergeを有効化しない。

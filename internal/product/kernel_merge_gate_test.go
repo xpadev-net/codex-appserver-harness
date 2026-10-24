@@ -218,7 +218,7 @@ func TestKernelMergeGateRequiresCurrentApprovalCIAndAllCapabilities(t *testing.T
 	}
 }
 
-func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.ProductTargetSnapshot, id string, requestAPI *fakeReviewAPI) {
+func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.ProductTargetSnapshot, id string, requestAPI *fakeReviewAPI, httpMode string) {
 	t.Helper()
 	ctx := context.Background()
 	round, err := e.Store.ReadProductCloudRound(ctx, id)
@@ -267,6 +267,11 @@ func checkKernelMergeWithQuality(t *testing.T, e Executor, saved storage.Product
 	if _, err := e.Store.ApplyOperatorControl(ctx, storage.OperatorControl{Key: "merge-gate-resume", Target: saved.Value.Target, Action: "resume", Reason: "restore fixture"}); err != nil {
 		t.Fatal(err)
 	}
+	if httpMode != "" {
+		checkMergeHTTPWrapper(t, g, saved, id, httpMode)
+		return
+	}
+
 	job, err := e.Store.PrepareProductMerge(ctx, id, "kernel-merge-owner", "merge")
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 // GitHub/Git publication transports are fixtures, not native P acceptance.
 func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetSnapshot, mode string) {
 	t.Helper()
+	httpMode := ""
+	if strings.HasPrefix(mode, "publication_http_") {
+		httpMode = strings.TrimPrefix(mode, "publication_http_")
+		mode = "publication_push"
+	}
+
 	ctx := context.Background()
 	publishCtx, cancelPublish := context.WithCancel(ctx)
 	defer cancelPublish()
@@ -149,7 +156,7 @@ func checkBranchPublisher(t *testing.T, e Executor, saved storage.ProductTargetS
 			t.Fatal("replay repeated publication", pushes, api.writes, err)
 		}
 		if mode == "publication_push" {
-			checkKernelReviewGate(t, e, saved, api)
+			checkKernelReviewGate(t, e, saved, api, httpMode)
 		}
 		return
 	}

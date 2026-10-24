@@ -14,7 +14,7 @@ import (
 
 // Called after the real local quality fixture has bound its injected PR.
 // Capability reports and remote resources below are deliberately fixtures.
-func checkKernelReviewGate(t *testing.T, e Executor, old storage.ProductTargetSnapshot, api *fakeAPI) {
+func checkKernelReviewGate(t *testing.T, e Executor, old storage.ProductTargetSnapshot, api *fakeAPI, httpMode string) {
 	t.Helper()
 	ctx := context.Background()
 	current, err := e.Store.ReadProductTarget(ctx, old.Value.Target, old.Value.WorkItem.ID)
@@ -171,5 +171,5 @@ func checkKernelReviewGate(t *testing.T, e Executor, old storage.ProductTargetSn
 	if _, err = r.Request(ctx, reply.OperationID, "other-owner"); err != nil || requestAPI.requestWrites != 1 {
 		t.Fatal("review replay wrote again", err)
 	}
-	checkKernelMergeWithQuality(t, e, current, reply.OperationID, requestAPI)
+	checkKernelMergeWithQuality(t, e, current, reply.OperationID, requestAPI, httpMode)
 }

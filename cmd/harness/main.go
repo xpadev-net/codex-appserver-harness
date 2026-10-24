@@ -8,6 +8,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/codex"
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/kernelcli"
+	"github.com/xpadev-net/codex-appserver-harness/internal/product"
 	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/service"
 	"os"
@@ -26,6 +27,12 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "_merge-http" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		return product.ServeMergeHTTP(ctx, os.Args[2])
+	}
+
 	if (len(os.Args) == 3 || (len(os.Args) == 5 && os.Args[3] == "--wake-socket")) && os.Args[1] == "_runner" {
 		b, err := os.ReadFile(os.Args[2])
 		if err != nil {
