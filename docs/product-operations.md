@@ -556,3 +556,13 @@ IPC/runner hintとruntimeのcommit後hintはworkerとmodel loopへ配送し、�
 origin/暗黙refspec/forceに依存せず、URL rewriteと設定されたpush optionを拒否し、hook・push署名・follow-tags・mirror・submoduleの追加送信を抑止する。authority callback後もsourceとURL policyを再確認する。HTTPS URLの埋込credentialを拒否し、offline fixtureにはcanonicalなbare repository pathを使える。全Git subprocessは同期ownerとしてprocess groupをjoinする。error時の返値は部分的な観測で、`Attempted`だけから送信成功や未送信を推測しない。停止未確認ではcallerのintent/leaseを保持する。
 
 実bare repositoryへの初回push/fast-forward/同じSHAの再送、別originを使わないこと、diverged branchをforce更新しないこと、署名/hook/tagの抑止、権限とsource/URL policy変更時の拒否を検査する。これは物理Git portであり、永続publication intent/unknown応答照合、daemon PR送信と正式承認を結ぶ処理は後続である。
+
+### branch publicationの永続所有権
+
+`ReserveProductBranchPublication` は既存のprepared PR dispatch claimにGit intent/capacity/leaseを結ぶ。remoteのrepository ID/name/default branch/HTTPS URLを検査し、公開品質proofのcanonical verification planとseal履歴から固定checkoutを導出する。modelからSHAやcheckout pathを選ばせない。value/head/historyと実行枠は同じtransactionで保存し、欠落した履歴・既存admissionから新しい権限を再生成しない。
+
+Git process開始前の`ClaimProductBranchPublication`と、push直前の`MarkProductBranchMayHaveSent`を別のone-use境界にする。両方で現在のPR claim・scope/Candidate・品質・操作・Git lease generationを照合する。physical claimはcontrollerのprocess identityとStore instance epochにも結び、新しいinstanceは古いwriterを名乗って送信/停止確認しない。再open後のlaunching intentは再起動権限を返さず保持する。
+
+`RecordProductBranchStopped`は実際の同期Git ownerだけが呼ぶ。開始/終了時刻・送信fence・固定source/remote/refを照合し、停止証拠/historyとGit枠解放を一transactionで保存する。remote outcomeが不明ならstoppedのままとし、保存した停止proofに結び付く新しいreadが同じSHAを確認した時だけ`ConfirmProductBranchRemote`でpublishedへ進める。remote headだけで未確認physical ownerを解放しない。未開始prepared intentのみ、Wave cancel後も`CancelPreparedProductBranch`でnot_startedとして解放できる。
+
+storage fixtureはclaim/送信の二重実行拒否、source/metadata/owner/時刻の不一致、再openと未知owner、品質の失効、履歴欠落、停止記録rollback、既存SHAのno-op、pause/cancel後の停止と未開始cancelを確認する。これはhost-only保存portで、PR/承認/merge成功を生成しない。物理Git primitiveとのadapter・daemon送信・未知processの外部quiescence手順は後続であり、unknown ownerを推測して再送しない。
