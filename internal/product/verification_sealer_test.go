@@ -94,7 +94,7 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 					review := contract.TaskSpec{ID: "publication-review", Kind: "review", Instruction: "independently evaluate the fixed code/tests against original AC", Criteria: []string{"AC"}, DependsOn: []contract.TaskDependency{{TaskID: verifier.ID}}, InputArtifactIDs: []string{}, WorkItemIDs: append([]string{}, verifier.WorkItemIDs...)}
 					plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "local-quality", Tasks: []contract.TaskSpec{review}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{review.ID}}, FailurePolicy: "drain_and_block"})
 					if mode == "publication_residual" {
-						remaining := contract.TaskSpec{ID: "remaining-work", Kind: "work", Instruction: "implement the separately tracked extra behavior", Criteria: []string{"extra"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}, WorkItemIDs: []string{"remaining"}}
+						remaining := contract.TaskSpec{ID: "remaining-work", Kind: "work", Instruction: "implement the separately tracked extra behavior", Criteria: []string{"extra"}, DependsOn: []contract.TaskDependency{{TaskID: review.ID}}, InputArtifactIDs: []string{}, WorkItemIDs: []string{"remaining"}}
 						plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: "remaining-work", Tasks: []contract.TaskSpec{remaining}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{remaining.ID}}, FailurePolicy: "drain_and_block"})
 					}
 				}

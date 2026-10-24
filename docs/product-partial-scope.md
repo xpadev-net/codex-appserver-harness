@@ -19,3 +19,13 @@ scope は plan revision ごとに head と不変 history を同じ transaction �
 merge の DB preflight と、送信前の外部 gate にも同じ照合を接続する。scope/head/history や追跡先の喪失・改変、変更された要求・版を古い品質証拠で通さない。Cloud 正式承認・CI/rules・source と固定候補の gate は引き続き必須とする。部分 PR の公開準備だけで親 Wave を完了にせず、実際の merge・残作業・全寄与者の coverage と親最終検証を別に確認する。
 
 実 Git/SQLite/runner の統合検査は、最初から部分範囲で登録した Wave の work→検証→runner→独立 review→品質/scope 準備→publication gate、本文の範囲分離、追跡先喪失時の保留と元証拠の保持、途中失敗時の原子的 rollback を確認する。model の run/停止は fixture であり、GitHub への native 部分 PR/merge や P 全体の受入を示さない。
+
+## 部分 merge と同じ Wave の後続 Task
+
+統合検査の残作業 Task は、最初の計画で別 WorkItem と別 session に登録し、先行 WorkItem の独立 review Task への明示依存を持つ。別 WorkItem への依存は merge dependency gate を使うため、review の completed だけでは後続の準備へ進まない。親の追加確認 turn や同じ Task の再実行で待機を扱わない。
+
+同じ fixture を publication→review request→固定候補の正式承認/CI/rules gate→登録された HTTP child の起動・送信 fence・実停止→merge receipt 保存まで接続する。HTTP 結果が merged でも WorkItem receipt が未記録なら後続は保留する。receipt の記録後、coverage は今回の条件だけを merged、範囲外の条件を residual、追跡先を unmerged WorkItem として保持し、後続 Task の metadata 準備読取を許可する。receipt 喪失時は再び保留し、保存済みの正しい receipt を復旧すると同じ後続 Task/session へ戻る。記録の replay は追加の作業を生成しない。
+
+この接続では同じ Wave の deadline・Task 数・親 turn・replan/fix・operation 予算を保持し、部分 merge から親完了や追加 model 起動を作らない。後続 checkout の作成、現在 HEAD の取得、新しい実装・独立品質判定は通常の workspace/base/model gate を改めて通す。
+
+ここでの Go/SQLite・Git・runner と HTTP child の停止は実処理であり、branch publication transport、GitHub review/承認・CI/rules・merge 応答と model run は fixture である。native の Cloud 承認や外部部分 PR の受入には数えない。任意の Issue 分割・子 Issue 作成・動的な後続計画の採用は、この初回計画からの後続接続とは別に実装・検証する。

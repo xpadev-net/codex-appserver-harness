@@ -121,6 +121,8 @@ func checkKernelPublicationGate(t *testing.T, executor Executor, plan storage.Pr
 		if err != nil || wave.State == domain.WaveCompleted {
 			t.Fatal("partial publication accepted parent", wave, err)
 		}
+		checkBranchPublisher(t, executor, saved.Value.Product, "publication_http_partial_continuation")
+		return
 	}
 	repo := executor.Repositories[saved.Value.Product.Value.WorkItem.RepositoryID]
 	profile := repo.Policy.Verification.Profiles["unit"]
