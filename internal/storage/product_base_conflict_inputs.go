@@ -104,6 +104,8 @@ func (k *KernelStore) baseConflictCurrentProductTx(ctx context.Context, tx *sql.
 	}
 	normalized := current.Value
 	normalized.Target = old.Value.Target
+	// A merge-only hold must survive the carry without blocking local repair.
+	normalized.WorkItem.MergeHold = old.Value.WorkItem.MergeHold
 	if !reflect.DeepEqual(normalized, old.Value) {
 		return current, ErrProductWorkspaceHeld
 	}

@@ -234,3 +234,29 @@ func TestBaseConflictCarryFailureRollsBackPlanAndCanRetrySameProof(t *testing.T)
 		t.Fatal("positive stopped source could not be retried", err)
 	}
 }
+
+func TestBaseConflictRepairPreservesNewMergeHold(t *testing.T) {
+	ctx := context.Background()
+	k, source, _, proposal := stoppedBaseConflictFixture(t)
+	w, err := k.Wave(ctx, source.Value.Target.WaveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := k.ReadProductTarget(ctx, w.Target(), source.Value.WorkItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled := p.Value
+	controlled.WorkItem.MergeHold = true
+	if _, err := k.SetProductTarget(ctx, p.Digest, controlled); err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := k.AdoptPlan(ctx, w.Target(), "base-conflict-with-merge-hold", proposal)
+	if err != nil {
+		t.Fatal("merge-only hold blocked local fix", err)
+	}
+	input, err := k.ReadProductBaseInput(ctx, admitted.CreatedTaskIDs[0])
+	if err != nil || input.Value.Preparation.Product == nil || !input.Value.Preparation.Product.Value.WorkItem.MergeHold {
+		t.Fatal("fix carry discarded merge hold", input, err)
+	}
+}
