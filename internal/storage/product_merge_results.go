@@ -78,8 +78,10 @@ func productMergeTerminal(job ProductMerge) bool {
 func validateProductMergeResult(ctx context.Context, q queryer, job ProductMerge) error {
 	var proof ProductMergeStop
 	err := taskEvidenceRecord(ctx, q, "product_merge_stop", job.ID, &proof)
+	var observed ProductMergeReconciliation
+	observedErr := taskEvidenceRecord(ctx, q, "product_merge_reconciliation", job.ID, &observed)
 	if job.Stop == nil {
-		if !errors.Is(err, sql.ErrNoRows) || job.PRLifetimeRelease != nil {
+		if !errors.Is(err, sql.ErrNoRows) || job.PRLifetimeRelease != nil || job.Reconciliation != nil || !errors.Is(observedErr, sql.ErrNoRows) {
 			return ErrTaskEvidence
 		}
 		return nil
@@ -87,9 +89,22 @@ func validateProductMergeResult(ctx context.Context, q queryer, job ProductMerge
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(proof, *job.Stop) || validateProductMergeStop(job, proof) != nil || job.State != mergeStoppedState(proof) {
+	if !reflect.DeepEqual(proof, *job.Stop) || validateProductMergeStop(job, proof) != nil {
 		return ErrTaskEvidence
 	}
+	expected := mergeStoppedState(proof)
+	if job.Reconciliation != nil {
+		if observedErr != nil || !reflect.DeepEqual(observed, *job.Reconciliation) || proof.Disposition != "outcome_unknown" || validateProductMergeReconciliation(job, observed) != nil {
+			return ErrTaskEvidence
+		}
+		expected = "merged"
+	} else if !errors.Is(observedErr, sql.ErrNoRows) {
+		return ErrTaskEvidence
+	}
+	if job.State != expected {
+		return ErrTaskEvidence
+	}
+
 	if job.State == "merged" {
 		seat, err := loadOperationReservationTx(ctx, q, job.Value.PRReservationID)
 		if err != nil {
@@ -162,27 +177,12 @@ func (k *KernelStore) RecordProductMergeStopped(ctx context.Context, id, owner, 
 		}
 	}
 	if job.State == "merged" {
-		seat, err := loadOperationReservationTx(ctx, tx, job.Value.PRReservationID)
+		job.PRLifetimeRelease, err = k.releaseProductMergePRTx(ctx, tx, job)
 		if err != nil {
 			return empty, err
 		}
-		p := job.Value.Product.Value
-		if seat.Kind != "pr" || seat.WaveID != p.Target.WaveID || seat.Request.ResourceKey != productMergeResource(p) {
-			return empty, ErrTaskEvidence
-		}
-		if seat.State == "held" {
-			release := OperationReleaseProof{OperationID: seat.ID, ProofID: job.ID + ":merged", Disposition: "merged", Reason: "native expected-head merge response confirmed after physical owner joined"}
-			if err := k.releaseOperationCapacityTx(ctx, tx, release); err != nil {
-				return empty, err
-			}
-			job.PRLifetimeRelease = &release
-		} else if seat.State == "released" && seat.Proof != nil && (seat.Proof.Disposition == "merged" || seat.Proof.Disposition == "closed") {
-			copy := *seat.Proof
-			job.PRLifetimeRelease = &copy
-		} else {
-			return empty, ErrProductMergeHeld
-		}
 	}
+
 	if err := kernelRecordTx(ctx, tx, "product_merge_stop", id, job.Value.Product.Value.Target.WaveID, proof); err != nil {
 		return empty, err
 	}
@@ -190,4 +190,27 @@ func (k *KernelStore) RecordProductMergeStopped(ctx context.Context, id, owner, 
 		return empty, err
 	}
 	return job, tx.Commit()
+}
+
+func (k *KernelStore) releaseProductMergePRTx(ctx context.Context, tx *sql.Tx, job ProductMerge) (*OperationReleaseProof, error) {
+	seat, err := loadOperationReservationTx(ctx, tx, job.Value.PRReservationID)
+	if err != nil {
+		return nil, err
+	}
+	p := job.Value.Product.Value
+	if seat.Kind != "pr" || seat.WaveID != p.Target.WaveID || seat.Request.ResourceKey != productMergeResource(p) {
+		return nil, ErrTaskEvidence
+	}
+	if seat.State == "held" {
+		release := OperationReleaseProof{OperationID: seat.ID, ProofID: job.ID + ":merged", Disposition: "merged", Reason: "native original-head merge confirmed after physical owner joined"}
+		if err := k.releaseOperationCapacityTx(ctx, tx, release); err != nil {
+			return nil, err
+		}
+		return &release, nil
+	} else if seat.State == "released" && seat.Proof != nil && (seat.Proof.Disposition == "merged" || seat.Proof.Disposition == "closed") {
+		copy := *seat.Proof
+		return &copy, nil
+	} else {
+		return nil, ErrProductMergeHeld
+	}
 }

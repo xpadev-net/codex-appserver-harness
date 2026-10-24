@@ -33,20 +33,21 @@ type ProductMergeCancellation struct {
 	At      time.Time `json:"at"`
 }
 type ProductMerge struct {
-	Stop              *ProductMergeStop         `json:"stop,omitempty"`
-	PRLifetimeRelease *OperationReleaseProof    `json:"pr_lifetime_release,omitempty"`
-	GateDigest        string                    `json:"gate_digest,omitempty"`
-	Cancellation      *ProductMergeCancellation `json:"cancellation,omitempty"`
-	ID                string                    `json:"id"`
-	Value             ProductMergeValue         `json:"value"`
-	Digest            string                    `json:"digest"`
-	State             string                    `json:"state"` // prepared, launching, unknown, canceled, stopped_unsent, stopped_unknown, rejected, merged
-	MutationLease     ResourceLease             `json:"mutation_lease"`
-	CreatedAt         time.Time                 `json:"created_at"`
-	ClaimedAt         time.Time                 `json:"claimed_at"`
-	OwnerProcess      process.Identity          `json:"owner_process"`
-	OwnerInstanceID   string                    `json:"owner_instance_id"`
-	MayHaveSentAt     time.Time                 `json:"may_have_sent_at"`
+	Reconciliation    *ProductMergeReconciliation `json:"reconciliation,omitempty"`
+	Stop              *ProductMergeStop           `json:"stop,omitempty"`
+	PRLifetimeRelease *OperationReleaseProof      `json:"pr_lifetime_release,omitempty"`
+	GateDigest        string                      `json:"gate_digest,omitempty"`
+	Cancellation      *ProductMergeCancellation   `json:"cancellation,omitempty"`
+	ID                string                      `json:"id"`
+	Value             ProductMergeValue           `json:"value"`
+	Digest            string                      `json:"digest"`
+	State             string                      `json:"state"` // prepared, launching, unknown, canceled, stopped_unsent, stopped_unknown, rejected, merged
+	MutationLease     ResourceLease               `json:"mutation_lease"`
+	CreatedAt         time.Time                   `json:"created_at"`
+	ClaimedAt         time.Time                   `json:"claimed_at"`
+	OwnerProcess      process.Identity            `json:"owner_process"`
+	OwnerInstanceID   string                      `json:"owner_instance_id"`
+	MayHaveSentAt     time.Time                   `json:"may_have_sent_at"`
 }
 type ProductMergeClaim struct {
 	Merge ProductMerge `json:"merge"`
