@@ -102,3 +102,7 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 ## P 最終 HEAD の取得 component
 
 [固定 commit の取得](product-final-fetch.md)は共有 Git lease・一度限りの送信・実停止証拠を使い、取得した SHA を正式 runner へ渡す。GitHub 観測/承認は fixture として検査した component であり、[daemon の自動最終工程と親受入直前の確認](product-final-daemon.md)にも接続した。P 全体の native 受入とは区別する。
+
+## P base 更新の Git component
+
+[固定候補への通常 base merge](product-base-merge.md)は実 temp Git で merge commit の両親、競合、無断実行の抑止と取消しを検査する。controller の永続実行・候補更新・新 fix Task への接続は後続へ残り、P 全体は未達である。
