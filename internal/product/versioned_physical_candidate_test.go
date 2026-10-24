@@ -96,7 +96,7 @@ func checkVersionedPhysicalCandidate(t *testing.T, e Executor, w domain.Wave, no
 		t.Fatal(err)
 	}
 	product, err := k.ReadProductTarget(ctx, w.Target(), node.Value.Request.Definition.ID)
-	if err != nil || product.Value.Candidate.BaseSHA != mergeSHA || product.Value.Candidate.SHA == mergeSHA || product.Value.Candidate.SHA == node.Value.ParentCandidateSHA || product.Value.WorkItem.Phase != domain.Verifying || product.Value.PRNumber != 0 {
+	if err != nil || product.Value.Candidate.PolicyRevision != w.Policy.Revision || product.Value.Candidate.ScopeRevision != w.ScopeRevision || product.Value.Candidate.BaseSHA != mergeSHA || product.Value.Candidate.SHA == mergeSHA || product.Value.Candidate.SHA == node.Value.ParentCandidateSHA || product.Value.WorkItem.Phase != domain.Verifying || product.Value.PRNumber != 0 {
 		t.Fatal("new work reused old candidate/PR/quality", product, err)
 	}
 	if publication, err := e.PublicationGate(ctx, product); err == nil || publication.Title != "" {

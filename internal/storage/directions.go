@@ -17,11 +17,26 @@ import (
 var ErrDirectionHeld = errors.New("direction awaits settlement of the previous revision")
 
 type WaveDirectionRequest struct {
-	Key         string                 `json:"key"`
-	Target      contract.Target        `json:"target"`
-	Instruction string                 `json:"instruction"`
-	Criteria    []domain.WaveCriterion `json:"criteria,omitempty"`
+	NextPolicyRevision int                    `json:"next_policy_revision,omitempty"`
+	Key                string                 `json:"key"`
+	Target             contract.Target        `json:"target"`
+	Instruction        string                 `json:"instruction"`
+	Criteria           []domain.WaveCriterion `json:"criteria,omitempty"`
 }
+
+// Only the trusted operator direction changes the policy epoch. Permission
+// flags and all limit snapshots remain those of the existing Wave.
+func directionPolicy(w domain.Wave, r WaveDirectionRequest) (domain.WavePolicy, error) {
+	policy := w.Policy
+	if r.NextPolicyRevision != 0 {
+		if policy.Revision == math.MaxInt || r.NextPolicyRevision != policy.Revision+1 {
+			return policy, errors.New("next_policy_revision must be exactly the current policy revision plus one")
+		}
+		policy.Revision = r.NextPolicyRevision
+	}
+	return policy, nil
+}
+
 type WaveDirection struct {
 	ID            string               `json:"id"`
 	Request       WaveDirectionRequest `json:"request"`
@@ -67,6 +82,10 @@ func (k *KernelStore) RequestWaveDirection(ctx context.Context, r WaveDirectionR
 		return d, ErrDirectionHeld
 	}
 	prospective := w
+	prospective.Policy, err = directionPolicy(w, r)
+	if err != nil {
+		return d, err
+	}
 	if r.Criteria != nil {
 		prospective.Criteria = r.Criteria
 	}
@@ -117,6 +136,10 @@ func (k *KernelStore) ApplyWaveDirection(ctx context.Context, id string) (WaveDi
 	if d.State != "queued" || w.PendingDirectionID != id || w.Target() != d.Request.Target || w.State == domain.WaveCanceled || w.State == domain.WaveCompleted || !k.clock().Before(w.Deadline) || w.ScopeRevision == math.MaxInt {
 		return d, ErrDirectionHeld
 	}
+	policy, err := directionPolicy(w, d.Request)
+	if err != nil {
+		return d, err
+	}
 	held, err := unsettledWaveSessionsTx(ctx, tx, w)
 	if err != nil {
 		return d, err
@@ -155,6 +178,7 @@ func (k *KernelStore) ApplyWaveDirection(ctx context.Context, id string) (WaveDi
 		}
 	}
 	w.ScopeRevision++
+	w.Policy = policy
 	w.State, w.Reason, w.PendingDirectionID = domain.WavePlanning, "direction requires a new plan", ""
 	w.DirectionID = id
 	if d.Request.Criteria != nil {
