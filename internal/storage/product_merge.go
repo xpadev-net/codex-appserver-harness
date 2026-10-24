@@ -166,7 +166,7 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 		if job.Cancellation != nil || claimErr != nil || claim.ID != id || claim.OwnerProcess != job.OwnerProcess || claim.OwnerInstanceID != job.OwnerInstanceID || !claim.ClaimedAt.Equal(job.ClaimedAt) || !job.OwnerProcess.Valid() || job.OwnerInstanceID == "" || job.ClaimedAt.Before(job.CreatedAt) {
 			return job, true, ErrTaskEvidence
 		}
-		if job.State == "launching" || job.State == "stopped_unsent" {
+		if job.State == "launching" || job.State == "stopped_unsent" || (job.State == "aborted_http" && !hasSent) {
 			if !errors.Is(sendErr, sql.ErrNoRows) || !job.MayHaveSentAt.IsZero() || job.GateDigest != "" {
 				return job, true, ErrTaskEvidence
 			}

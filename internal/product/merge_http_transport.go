@@ -122,7 +122,7 @@ func (t MergeHTTPTransport) Recover(ctx context.Context, id string) (storage.Pro
 	if job.Stop != nil || job.HTTPAbort != nil || job.Cancellation != nil {
 		return job, nil
 	}
-	if job.State != "unknown" {
+	if job.State != "unknown" && job.State != "launching" {
 		return job, storage.ErrProductMergeHeld
 	}
 	if job.HTTP == nil {
