@@ -10,7 +10,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 )
 
-func observedReviewFixture(t *testing.T, unknown bool) (*KernelStore, string, PRDispatchClaim, PRTransportProof, PRReviewRequestObservation) {
+func observedReviewFixture(t *testing.T, unknown bool, expected ...[]int64) (*KernelStore, string, PRDispatchClaim, PRTransportProof, PRReviewRequestObservation) {
 	t.Helper()
 	ctx := context.Background()
 	k, _, _, call := productCallFixture(t)
@@ -36,7 +36,7 @@ func observedReviewFixture(t *testing.T, unknown bool) (*KernelStore, string, PR
 	if err != nil {
 		t.Fatal(err)
 	}
-	packet, err := k.SavePRReviewRequestPayload(ctx, reply.OperationID, claim.OwnerID, "@review please review", 71)
+	packet, err := k.SavePRReviewRequestPayload(ctx, reply.OperationID, claim.OwnerID, "@review please review", 71, expected...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,9 +15,10 @@ import (
 // trusted capability report on each call, never consume Issue/model claims.
 // A request route is not evidence of native approval or merge capability.
 type CloudReviewRoute struct {
-	Trigger     string
-	RequesterID int64
-	ReadReport  func(context.Context) (contract.Report, error)
+	CloudReviewerIDs []int64
+	Trigger          string
+	RequesterID      int64
+	ReadReport       func(context.Context) (contract.Report, error)
 }
 
 // KernelReviewGate reuses new-journal publication quality and independently
@@ -44,6 +45,10 @@ func (g KernelReviewGate) Check(ctx context.Context, saved storage.ProductTarget
 	route, ok := g.Routes[p.WorkItem.RepositoryID]
 	if !ok || route.ReadReport == nil || route.RequesterID < 1 || strings.TrimSpace(route.Trigger) == "" || len(route.Trigger) > 16384 || !utf8.ValidString(route.Trigger) || strings.ContainsRune(route.Trigger, '\x00') {
 		return empty, errors.New("explicit bounded Cloud review request route required")
+	}
+	actors, err := storage.CanonicalCloudReviewerIDs(route.CloudReviewerIDs)
+	if err != nil {
+		return empty, err
 	}
 	if err := github.CheckClosingText(route.Trigger); err != nil {
 		return empty, err
@@ -80,5 +85,5 @@ func (g KernelReviewGate) Check(ctx context.Context, saved storage.ProductTarget
 	if fresh != publication {
 		return empty, storage.ErrProductQualityHeld
 	}
-	return ReviewRequest{Trigger: route.Trigger, RequesterID: route.RequesterID}, nil
+	return ReviewRequest{CloudReviewerIDs: actors, Trigger: route.Trigger, RequesterID: route.RequesterID}, nil
 }

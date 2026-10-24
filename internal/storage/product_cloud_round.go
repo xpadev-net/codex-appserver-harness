@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -47,6 +48,10 @@ func (k *KernelStore) ReadProductCloudRound(ctx context.Context, id string) (Pro
 		if err := taskEvidenceRecord(ctx, tx, r.kind, id, r.value); err != nil {
 			return round, err
 		}
+	}
+	actors, err := CanonicalCloudReviewerIDs(packet.CloudReviewerIDs)
+	if err != nil || !reflect.DeepEqual(actors, packet.CloudReviewerIDs) {
+		return round, ErrTaskEvidence
 	}
 	p := claim.Product.Value
 	digest, err := contentDigest(p)
