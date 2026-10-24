@@ -98,6 +98,12 @@ func saveSplitCreateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, 
 		job.Sequence = previous.Sequence + 1
 		job.PreviousDigest = digest
 	}
+	if err := validateSplitCreateState(job); err != nil {
+		return job, err
+	}
+	if err := validateSplitCreatePinnedGate(ctx, tx, job); err != nil {
+		return job, err
+	}
 	digest, err := contentDigest(job)
 	if err != nil {
 		return job, err
@@ -218,14 +224,8 @@ func loadSplitCreate(ctx context.Context, tx *sql.Tx, id string) (ProductSplitCr
 	if job.Lease.Resource != fmt.Sprintf("product-split-mutation:%d:%s", job.Value.Child.Value.RepositoryID, job.Value.Child.ID) || job.Lease.Generation < 1 {
 		return job, ErrProductSplitHeld
 	}
-	if job.HTTP != nil {
-		gate, err := loadSplitCreateGate(ctx, tx, job)
-		if err != nil {
-			return job, err
-		}
-		if gate.Digest != job.HTTP.GateDigest || job.HTTP.ActivatedAt.Before(gate.Value.ObservedAt) || job.HTTP.ActivatedAt.Sub(gate.Value.ObservedAt) > 5*time.Second {
-			return job, ErrProductSplitHeld
-		}
+	if err := validateSplitCreatePinnedGate(ctx, tx, job); err != nil {
+		return job, err
 	}
 	if job.Issue != nil {
 		observation := *job.Issue
@@ -558,6 +558,7 @@ func (k *KernelStore) FinishProductSplitCreateHTTP(ctx context.Context, id, owne
 
 func (k *KernelStore) RecordProductSplitCreatedIssue(ctx context.Context, id string, observation ProductSplitCreatedIssue) (ProductSplitCreate, error) {
 	var empty ProductSplitCreate
+	observation.ObservedAt = observation.ObservedAt.UTC()
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return empty, err

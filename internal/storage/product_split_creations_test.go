@@ -46,6 +46,20 @@ func TestProductSplitHTTPHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("HARNESS_SPLIT_HTTP_TEST_CLOCK_ROLLBACK") == "1" {
+		var gate splitCreateGateRecord
+		if err := k.Record(context.Background(), "product_split_create_gate", job.ID, &gate); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		k.Now = func() time.Time {
+			calls++
+			if calls >= 3 {
+				return gate.Value.ObservedAt.Add(-time.Nanosecond)
+			}
+			return gate.Value.ObservedAt.Add(time.Millisecond)
+		}
+	}
 	first, err := k.ActivateProductSplitCreateHTTP(context.Background(), id, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64))
 	if os.Getenv("HARNESS_SPLIT_HTTP_TEST_EXPECT_HELD") == "1" {
 		if !errors.Is(err, ErrProductSplitHeld) {
@@ -147,11 +161,24 @@ func TestProductSplitCreationPhysicalOwnerStopsBeforeObservationAndNeverResends(
 	if err := process.StopGroup(stopCtx, identity); err != nil {
 		t.Fatal(err)
 	}
+	activated, err := k.ReadProductSplitCreate(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.Now = func() time.Time { return activated.HTTP.ActivatedAt.Add(-time.Second) }
+	if _, err := k.FinishProductSplitCreateHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), "physical-stop"); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("clock rollback committed invalid stopped state", err)
+	}
+	k.Now = time.Now
+	unchanged, err := k.ReadProductSplitCreate(ctx, job.ID)
+	if err != nil || unchanged.State != "unknown" || unchanged.Stop != nil || unchanged.Sequence != 1 {
+		t.Fatal("failed stop transition changed journal/lease", unchanged, err)
+	}
 	stopped, err := k.FinishProductSplitCreateHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), "physical-stop")
 	if err != nil || stopped.State != "stopped" || stopped.Stop == nil || stopped.Issue != nil {
 		t.Fatal("stop inferred outcome", stopped, err)
 	}
-	observation.ObservedAt = time.Now().UTC()
+	observation.ObservedAt = time.Now()
 	for _, mode := range []string{"marker", "title", "repo", "pull", "state", "stale"} {
 		bad := observation
 		switch mode {
@@ -175,6 +202,15 @@ func TestProductSplitCreationPhysicalOwnerStopsBeforeObservationAndNeverResends(
 	known, err := k.RecordProductSplitCreatedIssue(ctx, job.ID, observation)
 	if err != nil || known.State != "observed" || known.Issue.Number != 11 {
 		t.Fatal("known child not bound", known, err)
+	}
+	readBack, err := k.ReadProductSplitCreate(ctx, job.ID)
+	if err != nil || !reflect.DeepEqual(readBack, known) {
+		t.Fatal("host time representation changed after serialization", err)
+	}
+	localObservation := observation
+	localObservation.ObservedAt = observation.ObservedAt.In(time.FixedZone("fixture-local", 9*60*60))
+	if _, err := k.RecordProductSplitCreatedIssue(ctx, job.ID, localObservation); err != nil {
+		t.Fatal("local time observation replay rejected", err)
 	}
 	replay, err := k.RecordProductSplitCreatedIssue(ctx, job.ID, observation)
 	if err != nil || !reflect.DeepEqual(replay, known) {
@@ -501,5 +537,31 @@ func TestProductSplitCreationGateWitnessProtectsAllLostUpstreamIndexes(t *testin
 				t.Fatal("gate allowed send replacement", err)
 			}
 		})
+	}
+}
+
+func TestProductSplitCreationClockRollbackCannotCommitAbortOrActivation(t *testing.T) {
+	ctx := context.Background()
+	k, _, _, job := splitCreationFixture(t)
+	k.Now = func() time.Time { return job.Value.CreatedAt.Add(-time.Second) }
+	if _, err := k.AbortUnactivatedProductSplitCreate(ctx, job.ID, job.Value.OwnerID, job.Digest, "clock-abort"); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("clock rollback committed invalid abort", err)
+	}
+	k.Now = time.Now
+	if _, err := k.ObserveProductSplitCreateGate(ctx, job.ID, job.Value.OwnerID, job.Digest, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestProductSplitHTTPHelper$")
+	cmd.Env = append(os.Environ(), "HARNESS_SPLIT_HTTP_TEST_ROOT="+k.Root, "HARNESS_SPLIT_HTTP_TEST_ID="+job.ID, "HARNESS_SPLIT_HTTP_TEST_EXPECT_HELD=1", "HARNESS_SPLIT_HTTP_TEST_CLOCK_ROLLBACK=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Run(); err != nil {
+		t.Fatal("clock rollback activated an invalid journal", err)
+	}
+	unchanged, err := k.ReadProductSplitCreate(ctx, job.ID)
+	if err != nil || !reflect.DeepEqual(unchanged, job) {
+		t.Fatal("failed temporal transition changed journal/lease", unchanged, err)
+	}
+	if _, err := k.AbortUnactivatedProductSplitCreate(ctx, job.ID, job.Value.OwnerID, job.Digest, "clock-abort"); err != nil {
+		t.Fatal("clock recovery could not retry abort", err)
 	}
 }

@@ -140,3 +140,17 @@ func (k *KernelStore) splitCreateSendGateTx(ctx context.Context, tx *sql.Tx, job
 	}
 	return gate.Digest, nil
 }
+
+func validateSplitCreatePinnedGate(ctx context.Context, tx *sql.Tx, job ProductSplitCreate) error {
+	if job.HTTP == nil {
+		return nil
+	}
+	gate, err := loadSplitCreateGate(ctx, tx, job)
+	if err != nil {
+		return err
+	}
+	if gate.Digest != job.HTTP.GateDigest || job.HTTP.ActivatedAt.Before(gate.Value.ObservedAt) || job.HTTP.ActivatedAt.Sub(gate.Value.ObservedAt) > 5*time.Second {
+		return ErrProductSplitHeld
+	}
+	return nil
+}
