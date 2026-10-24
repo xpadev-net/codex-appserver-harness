@@ -138,7 +138,13 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 	var claim productMergePhysicalClaim
 	var send time.Time
 	claimErr := taskEvidenceRecord(ctx, q, "product_merge_claim", id, &claim)
+	if claimErr != nil && !errors.Is(claimErr, sql.ErrNoRows) {
+		return job, true, claimErr
+	}
 	sendErr := taskEvidenceRecord(ctx, q, "product_merge_send", id, &send)
+	if sendErr != nil && !errors.Is(sendErr, sql.ErrNoRows) {
+		return job, true, sendErr
+	}
 	var hasGate, hasCancel bool
 	if err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_merge_gate' AND id=?),EXISTS(SELECT 1 FROM records WHERE kind='product_merge_cancel' AND id=?)", id, id).Scan(&hasGate, &hasCancel); err != nil {
 		return job, true, err
@@ -154,6 +160,9 @@ func lookupProductMerge(ctx context.Context, q queryer, id string) (job ProductM
 		}
 		var cancellation ProductMergeCancellation
 		cancelErr := taskEvidenceRecord(ctx, q, "product_merge_cancel", id, &cancellation)
+		if cancelErr != nil && !errors.Is(cancelErr, sql.ErrNoRows) {
+			return job, true, cancelErr
+		}
 		if job.State == "canceled" {
 			if cancelErr != nil || job.Cancellation == nil || cancellation != *job.Cancellation || !validPRProofID(cancellation.ProofID) || strings.TrimSpace(cancellation.Reason) == "" || cancellation.At.Before(job.CreatedAt) {
 				return job, true, ErrTaskEvidence
@@ -467,13 +476,21 @@ func (k *KernelStore) MarkProductMergeMayHaveSent(ctx context.Context, id, owner
 	}
 	return job, tx.Commit()
 }
-func (k *KernelStore) ReadProductMerge(ctx context.Context, id string) (ProductMerge, error) {
+func (k *KernelStore) ReadProductMerge(ctx context.Context, id string) (job ProductMerge, err error) {
+	// A canceled read-only transaction may already have been rolled back by
+	// database/sql. Retain its cancellation identity without reclassifying
+	// missing/corrupt evidence or suppressing joined failures.
+	defer func() {
+		if err == sql.ErrTxDone && ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}()
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
 		return ProductMerge{}, err
 	}
 	defer tx.Rollback()
-	job, err := k.readProductMergeTx(ctx, tx, id)
+	job, err = k.readProductMergeTx(ctx, tx, id)
 	if err != nil {
 		return job, err
 	}

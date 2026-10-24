@@ -16,3 +16,5 @@ host の Git は固定 SHA の object だけを明示した credential-free HTTP
 - `TestProductFinalFetch*`: 一度限りの claim/send、共有 Git 排他、source 失効、直前の fence、遅い停止結果/reopen/replay、欠落証拠の再生成拒否、transaction rollback。これらの停止証拠と GitHub 観測は fixture である。
 - `TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt/publication_http_worker_alias/fetched_final_runner`: 合成 GitHub merge/ancestry 観測と実 temp Git を組み合わせ、元 repository にない commit を実取得し、その同じ SHA の正式 profile を実行して実停止を記録する。host checkout が動かず、完了 replay が fetch/runner を繰り返さない。native Cloud/P の実接続には数えない。
 - `TestUnconfirmedGitStopDuringCancelNeverPublishesTerminalResult/fetch`: runner の local import でも停止未確認を terminal result に変換しない。
+
+全体回帰で HTTP cancel 経路の失敗が2回再現したため、mergeのoptional証拠読み取りでも、SQL/context失敗を証拠の不在・不整合へ変換しないよう修正した。`TestProductMergeReadPreservesCancellationAtEveryEvidenceRead`は実DBの各証拠読み取り位置でcontextを取り消し、修正前に7箇所で取消しが失われることを再現し、修正後の取消し同一性と無変更を検査する。欠落・破損の証拠を許可する変更ではない。

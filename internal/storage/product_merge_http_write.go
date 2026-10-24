@@ -22,6 +22,9 @@ type ProductMergeHTTPWrite struct {
 func validateProductMergeHTTPWrite(ctx context.Context, q queryer, job ProductMerge) error {
 	var write ProductMergeHTTPWrite
 	err := taskEvidenceRecord(ctx, q, "product_merge_http_write", job.ID, &write)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	if job.HTTPWrite == nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return ErrTaskEvidence
