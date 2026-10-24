@@ -1,18 +1,19 @@
-package splitting
+package splitting_test
 
 import (
 	"context"
 	"errors"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	split "github.com/xpadev-net/codex-appserver-harness/internal/splitting"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 	"path/filepath"
 	"testing"
 )
 
-func fixture() (verification.Scope, Proposal) {
+func fixture() (verification.Scope, split.Proposal) {
 	s := verification.Scope{Revision: 1, OriginalRequest: "requirements", Criteria: []verification.Criterion{{ID: "A", Requirement: "first"}, {ID: "B", Requirement: "second"}}, Included: []string{"A", "B"}}
-	p := Proposal{SchemaVersion: 1, WorkItemID: "w", ScopeRevision: 1, Outcome: "split", Children: []Child{{Key: "a", Title: "first", Requirement: "first requirement", Criteria: []verification.Criterion{{ID: "a1", Requirement: "first"}}, Coverage: []Coverage{{ParentCriterion: "A", ChildCriterion: "a1"}}, DependsOn: []string{}}, {Key: "b", Title: "second", Requirement: "second requirement", Criteria: []verification.Criterion{{ID: "b1", Requirement: "second"}}, Coverage: []Coverage{{ParentCriterion: "B", ChildCriterion: "b1"}}, DependsOn: []string{"a"}}}}
+	p := split.Proposal{SchemaVersion: 1, WorkItemID: "w", ScopeRevision: 1, Outcome: "split", Children: []split.Child{{Key: "a", Title: "first", Requirement: "first requirement", Criteria: []verification.Criterion{{ID: "a1", Requirement: "first"}}, Coverage: []split.Coverage{{ParentCriterion: "A", ChildCriterion: "a1"}}, DependsOn: []string{}}, {Key: "b", Title: "second", Requirement: "second requirement", Criteria: []verification.Criterion{{ID: "b1", Requirement: "second"}}, Coverage: []split.Coverage{{ParentCriterion: "B", ChildCriterion: "b1"}}, DependsOn: []string{"a"}}}}
 	return s, p
 }
 func TestSplitCoverageAndDAG(t *testing.T) {
@@ -38,7 +39,7 @@ func TestSplitCoverageAndDAG(t *testing.T) {
 	if err := p.Validate("w", s, 2, 2, 8); err == nil {
 		t.Fatal("depth budget bypass")
 	}
-	if r := ReadyChildren(p, map[string]bool{}); len(r) != 1 || r[0] != "a" {
+	if r := split.ReadyChildren(p, map[string]bool{}); len(r) != 1 || r[0] != "a" {
 		t.Fatal(r)
 	}
 }
@@ -66,14 +67,14 @@ func TestChildCreationRecovery(t *testing.T) {
 	defer s.Close()
 	_, p := fixture()
 	api := &creator{issues: map[string]int{}, lose: true}
-	if _, err := CreateChildren(ctx, s, api, p); err == nil {
+	if _, err := split.CreateChildren(ctx, s, api, p); err == nil {
 		t.Fatal("lost response succeeded")
 	}
-	progress, err := CreateChildren(ctx, s, api, p)
+	progress, err := split.CreateChildren(ctx, s, api, p)
 	if err != nil || len(progress.Children) != 2 || api.calls != 2 {
 		t.Fatal(progress, api.calls, err)
 	}
-	if _, err = CreateChildren(ctx, s, api, p); err != nil || api.calls != 2 {
+	if _, err = split.CreateChildren(ctx, s, api, p); err != nil || api.calls != 2 {
 		t.Fatal("duplicate child created", err)
 	}
 }
@@ -81,19 +82,19 @@ func TestPartialAndParentCompletion(t *testing.T) {
 	s, _ := fixture()
 	s.Included = []string{"A"}
 	s.Remaining = []string{"B"}
-	next, err := NextScope(s)
+	next, err := split.NextScope(s)
 	if err != nil || len(next.PreviouslyMerged) != 1 || next.Included[0] != "B" {
 		t.Fatal(next, err)
 	}
-	children := []Completion{{1, domain.Merged, []string{"A"}}, {1, domain.Merged, []string{"B"}}}
-	if ParentComplete(s, children, 1, false) {
+	children := []split.Completion{{1, domain.Merged, []string{"A"}}, {1, domain.Merged, []string{"B"}}}
+	if split.ParentComplete(s, children, 1, false) {
 		t.Fatal("missing final acceptance accepted")
 	}
-	if !ParentComplete(s, children, 1, true) {
+	if !split.ParentComplete(s, children, 1, true) {
 		t.Fatal("complete parent rejected")
 	}
 	children[1].Phase = domain.Canceled
-	if ParentComplete(s, children, 1, true) {
+	if split.ParentComplete(s, children, 1, true) {
 		t.Fatal("unmerged child accepted")
 	}
 }
@@ -103,11 +104,11 @@ func TestCreatedChildMustStillMatchMarker(t *testing.T) {
 	defer s.Close()
 	_, p := fixture()
 	api := &creator{issues: map[string]int{}}
-	if _, err := CreateChildren(ctx, s, api, p); err != nil {
+	if _, err := split.CreateChildren(ctx, s, api, p); err != nil {
 		t.Fatal(err)
 	}
 	delete(api.issues, "harness-child:w:a")
-	if _, err := CreateChildren(ctx, s, api, p); err == nil {
+	if _, err := split.CreateChildren(ctx, s, api, p); err == nil {
 		t.Fatal("missing child accepted")
 	}
 	if api.calls != 2 {
@@ -118,8 +119,8 @@ func TestSingleBroadCriterionPartitionRequiresAllDeclaredParts(t *testing.T) {
 	scope, proposal := fixture()
 	scope.Criteria = scope.Criteria[:1]
 	scope.Included = []string{"A"}
-	proposal.Children[0].Coverage = []Coverage{{ParentCriterion: "A", ChildCriterion: "a1", PartID: "first", PartCount: 2, Basis: "first part of original requirement"}}
-	proposal.Children[1].Coverage = []Coverage{{ParentCriterion: "A", ChildCriterion: "b1", PartID: "second", PartCount: 2, Basis: "remaining part of original requirement"}}
+	proposal.Children[0].Coverage = []split.Coverage{{ParentCriterion: "A", ChildCriterion: "a1", PartID: "first", PartCount: 2, Basis: "first part of original requirement"}}
+	proposal.Children[1].Coverage = []split.Coverage{{ParentCriterion: "A", ChildCriterion: "b1", PartID: "second", PartCount: 2, Basis: "remaining part of original requirement"}}
 	if err := proposal.Validate("w", scope, 0, 2, 8); err != nil {
 		t.Fatal(err)
 	}

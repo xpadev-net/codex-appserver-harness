@@ -44,10 +44,13 @@ func waveOperationLimitsTx(ctx context.Context, q queryer, waveID string) (WaveO
 	// Do not overlay new defaults: older records deliberately retain zero
 	// automatic branch retries and/or disabled splitting. New admission only.
 	var l WaveOperationLimits
-	if err := completionRecord(ctx, q, "wave_operation_limits", waveID, &l); err != nil {
+	if err := taskEvidenceRecord(ctx, q, "wave_operation_limits", waveID, &l); err != nil {
 		return l, err
 	}
-	return l, l.Validate()
+	if err := l.Validate(); err != nil {
+		return l, fmt.Errorf("%w: %v", ErrTaskEvidence, err)
+	}
+	return l, nil
 }
 func (k *KernelStore) WaveOperationLimits(ctx context.Context, waveID string) (WaveOperationLimits, error) {
 	return waveOperationLimitsTx(ctx, k.DB, waveID)

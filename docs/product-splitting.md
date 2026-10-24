@@ -7,3 +7,17 @@
 この単位は kernel に不足していた上限 snapshot の接続である。分割 proposal の controller 採用、criterion と各 part の lossless mapping、子 WorkItem/Issue の作成・系譜・冪等 outbox、coverage の切替、親 gateway は後続で接続する。子の Wave を Task から作る許可や、旧 DB の自動 migration ではない。
 
 SQLite 検査は、新規 snapshot、方向修正後の保持、旧形式の読取と JSON 省略、旧 source 再送と reopen 時の非補充、不正値の受付 transaction 全 rollback を確認する。外部 Issue/実 model の受入は含めない。
+
+## 初期 root の分割 proposal
+
+PrepareProductSplitProposal / ReadProductSplitProposal は trusted controller 専用の metadata port である。現在の P target、登録 head/version/membership、最初の ProductWave admission と元登録、元 request と現在 criterion、適用 direction / source 採用、固定分割上限、現在の親候補を照合する。
+
+この段階は initial admission にある root WorkItem を深さ0として扱う。動的子・continuation からの分割深さ binding はまだ接続せず、後から登録した ID を root として受け入れない。親が終端・旧版・不明候補なら保留する。既存 splitting.Proposal.Validate を再利用し、criterion の全対応、part ID/総数/根拠と全 part の保持、子間依存 DAG、子数を検証する。proposal は1 MiB以下で、元要求の全文を重複保存せず scope digest を結び付ける。
+
+head/history/admission と Wave 内 request-key を同じ transaction で保存する。同じ入力は同じ記録を返し、別親への key 流用・上書きは拒否する。head を失った場合は history/admission/request の独立証拠から既知であることだけを検出し、再構成しない。別 key でも喪失した intent を作り直さない。保存済み記録は現在の source・上限・候補を再照合し、Wave pause 中も監査読取だけを許可する。
+
+この保存は子 WorkItem/Issue、Task/session、候補、予算消費、外部操作を作らず、親を retired/SPLIT/完了へ変えない。model tool / manifest にも公開しない。host 用記録に含む親候補の private 情報は、将来の model 入力では安全な要約へ変換する必要がある。
+
+SQLite 検査は、初期 root の受付、完全 part 対応、元 Wave/予算の保持、exact retry/reopen、不正対応・循環・上限・旧登録・巨大入力の拒否、保存途中 rollback、各証拠と複数 index の喪失・復旧、別親 key の拒否、pause 中の読取と新 intent の拒否を確認する。legacy splitting の検査を外部 test package にして production validator を kernel から再利用し、legacy の子作成処理は新 port から呼ばない。
+
+監査読取の pause 許可は Wave の pause を指す。WorkItem 自身の pause を含む親 projection の変更は、candidate/scope/policy と同じく現在 intent の照合を保留する。保存済み history を削除・書換えず、元の監査事実は保持する。
