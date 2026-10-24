@@ -1,0 +1,22 @@
+{
+  "all_managed_processes_stopped": true,
+  "base_sha": "a6e0f1818de33e0a78f5aceb458dfd5dd8498725",
+  "binary_version": "codex-cli 0.163.0",
+  "cloud_native_approval": "unknown_not_observed",
+  "credential_values_recorded": false,
+  "executed_tests": 1,
+  "full_p_acceptance": "not_accepted",
+  "github_operations": 0,
+  "local_execution": "not_accepted",
+  "main_runs": 0,
+  "model": "gpt-6-luna",
+  "model_runs": 2,
+  "observed_at": "2026-10-24T12:03:17.106061319Z",
+  "plan_origin": "host_authored_local_fixture",
+  "private_paths_recorded": false,
+  "repository": "fixture/local-product",
+  "stage": "native local product implementation/verification/runner/review",
+  "token_limit": 500000,
+  "observed_tokens_lower_bound": 556527,
+  "failure_observation": "token_budget_exhausted_before_review"
+}

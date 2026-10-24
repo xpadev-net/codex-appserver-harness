@@ -197,6 +197,12 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 		if mainRuns != 0 || runs != 3 {
 			t.Error("unexpected native role run count")
 		}
+		budget, budgetErr := k.WaveRunBudget(clean, w.ID)
+		if budgetErr != nil {
+			t.Error("read native token observations")
+		} else {
+			evidence["observed_tokens_lower_bound"] = budget.ObservedTokens
+		}
 		evidence["observed_at"] = time.Now().UTC()
 		if t.Failed() {
 			evidence["local_execution"] = "not_accepted"

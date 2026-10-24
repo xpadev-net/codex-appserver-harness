@@ -1,6 +1,7 @@
 {
   "all_managed_processes_stopped": true,
   "authentication_subject_sha256": "3a4c3e142d779cc59c23ee5aa0c187c30b2dae038275caa39dfb847f8c5919ad",
+  "base_sha": "8847dc0669962dd27f9726aeeb228c3ecae66945",
   "binary_version": "codex-cli 0.163.0",
   "cloud_native_approval": "unknown_not_observed",
   "credential_values_recorded": false,
@@ -10,11 +11,15 @@
   "github_operations": 0,
   "local_execution": "completed_with_verified_local_quality",
   "main_runs": 0,
-  "model": "gpt-6-luna",
+  "model": "gpt-6.1-sol",
+  "model_admissions": 3,
   "model_runs": 3,
-  "observed_at": "2026-10-24T11:55:07.654823338Z",
+  "observed_at": "2026-10-24T12:11:09.657790187Z",
+  "observed_tokens_lower_bound": 609402,
+  "plan_origin": "host_authored_local_fixture",
   "private_paths_recorded": false,
-  "quality_digest": "06a88b273576e88e311ae0a062718098897bfa4d12f3dfd5d8ddde0ee6ec8a6f",
+  "quality_digest": "0d3ac6e739aeedb2979f3874da95a40cbd41cdd98e55c957c6a01b4d8d541635",
+  "repository": "fixture/local-product",
   "stage": "native local product implementation/verification/runner/review",
   "task_kinds": [
     "work",
@@ -23,6 +28,6 @@
   ],
   "task_sessions_unique": true,
   "task_threads_unique": true,
-  "tested_sha": "79782b0c35c7d242c7ee1ba47c8e7202953bfcef",
-  "token_limit": 500000
+  "tested_sha": "7dc7666f8290cc540e69a8392da95fa9f63a3a35",
+  "token_limit": 2000000
 }

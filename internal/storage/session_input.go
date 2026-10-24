@@ -428,16 +428,14 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 			m.ProductSubjects[task.ID] = *productSubject
 			if b.Kind == "task" && b.TaskID == task.ID {
 				m.ProductSubject = productSubject
-				if task.Spec.Kind == "review" && len(productSubject.Value.Sources) > 0 && productSubject.Value.Sources[0].Value.VerificationPlan != nil {
-					evidence, evidenceErr := k.productVerificationEvidenceTx(ctx, tx, productSubject.Value.Sources[0].Value.VerificationPlan.ID)
-					if evidenceErr != nil || evidence.Value.Candidate != productSubject.Value.Candidate || evidence.Value.Plan.Digest != productSubject.Value.Sources[0].Value.VerificationPlan.Digest {
+				if task.Spec.Kind == "review" {
+					summary, unavailable, evidenceErr := k.productReviewMachineInputTx(ctx, tx, *productSubject)
+					if evidenceErr != nil {
+						return m, evidenceErr
+					}
+					m.ProductMachineVerification = summary
+					if unavailable {
 						m.UnavailableProductMachineVerification = "machine_evidence_unavailable"
-					} else {
-						summary, summaryErr := productMachineVerificationInput(evidence)
-						if summaryErr != nil {
-							return m, summaryErr
-						}
-						m.ProductMachineVerification = &summary
 					}
 				}
 			}

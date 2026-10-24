@@ -1,6 +1,11 @@
 package storage
 
-import "github.com/xpadev-net/codex-appserver-harness/internal/runner"
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
+)
 
 // ProductMachineVerificationInput is an immutable, public summary for an
 // independent reviewer. Full runner paths, argv, environment and reasons remain
@@ -50,4 +55,23 @@ func productMachineVerificationInput(e ProductVerificationEvidence) (ProductMach
 	digest, err := contentDigest(input)
 	input.Digest = digest
 	return input, err
+}
+
+func (k *KernelStore) productReviewMachineInputTx(ctx context.Context, tx *sql.Tx, subject ProductCandidateSubjectSnapshot) (*ProductMachineVerificationInput, bool, error) {
+	if len(subject.Value.Sources) == 0 || subject.Value.Sources[0].Value.VerificationPlan == nil {
+		return nil, false, nil
+	}
+	plan := subject.Value.Sources[0].Value.VerificationPlan
+	evidence, err := k.productVerificationEvidenceTx(ctx, tx, plan.ID)
+	if err != nil && !readinessHoldError(err) && !errors.Is(err, ErrProductRunnerHeld) {
+		return nil, false, err
+	}
+	if err != nil || evidence.Value.Candidate != subject.Value.Candidate || evidence.Value.Plan.Digest != plan.Digest {
+		return nil, true, nil
+	}
+	summary, err := productMachineVerificationInput(evidence)
+	if err != nil {
+		return nil, false, err
+	}
+	return &summary, false, nil
 }
