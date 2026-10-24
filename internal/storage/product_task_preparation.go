@@ -24,6 +24,10 @@ func (k *KernelStore) ReadProductTaskPreparation(ctx context.Context, taskID str
 		return out, err
 	}
 	defer tx.Rollback()
+	return k.productTaskPreparationTx(ctx, tx, taskID)
+}
+func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, taskID string) (ProductTaskPreparation, error) {
+	var out ProductTaskPreparation
 	task, err := loadTask(ctx, tx, taskID)
 	if err != nil {
 		return out, err

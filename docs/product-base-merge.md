@@ -19,3 +19,11 @@ P の work/fix Task が `depends_on` で別 WorkItem の work/fix/verification/r
 先行 Task の正常完了や native merge 応答だけでは解除しない。receipt/history が失われた場合は準備、Git の claim、model の新起動を保留する。Git の開始後に証拠が失われた場合も、実停止の証拠は stale として保存し、準備成功や model 起動へ変換しない。P の同じ WorkItem 内の検証・レビュー・修正と、汎用 Wave は従来の成果依存を使う。
 
 実 SQLite の検査は、完了済み Task と merge receipt の区別、同じ要求版での plan carry、receipt 復旧による準備再開、遅い proof 喪失による claim/ready の保留、親 turn・新 Task・Wave 完了の非生成を確認する。外部 merge の応答と品質証拠は fixture であり、native P の受入ではない。先行 commit を現在の作業に取り込む base 更新の接続は引き続き後続へ残る。
+
+## Task ごとの固定 base 計画
+
+`product.BasePlanner` は unused な P の work/fix Task について、現在の要求版・Task・WorkItem 登録・host verification policy と上記の先行 merge 証拠を `ProductBaseInput` にまとめる。host 設定から repository/default branch と初期 SHA を選び、source を確認し、GitHub の repository/ref を前後で読む。新 HEAD が既定の初期 base（既存候補がある場合はその comparison base）と、同じ repository の全先行 merge の子孫であることを比較 API で確かめる。metadata の clone URL も一致し、資格情報付き URL を拒否する。
+
+計画は入力 digest・repository・branch・初期 SHA・HEAD・取得先・祖先集合で固定する。同じ HEAD の再観測は元計画の履歴を変えず、現在の選択と観測時刻を別に保存する。HEAD が変われば別計画を作る。effect 前の保存済み選択確認は30秒を超える観測、Task/source の変化、先行証拠の喪失、pause を保留する。plan/head/history/admission/current selection の欠落を、新しい HEAD の再観測で作り直さない。保存途中の失敗は計画と選択を共に rollback する。
+
+これは read-only 外部観測と DB への host 計画保存の component であり、Git の取得・workspace への適用・候補の採用や model/runner 起動を許可しない。実 Git の取得と model readiness への接続は後続 PR で扱う。テストの GitHub HEAD/ancestry は fixture として扱い、native P の受入には含めない。
