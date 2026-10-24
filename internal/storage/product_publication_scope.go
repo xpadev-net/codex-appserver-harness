@@ -195,6 +195,9 @@ func loadProductPublicationScope(ctx context.Context, q queryer, target contract
 		return saved, ErrTaskEvidence
 	}
 	if err := taskEvidenceRecord(ctx, q, "product_publication_scope_history", saved.ID, &history); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return saved, ErrTaskEvidence
+		}
 		return saved, err
 	}
 	if !reflect.DeepEqual(saved, history) {

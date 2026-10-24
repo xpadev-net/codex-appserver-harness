@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -186,6 +187,8 @@ func TestProductPublicationScopeLostOrChangedEvidenceNeverRegenerates(t *testing
 			}
 			if _, err := k.ReadProductPublicationScope(ctx, w.Target(), "work"); err == nil {
 				t.Fatal("unavailable/changed scope accepted")
+			} else if mode == "history" && !errors.Is(err, ErrTaskEvidence) {
+				t.Fatal("lost saved history reported as unprepared scope", err)
 			}
 			if _, err := k.PrepareProductPublicationScope(ctx, w.Target(), "work"); err == nil {
 				t.Fatal("unavailable/changed scope regenerated")
