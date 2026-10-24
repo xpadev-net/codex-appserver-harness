@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
@@ -84,8 +85,14 @@ func TestExecutionWorkerReportsSealingExceptionsWithoutRetryOrAdoption(t *testin
 				t.Fatal("poll retried sealing", after, err)
 			}
 			current, err := e.Store.Task(ctx, task.ID)
-			if err != nil || !reflect.DeepEqual(current, task) {
+			// The existing adoption gate may persist a blocked Task. This is
+			// still the original unapplied run, never accepted Task success.
+			if err != nil || current.State != contract.TaskRunning && current.State != contract.TaskBlocked || current.ResultID != "" {
 				t.Fatal("exception applied task", current, err)
+			}
+			current.State, current.Reason = task.State, task.Reason
+			if !reflect.DeepEqual(current, task) {
+				t.Fatal("exception changed Task identity/budget", current)
 			}
 			p, err := e.Store.ReadProductTarget(ctx, task.Target(), ready.Value.WorkItemID)
 			if err != nil || !reflect.DeepEqual(p, before) {
