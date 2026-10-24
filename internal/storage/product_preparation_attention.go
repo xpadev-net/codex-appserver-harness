@@ -7,24 +7,50 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/workspace"
 )
 
 // ProductPreparationSummary is safe parent input. It contains identities and
 // outcome facts, never private paths, remotes, arguments, credentials or logs.
 type ProductPreparationSummary struct {
-	Outcome         string                           `json:"outcome,omitempty"`
-	WorkspaceID     string                           `json:"workspace_id"`
-	WorkspaceDigest string                           `json:"workspace_digest,omitempty"`
-	State           string                           `json:"state"`
-	BasePlan        ProductVerificationPlanReference `json:"base_plan"`
-	BaseSHA         string                           `json:"base_sha,omitempty"`
-	CurrentPlan     ProductVerificationPlanReference `json:"current_plan"`
-	CurrentHead     string                           `json:"current_head,omitempty"`
-	ProofDigest     string                           `json:"proof_digest,omitempty"`
+	Conflict        *contract.ProductBaseConflictReference `json:"conflict,omitempty"`
+	BaseMerge       *ProductBaseMergeSummary               `json:"base_merge,omitempty"`
+	Outcome         string                                 `json:"outcome,omitempty"`
+	WorkspaceID     string                                 `json:"workspace_id"`
+	WorkspaceDigest string                                 `json:"workspace_digest,omitempty"`
+	State           string                                 `json:"state"`
+	BasePlan        ProductVerificationPlanReference       `json:"base_plan"`
+	BaseSHA         string                                 `json:"base_sha,omitempty"`
+	CurrentPlan     ProductVerificationPlanReference       `json:"current_plan"`
+	CurrentHead     string                                 `json:"current_head,omitempty"`
+	ProofDigest     string                                 `json:"proof_digest,omitempty"`
+}
+
+type ProductBaseMergeSummary struct {
+	SourceSHA       string   `json:"source_sha"`
+	PreviousBaseSHA string   `json:"previous_base_sha"`
+	BaseSHA         string   `json:"base_sha"`
+	HeadSHA         string   `json:"head_sha,omitempty"`
+	Outcome         string   `json:"outcome,omitempty"`
+	Conflicts       []string `json:"conflicts,omitempty"`
+	ConflictCount   int      `json:"conflict_count,omitempty"`
+}
+
+func publicBaseMergeSummary(merge *workspace.BaseMerge) *ProductBaseMergeSummary {
+	summary := &ProductBaseMergeSummary{SourceSHA: merge.Source.SHA, PreviousBaseSHA: merge.Source.BaseSHA, BaseSHA: merge.BaseSHA, HeadSHA: merge.HeadSHA, Outcome: merge.Outcome, ConflictCount: len(merge.Conflicts)}
+	bytes := 0
+	for _, path := range merge.Conflicts {
+		if len(summary.Conflicts) == 4 || bytes+len(path) > 4096 {
+			break
+		}
+		summary.Conflicts = append(summary.Conflicts, path)
+		bytes += len(path)
+	}
+	return summary
 }
 
 func preparationAttentionReason(reason string) bool {
-	return reason == "product_workspace_failed" || reason == "product_workspace_owner_unresolved" || reason == "product_workspace_evidence_unavailable" || reason == "product_base_changed"
+	return reason == "product_workspace_failed" || reason == "product_workspace_owner_unresolved" || reason == "product_workspace_evidence_unavailable" || reason == "product_base_changed" || reason == "product_base_merge_conflict"
 }
 func (k *KernelStore) productPreparationAttentionTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task) (string, *ProductPreparationSummary, error) {
 	if !UsesProductChangeOutput(w, task) && !usesProductSubject(w, task.Spec) || task.State != contract.TaskReady || task.Attempts != 0 {
@@ -58,9 +84,18 @@ func (k *KernelStore) productPreparationAttentionTx(ctx context.Context, tx *sql
 		if err != nil {
 			return "", nil, err
 		}
+		if merge := saved.Proof.BaseMerge; merge != nil {
+			summary.BaseMerge = publicBaseMergeSummary(merge)
+			if saved.State == "failed" && merge.Outcome == "conflict" {
+				summary.Conflict = &contract.ProductBaseConflictReference{TaskID: task.ID, WorkspaceID: saved.ID, WorkspaceDigest: saved.Digest, ProofDigest: summary.ProofDigest}
+			}
+		}
 	}
 	switch saved.State {
 	case "failed", "stale":
+		if summary.Conflict != nil {
+			return "product_base_merge_conflict", summary, nil
+		}
 		return "product_workspace_failed", summary, nil
 	case "launching":
 		return "product_workspace_owner_unresolved", summary, nil

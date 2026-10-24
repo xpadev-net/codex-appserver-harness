@@ -130,6 +130,41 @@
                             "maxLength": 16384,
                             "type": "string"
                           },
+                          "product_base_conflict": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "proof_digest": {
+                                    "maxLength": 16384,
+                                    "type": "string"
+                                  },
+                                  "task_id": {
+                                    "maxLength": 16384,
+                                    "type": "string"
+                                  },
+                                  "workspace_digest": {
+                                    "maxLength": 16384,
+                                    "type": "string"
+                                  },
+                                  "workspace_id": {
+                                    "maxLength": 16384,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "task_id",
+                                  "workspace_id",
+                                  "workspace_digest",
+                                  "proof_digest"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "source_result_ids": {
                             "items": {
                               "maxLength": 16384,

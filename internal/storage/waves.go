@@ -593,6 +593,14 @@ func (k *KernelStore) adoptPlanModeTx(ctx context.Context, tx *sql.Tx, target co
 	if err = saveWave(ctx, tx, wave); err != nil {
 		return receipt, err
 	}
+	if mode == "parent" {
+		if err := k.carryBaseConflictProductsTx(ctx, tx, wave, receipt.Target, plan); err != nil {
+			if readinessHoldError(err) || errors.Is(err, ErrProductWorkspaceHeld) {
+				return receipt, errors.Join(ErrPlanAdmissionHeld, err)
+			}
+			return receipt, err
+		}
+	}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		return receipt, err
@@ -635,6 +643,13 @@ func (k *KernelStore) taskInputDigestTx(ctx context.Context, tx *sql.Tx, wave do
 
 func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, wave domain.Wave, spec contract.TaskSpec, fixed *ProductWorkspace) (string, error) {
 	references := map[string]string{}
+	conflict, err := k.productBaseConflictInputTx(ctx, tx, wave, spec)
+	if err != nil {
+		return "", err
+	}
+	if conflict != nil {
+		references["product_base_conflict:"+conflict.ID] = spec.ProductBaseConflict.ProofDigest
+	}
 	subject, err := k.fixedProductSubjectInputTx(ctx, tx, wave, spec)
 	if err != nil {
 		return "", err

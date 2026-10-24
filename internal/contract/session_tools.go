@@ -49,14 +49,31 @@ type TaskDependency struct {
 	ArtifactID string `json:"artifact_id"`
 }
 type TaskSpec struct {
-	ID               string           `json:"id"`
-	Kind             string           `json:"kind"`
-	Instruction      string           `json:"instruction"`
-	Criteria         []string         `json:"criteria"`
-	DependsOn        []TaskDependency `json:"depends_on"`
-	InputArtifactIDs []string         `json:"input_artifact_ids"`
-	WorkItemIDs      []string         `json:"work_item_ids"`
-	SourceResultIDs  []string         `json:"source_result_ids,omitempty"`
+	ProductBaseConflict *ProductBaseConflictReference `json:"product_base_conflict,omitempty"`
+	ID                  string                        `json:"id"`
+	Kind                string                        `json:"kind"`
+	Instruction         string                        `json:"instruction"`
+	Criteria            []string                      `json:"criteria"`
+	DependsOn           []TaskDependency              `json:"depends_on"`
+	InputArtifactIDs    []string                      `json:"input_artifact_ids"`
+	WorkItemIDs         []string                      `json:"work_item_ids"`
+	SourceResultIDs     []string                      `json:"source_result_ids,omitempty"`
+}
+
+// ProductBaseConflictReference names host-stopped conflict evidence. It grants
+// no reuse of the old session, model start, or new Git mutation by itself.
+type ProductBaseConflictReference struct {
+	TaskID          string `json:"task_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	WorkspaceDigest string `json:"workspace_digest"`
+	ProofDigest     string `json:"proof_digest"`
+}
+
+func (r ProductBaseConflictReference) Validate() error {
+	if !inline(r.TaskID) || !inline(r.WorkspaceID) || strings.ContainsAny(r.TaskID+r.WorkspaceID, "\x00\r\n") || len(r.WorkspaceDigest) != 64 || strings.Trim(r.WorkspaceDigest, "0123456789abcdef") != "" || len(r.ProofDigest) != 64 || strings.Trim(r.ProofDigest, "0123456789abcdef") != "" {
+		return errors.New("bounded stopped product base conflict reference required")
+	}
+	return nil
 }
 
 const MaxTaskSourceResults = 16
@@ -105,6 +122,9 @@ func (p PlanProposal) Validate() error {
 			return errors.New("phase must require all tasks")
 		}
 		for _, task := range phase.Tasks {
+			if task.ProductBaseConflict != nil && (task.Kind != "fix" || len(task.WorkItemIDs) != 1 || task.ProductBaseConflict.Validate() != nil) {
+				return errors.New("product base conflict requires one WorkItem and a fresh fix Task")
+			}
 			if task.ID == "" || !required[task.ID] || !inline(task.Instruction) || len(task.Criteria) == 0 || !validIDs(task.Criteria) || !validIDs(task.InputArtifactIDs) || !validIDs(task.WorkItemIDs) || !validIDs(task.SourceResultIDs) || len(task.SourceResultIDs) > MaxTaskSourceResults {
 				return errors.New("invalid task contract")
 			}
