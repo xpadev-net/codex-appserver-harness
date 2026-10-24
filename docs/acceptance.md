@@ -110,3 +110,5 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 旧候補を参照する workspace の実 SQLite 検査は、独立した merge 送信 fence、成功/競合/部分変更の停止証拠、再起動・証拠欠落・保存 rollback、変更済み候補の admission 拒否も確認する。この保存 component の physical facts は fixture とし、daemon adapter は別の実 Git 統合検査で両変更/両親・競合内容・source/HEAD 変更・unknown owner・新版採用・merge 取消し拒否を確認する。競合から新 fix Task への引渡しは未完了である。
 
 競合通知から新 fix Task/session への入力/admission は実 SQLite で検査した。停止済み workspace/proof 参照、対象候補だけの明示的な plan carry、予算・rollback・replay と証拠喪失時の保留を確認する。競合 checkout の model 開放と解消後の sealing は後続であり、この参照だけを native P の合格には数えない。
+
+解消ファイルを controller が stage/commit する `FreezeResolvedBase` は実 temp Git で両親・新 base・marker 拒否・ours/削除・権限/状態変更・部分失敗の観測を検査する。worker の Git metadata は読み取り専用のままとし、意味的な品質成功をこの port から生成しない。fix workspace と model/adoption の接続は未完了である。
