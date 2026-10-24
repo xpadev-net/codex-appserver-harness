@@ -169,7 +169,7 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 		return value, err
 	} else {
 		p := product.Value
-		if p.Target.ScopeRevision != w.ScopeRevision || p.Target.PolicyRevision != w.Policy.Revision || p.WorkItem.Phase == domain.Merged || p.WorkItem.Phase == domain.Split || p.WorkItem.Phase == domain.Canceled {
+		if p.Target.WaveID != w.ID || p.WorkItem.ID != r.ParentWorkItemID || p.WorkItem.RepositoryID != registration.Value.Definition.RepositoryID || p.Repository != registration.Value.Definition.Repository || p.Target.ScopeRevision != w.ScopeRevision || p.Target.PolicyRevision != w.Policy.Revision || p.WorkItem.Phase == domain.Merged || p.WorkItem.Phase == domain.Split || p.WorkItem.Phase == domain.Canceled {
 			return value, ErrProductSplitHeld
 		}
 		value.Product = &product

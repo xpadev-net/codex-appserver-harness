@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
+	"github.com/xpadev-net/codex-appserver-harness/internal/runner"
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
@@ -300,5 +301,31 @@ func TestProductSplitProposalPausedWaveAllowsAuditButNoNewIntent(t *testing.T) {
 	other.RegistrationDigest = registration.Digest
 	if _, err := k.PrepareProductSplitProposal(ctx, other); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("pause admitted another split intent", err)
+	}
+}
+
+func TestProductSplitProposalCapturesParentCandidateAndRejectsMovedOrigin(t *testing.T) {
+	ctx := context.Background()
+	k, w, r := productSplitProposalFixture(t)
+	// Typed host projection fixture only; no physical Git or quality is claimed.
+	product := ProductTarget{Target: w.Target(), Repository: "owner/repo", BaseBranch: "master", WorkItem: domain.WorkItem{ID: r.ParentWorkItemID, RepositoryID: 17, ScopeRevision: w.ScopeRevision, PolicyRevision: w.Policy.Revision, Phase: domain.Verifying, Candidate: "original", Branch: "harness/root", Version: 1}, Candidate: runner.Candidate{ID: "original", SHA: strings.Repeat("a", 40), BaseSHA: strings.Repeat("b", 40), ScopeRevision: w.ScopeRevision, PolicyRevision: w.Policy.Revision}}
+	origin, err := k.SetProductTarget(ctx, "", product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := k.PrepareProductSplitProposal(ctx, r)
+	if err != nil || saved.Value.Product == nil || !reflect.DeepEqual(*saved.Value.Product, origin) {
+		t.Fatal("parent candidate was not bound", saved, err)
+	}
+	product.Candidate.ID, product.Candidate.SHA, product.WorkItem.Candidate = "later", strings.Repeat("c", 40), "later"
+	product.WorkItem.Version++
+	if _, err := k.SetProductTarget(ctx, origin.Digest, product); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReadProductSplitProposal(ctx, r.Target, r.ParentWorkItemID); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("changed candidate reused split intent", err)
+	}
+	if _, err := k.PrepareProductSplitProposal(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("changed candidate rewrote split intent", err)
 	}
 }
