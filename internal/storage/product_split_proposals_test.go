@@ -136,7 +136,7 @@ func TestProductSplitProposalRejectsLossScopeAndPolicyViolationsWithoutPartialSa
 			case "oversize":
 				bad.Proposal.Children[0].Requirement = strings.Repeat("x", 1<<20)
 			}
-			if _, err := k.PrepareProductSplitProposal(ctx, bad); err == nil {
+			if _, err := k.PrepareProductSplitProposal(ctx, bad); !errors.Is(err, ErrProductSplitHeld) {
 				t.Fatal("invalid split admitted", mode)
 			}
 		})
@@ -197,7 +197,7 @@ func TestProductSplitProposalMissingProofNeverReconstructsAndRollbackIsAtomic(t 
 		if _, err := k.DB.Exec("DELETE FROM records WHERE kind=? AND id=?", loss.kind, loss.id); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := k.PrepareProductSplitProposal(ctx, r); err == nil {
+		if _, err := k.PrepareProductSplitProposal(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
 			t.Fatal("lost proof reconstructed", loss.kind)
 		}
 		if _, err := k.DB.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES(?,?,?,?)", loss.kind, loss.id, owner, raw); err != nil {
@@ -327,5 +327,43 @@ func TestProductSplitProposalCapturesParentCandidateAndRejectsMovedOrigin(t *tes
 	}
 	if _, err := k.PrepareProductSplitProposal(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("changed candidate rewrote split intent", err)
+	}
+}
+
+func TestProductSplitProposalMalformedLimitsAreEvidenceHoldNotOperationalFault(t *testing.T) {
+	ctx := context.Background()
+	k, w, r := productSplitProposalFixture(t)
+	for _, payload := range []string{"{", "{}"} {
+		if _, err := k.DB.Exec("UPDATE records SET payload=? WHERE kind='wave_operation_limits' AND id=?", payload, w.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := k.PrepareProductSplitProposal(ctx, r); !errors.Is(err, ErrProductSplitHeld) || !errors.Is(err, ErrTaskEvidence) {
+			t.Fatal("malformed saved limits became an operational error", err)
+		}
+	}
+}
+
+func TestProductSplitProposalWorkItemPauseInvalidatesCurrentProjectionButKeepsAudit(t *testing.T) {
+	ctx := context.Background()
+	k, w, r := productSplitProposalFixture(t)
+	product := ProductTarget{Target: w.Target(), Repository: "owner/repo", BaseBranch: "master", WorkItem: domain.WorkItem{ID: r.ParentWorkItemID, RepositoryID: 17, ScopeRevision: w.ScopeRevision, PolicyRevision: w.Policy.Revision, Phase: domain.Verifying, Candidate: "original", Branch: "harness/root", Version: 1}, Candidate: runner.Candidate{ID: "original", SHA: strings.Repeat("a", 40), BaseSHA: strings.Repeat("b", 40), ScopeRevision: w.ScopeRevision, PolicyRevision: w.Policy.Revision}}
+	origin, err := k.SetProductTarget(ctx, "", product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := k.PrepareProductSplitProposal(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	product.WorkItem.Paused = true
+	if _, err := k.SetProductTarget(ctx, origin.Digest, product); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReadProductSplitProposal(ctx, r.Target, r.ParentWorkItemID); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("WorkItem projection change was ignored", err)
+	}
+	var historical ProductSplitProposal
+	if err := k.Record(ctx, "product_split_proposal_history", saved.ID, &historical); err != nil || !reflect.DeepEqual(historical, saved) {
+		t.Fatal("pause rewrote audit history", historical, err)
 	}
 }

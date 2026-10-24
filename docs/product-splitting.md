@@ -19,3 +19,5 @@ head/history/admission と Wave 内 request-key を同じ transaction で保存�
 この保存は子 WorkItem/Issue、Task/session、候補、予算消費、外部操作を作らず、親を retired/SPLIT/完了へ変えない。model tool / manifest にも公開しない。host 用記録に含む親候補の private 情報は、将来の model 入力では安全な要約へ変換する必要がある。
 
 SQLite 検査は、初期 root の受付、完全 part 対応、元 Wave/予算の保持、exact retry/reopen、不正対応・循環・上限・旧登録・巨大入力の拒否、保存途中 rollback、各証拠と複数 index の喪失・復旧、別親 key の拒否、pause 中の読取と新 intent の拒否を確認する。legacy splitting の検査を外部 test package にして production validator を kernel から再利用し、legacy の子作成処理は新 port から呼ばない。
+
+監査読取の pause 許可は Wave の pause を指す。WorkItem 自身の pause を含む親 projection の変更は、candidate/scope/policy と同じく現在 intent の照合を保留する。保存済み history を削除・書換えず、元の監査事実は保持する。

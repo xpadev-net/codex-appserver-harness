@@ -56,6 +56,7 @@ func splitProposalRequestID(r ProductSplitProposalRequest) string {
 	return structureID("product-split-request-", r.Target.WaveID, r.Key)
 }
 func splitEvidenceErr(err error) error {
+	err = sourceRequestEvidenceErr(err)
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrTaskEvidence) || errors.Is(err, ErrProductPublicationScopeHeld) {
 		return errors.Join(ErrProductSplitHeld, err)
 	}
@@ -76,13 +77,6 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 		return value, splitEvidenceErr(err)
 	}
 	if registration.Digest != r.RegistrationDigest {
-		return value, ErrProductSplitHeld
-	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, r.ParentWorkItemID)
-	if err != nil {
-		return value, err
-	}
-	if held {
 		return value, ErrProductSplitHeld
 	}
 	var admission productAdmissionReceipt
@@ -111,14 +105,14 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 	value.InitialRegistrationDigest = originalDigest
 	value.Limits, err = waveOperationLimitsTx(ctx, tx, w.ID)
 	if err != nil {
-		return value, err
+		return value, splitEvidenceErr(err)
 	}
 	if value.Limits.SplitDepth == 0 || value.Limits.SplitChildren == 0 {
 		return value, ErrProductSplitHeld
 	}
 	sourceRequest, err := k.productSourceRequestTx(ctx, tx, w)
 	if err != nil {
-		return value, err
+		return value, splitEvidenceErr(err)
 	}
 	directionDigest := ""
 	if w.DirectionID != "" {
@@ -156,7 +150,8 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 	if err != nil {
 		return value, err
 	}
-	product, err := loadProductTargetTx(ctx, tx, w.Target(), r.ParentWorkItemID)
+	var product ProductTargetSnapshot
+	err = taskEvidenceRecord(ctx, tx, "product_target", productTargetID(w.Target(), r.ParentWorkItemID), &product)
 	if errors.Is(err, sql.ErrNoRows) {
 		var known bool
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_target_observation' AND json_extract(payload,'$.value.work_item.id')=?)", r.ParentWorkItemID).Scan(&known); err != nil {
@@ -166,13 +161,30 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 			return value, ErrProductSplitHeld
 		}
 	} else if err != nil {
-		return value, err
+		return value, splitEvidenceErr(err)
 	} else {
 		p := product.Value
+		checksum, digestErr := contentDigest(p)
+		if digestErr != nil {
+			return value, digestErr
+		}
+		if invalid := p.validate(); invalid != nil {
+			return value, errors.Join(ErrProductSplitHeld, ErrTaskEvidence, invalid)
+		}
+		if product.Digest != checksum || p.Target != w.Target() {
+			return value, ErrProductSplitHeld
+		}
 		if p.Target.WaveID != w.ID || p.WorkItem.ID != r.ParentWorkItemID || p.WorkItem.RepositoryID != registration.Value.Definition.RepositoryID || p.Repository != registration.Value.Definition.Repository || p.Target.ScopeRevision != w.ScopeRevision || p.Target.PolicyRevision != w.Policy.Revision || p.WorkItem.Phase == domain.Merged || p.WorkItem.Phase == domain.Split || p.WorkItem.Phase == domain.Canceled {
 			return value, ErrProductSplitHeld
 		}
 		value.Product = &product
+	}
+	held, err := productWorkItemExecutionHeld(ctx, tx, w, r.ParentWorkItemID)
+	if err != nil {
+		return value, splitEvidenceErr(err)
+	}
+	if held {
+		return value, ErrProductSplitHeld
 	}
 	return value, nil
 }
@@ -312,7 +324,9 @@ func (k *KernelStore) PrepareProductSplitProposal(ctx context.Context, r Product
 }
 
 // ReadProductSplitProposal authenticates current host metadata without granting
-// child creation or parent retirement, including while manually paused.
+// child creation or parent retirement, including while the Wave is paused.
+// WorkItem projection changes (including its own pause) invalidate this current
+// context read; the immutable saved journal remains historical evidence.
 func (k *KernelStore) ReadProductSplitProposal(ctx context.Context, target contract.Target, parentID string) (ProductSplitProposal, error) {
 	var saved ProductSplitProposal
 	if !target.Valid() || parentID == "" {
