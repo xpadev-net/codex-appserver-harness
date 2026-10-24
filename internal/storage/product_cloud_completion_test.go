@@ -96,7 +96,7 @@ func TestCloudCompletionReleasesOnlyItsOwnWorkWithoutApprovalAfterPauseOrNewCand
 }
 
 func TestCloudCompletionUnknownOrUnmappedFactsKeepCapacity(t *testing.T) {
-	for _, mode := range []string{"no_actor", "wrong_actor", "wrong_sha", "old_round", "pending", "empty", "duplicate", "future_review", "future_read", "unknown_mapping", "unknown_request", "report_repository", "report_future", "wrong_digest", "wrong_operation"} {
+	for _, mode := range []string{"no_actor", "wrong_actor", "wrong_sha", "old_round", "pending", "empty", "duplicate", "future_review", "future_read", "unknown_mapping", "unknown_request", "report_repository", "report_future", "stale_report", "wrong_digest", "wrong_operation"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			actors := []int64{91}
@@ -127,6 +127,8 @@ func TestCloudCompletionUnknownOrUnmappedFactsKeepCapacity(t *testing.T) {
 				value.Report.Capabilities["cloud_request"] = contract.Capability{State: contract.Unknown}
 			case "report_repository":
 				value.Report.RepositoryID++
+			case "stale_report":
+				value.Report.ObservedAt = round.RequestedAt.Add(-time.Second)
 			case "report_future":
 				value.Report.ObservedAt = value.ReadAt.Add(time.Hour)
 			case "wrong_digest":

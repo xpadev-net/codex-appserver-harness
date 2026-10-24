@@ -636,7 +636,7 @@ fixtureで集合のcopy/canonical replay/immutable変更拒否、private設定�
 
 ### Cloud作業の完了記録と予約枠の解放
 
-`RecordProductCloudReviewCompleted`はhost readerが正規化したnative reviewのID・provider ID・state・SHA・提出時刻と、取得時刻/接続reportを受ける。モデル由来の完了Booleanやcallerが選んだactor集合は受けない。元の確定round/digest・依頼packetに保存したprovider・元候補SHAに一致し、依頼確定観測以後/取得時刻以前の実応答があり、同じrepository/baseに対する`cloud_request`と`review_sha`が証拠付きverifiedの場合だけ、当該依頼のCloud枠を解放する。PENDING・空の応答・不明のprovider/能力・古いSHA/round・未来時刻・重複IDは保留する。
+`RecordProductCloudReviewCompleted`はhost readerが正規化したnative reviewのID・provider ID・state・SHA・提出時刻と、取得時刻/接続reportを受ける。モデル由来の完了Booleanやcallerが選んだactor集合は受けない。元の確定round/digest・依頼packetに保存したprovider・元候補SHAに一致し、依頼確定観測以後/取得時刻以前の実応答があり、同じrepository/baseに対する`cloud_request`と`review_sha`が証拠付きverifiedであり、reportも依頼確定観測以後/結果取得以前に検証されている場合だけ、当該依頼のCloud枠を解放する。依頼前の古い能力reportを、単に読んだ時刻へ書き換えて完了証拠にしない。PENDING・空の応答・不明のprovider/能力・古いSHA/round・未来時刻・重複IDは保留する。
 
 COMMENTED/APPROVED/CHANGES_REQUESTED/DISMISSEDはproviderの作業終了を記録できるが、正式承認・quality・PR merge・WorkItem/Wave受入を生成しない。`cloud_native_approval`がunknownでも、検証済みの実応答に基づく枠解放と承認不可を分ける。現在のpause/cancelや新しい候補の存在は、古い依頼自身の既知結果を保存することを妨げない。
 

@@ -44,7 +44,7 @@ func validateCloudCompletion(round ProductCloudRound, value ProductCloudCompleti
 		return ErrProductCloudHeld
 	}
 	report := value.Report
-	if report.Version != 1 || report.ObservedAt.IsZero() || report.ObservedAt.After(value.ReadAt) || report.RepositoryID != p.WorkItem.RepositoryID || report.Repository != p.Repository || report.DefaultBranch != p.BaseBranch || len(report.Capabilities) > 128 {
+	if report.Version != 1 || report.ObservedAt.IsZero() || report.ObservedAt.Before(round.RequestedAt) || report.ObservedAt.After(value.ReadAt) || report.RepositoryID != p.WorkItem.RepositoryID || report.Repository != p.Repository || report.DefaultBranch != p.BaseBranch || len(report.Capabilities) > 128 {
 		return ErrProductCloudHeld
 	}
 	for _, name := range []string{"cloud_request", "review_sha"} {
