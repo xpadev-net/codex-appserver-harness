@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/mattn/go-sqlite3"
 	"testing"
 )
 
@@ -37,5 +38,14 @@ func TestSourceRequestEvidenceReadKeepsCancellationAndSQLFailureOperational(t *t
 	}
 	if err := k.checkProductSourceRequestTx(context.Background(), tx, w, saved); !errors.Is(err, sql.ErrTxDone) || errors.Is(err, ErrTaskEvidence) {
 		t.Fatal("SQL failure became corrupt evidence", err)
+	}
+}
+
+func TestSourceRequestNestedSQLAndCancellationDoNotBecomeDurableEvidenceHolds(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, sql.ErrTxDone, sql.ErrConnDone, sqlite3.Error{Code: sqlite3.ErrBusy}, sqlite3.Error{Code: sqlite3.ErrIoErr}} {
+		got := sourceRequestEvidenceErr(errors.Join(ErrTaskEvidence, cause))
+		if errors.Is(got, ErrTaskEvidence) || !errors.Is(got, cause) {
+			t.Fatalf("operational proof cause changed: %v -> %v", cause, got)
+		}
 	}
 }

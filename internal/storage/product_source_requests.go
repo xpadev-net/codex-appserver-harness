@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
+
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
@@ -43,8 +45,23 @@ func sourceRequestEpoch(t contract.Target) string {
 
 // Operational failures must not become durable state_invalid source holds.
 func sourceRequestEvidenceErr(err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if errors.Is(err, sql.ErrTxDone) {
+		return sql.ErrTxDone
+	}
+	if errors.Is(err, sql.ErrConnDone) {
+		return sql.ErrConnDone
+	}
+	// Older proof readers may already have joined a SQL failure with evidence.
+	// Preserve the operational driver cause without that readiness classification.
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr
 	}
 	if readinessHoldError(err) || errors.Is(err, ErrProductCoverageHeld) {
 		return errors.Join(ErrTaskEvidence, err)
