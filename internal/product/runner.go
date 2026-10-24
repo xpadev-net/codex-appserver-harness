@@ -27,6 +27,21 @@ func (r Runner) Start(ctx context.Context, planID, profileID string, runtime sto
 	if err != nil {
 		return job, err
 	}
+	return r.startJob(ctx, job)
+}
+
+func (r Runner) StartRetry(ctx context.Context, previousID string) (storage.ProductRunnerJob, error) {
+	if r.Store == nil || !filepath.IsAbs(r.Executable) {
+		return storage.ProductRunnerJob{}, errors.New("configured store and absolute trusted runner executable required")
+	}
+	job, err := r.Store.ReserveProductRunnerRetry(ctx, previousID)
+	if err != nil {
+		return job, err
+	}
+	return r.startJob(ctx, job)
+}
+
+func (r Runner) startJob(ctx context.Context, job storage.ProductRunnerJob) (storage.ProductRunnerJob, error) {
 	if job.State == "completed" {
 		return job, nil
 	}

@@ -100,7 +100,11 @@ func reserveOperationBudgetTx(ctx context.Context, tx *sql.Tx, r OperationCapaci
 			if err != nil {
 				return err
 			}
-			if previous.Kind != "runner" || previous.WaveID != b.WaveID || previous.SessionID != r.SessionID || previous.Request.Target != r.Target || previous.Request.Worktree != r.Worktree || previous.State != "released" || previous.Proof == nil || previous.Proof.Disposition != "process_stopped" || !previous.Proof.RetryableInfrastructureFailure {
+			sameWork, err := productRunnerRetryWorkspaceTx(ctx, tx, previous, r)
+			if err != nil {
+				return err
+			}
+			if previous.Kind != "runner" || previous.WaveID != b.WaveID || previous.SessionID != r.SessionID || previous.Request.Target != r.Target || !sameWork || previous.State != "released" || previous.Proof == nil || previous.Proof.Disposition != "process_stopped" || !previous.Proof.RetryableInfrastructureFailure {
 				return errors.New("runner retry requires a stopped, classified infrastructure failure of the same job")
 			}
 			var old OperationBudgetBinding

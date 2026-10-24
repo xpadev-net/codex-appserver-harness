@@ -79,7 +79,7 @@ func seedVerificationCompletedRun(t *testing.T, k *storage.KernelStore, task dom
 }
 
 func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"success", "runner_cancel", "product_change", "missing_test"} {
+	for _, mode := range []string{"success", "runner_cancel", "runner_retry", "product_change", "missing_test"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			s, implementation, producer, run := candidateSealerFixture(t, func(plan *contract.PlanProposal) { plan.Phases[1].Tasks[0].Kind = "verification" })
@@ -189,7 +189,11 @@ func TestProductVerificationSealerChecksRealDiffAndTrackedPlanBeforeReceipt(t *t
 			if err != nil || p.Value.Candidate != *sealed.Candidate || p.Value.WorkItem.Phase != domain.Verifying {
 				t.Fatal("adoption invented runner pass", p, err)
 			}
-			checkProductRunnerExecution(t, s.Store, canonical, mode == "runner_cancel")
+			if mode == "runner_retry" {
+				checkProductRunnerRetryExecution(t, s.Store, canonical)
+			} else {
+				checkProductRunnerExecution(t, s.Store, canonical, mode == "runner_cancel")
+			}
 		})
 	}
 }

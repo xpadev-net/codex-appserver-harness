@@ -78,11 +78,11 @@ func (k *KernelStore) productVerificationEvidenceTx(ctx context.Context, tx *sql
 	for _, profileID := range profiles {
 		id := productRunnerJobID(plan.ID, profileID)
 		observation := ProductRunnerObservation{ProfileID: profileID, JobID: id, State: "not_run"}
-		job, err := loadProductRunnerJob(ctx, tx, id)
+		job, err := latestProductRunnerJobTx(ctx, tx, plan.ID, profileID)
 		if errors.Is(err, sql.ErrNoRows) {
 			// A missing head after admission is lost evidence, never a new job.
-			var admitted bool
-			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_runner_job_history','product_runner_job_terminal')) OR EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE run_id=?)`, id, id).Scan(&admitted); err != nil {
+			admitted, err := productRunnerJobAdmittedTx(ctx, tx, id)
+			if err != nil {
 				return saved, err
 			}
 			if admitted {
@@ -94,7 +94,7 @@ func (k *KernelStore) productVerificationEvidenceTx(ctx context.Context, tx *sql
 			if job.Value.PlanID != plan.ID || job.Value.PlanDigest != plan.Digest || job.Value.Spec.Candidate != value.Candidate || job.Value.Spec.ProfileID != profileID {
 				return saved, ErrTaskEvidence
 			}
-			observation.JobDigest, observation.State = job.Digest, job.State
+			observation.JobID, observation.JobDigest, observation.State = job.ID, job.Digest, job.State
 			if job.State == "completed" {
 				observation.Completion = job.Completion
 				results = append(results, job.Completion.Result)
