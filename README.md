@@ -185,7 +185,7 @@ privateなoperator fileでrepository名・数値IDと選択labelを指定しま�
 
 初回scopeはrevision 1・全criterionをincludedとするものに限定します。改訂済み・部分/既mergeのscopeは履歴を取り込む後続工程まで保留します。`harness-depends-on: 41,40`は32件までで、依存はclosed、対応するWorkItemを管理するkernel Waveがある場合は、direct/GitHubの入口にかかわらず製品Waveの完了も要求します。読取は最大30秒（CLI全体のretry枠は10秒）、各gh応答4 MiB/合計16 MiBの上限で、不明を成功にしません。HTTP取得とDB保存を跨ぐ外部の原子性はなく、公開前の再確認は引き続き必要です。
 
-このコマンドは一件の明示受付です。初回以降のscope同期、製品Task/候補/正式承認/mergeの統合は継続中です。実GitHub接続やP全体の受入証拠は別途必要です。
+このコマンドは一件の明示受付です。merge 後の版付き後続には、operator 用の `wave continue-product` / `wave adopt-product-source` と保存済み観測の読取を用意しています。[手順と証拠 gate](docs/product-continuations.md#operator-cli)を参照してください。製品の後続候補・正式 gate を含む P 全体の受入は継続中です。
 
 ### kernel daemonのIssue pool入口
 

@@ -47,3 +47,25 @@ coverage は現在版の登録から全系譜を照合し、元の登録 digest 
 実 Git/SQLite fixture は、元 Issue の merge と方向修正後、新本文の `request_changed`、明示採用、採用だけでは hold 維持、次の4 GETで ready、新 plan の新 Task 入力、途中失敗の全 rollback、exact replay、各証拠の喪失・復旧、reopen を確認する。親 tool/CLI による呼出しと、後続の実候補・正式 GitHub gate の受入は別途必要である。
 
 次 scope の検査では、旧採用を保持した通常の方向修正と registration CAS の後、暗黙の原要求への fallback による plan 採用を拒否し、新 scope の観測・明示採用・ready を再度通す。追加モデルや外部書込みは行わない。
+
+## Operator CLI
+
+保存済みの観測と coverage はモデル・GitHub 呼出しなしで読める。
+
+```sh
+./harness wave product-source --root /absolute/private/kernel --id WAVE_ID
+./harness wave product-coverage --root /absolute/private/kernel --id WAVE_ID
+```
+
+`product-source` は GitHub Issue の最新保存観測（ID/digest、対象 scope/policy、status、要求 digest）を返す。direct source や未観測では観測を生成しない。`product-coverage` は現在版の merged/historical/retired/residual と元 merge ID/receipt digest を返す。いずれも読取時点の事実であり、後の操作は改めて現在版・証拠を照合する。
+
+```sh
+./harness wave continue-product --root /absolute/private/kernel --file continuation.json
+./harness wave adopt-product-source --root /absolute/private/kernel --file source-adoption.json
+```
+
+両ファイルは所有者だけが読める通常ファイル（例: `chmod 600`）、1 MiB 以下とし、未知 field・余分な CLI flag は拒否する。continuation.json は `ProductContinuationRequest` の JSON（`target`、`key`、`parent_merge_id`、`parent_receipt_digest`、`definition`）。definition は新しい `id`、元と同じ `repository` / `repository_id`、現在版の `criteria` を持つ。source-adoption.json は `ProductSourceRequestAdoptionRequest`（`target`、`direction_id`、`observation_id`、`observation_digest`、新しい `work_item_id`）。target は `wave_id` / `scope_revision` / `plan_revision` / `policy_revision` を全て明示する。値は実際の `wave inspect`、source、coverage、方向修正や登録の返答から取得する。
+
+最初に通常の `wave steer --file` で新 scope を適用し、停止境界の完了を確認する。元 merge と現在 target を明示して `continue-product` を行う。本文変更がある場合は方向修正全文を新しい Issue の title/本文と一致させ、source observer が保存した `request_changed` 観測を指定して `adopt-product-source` を行う。次の正しい source 観測で ready となった後、親が新 plan/Task を採用する。CLI 自体は model/Git/外部書込みを起動せず、保存後に既存 daemon へ best-effort hint を送る。操作は同じ Go port の再送・rollback・source/merge 証拠 gate を使う。
+
+CLI の SQLite 検査は private/未知 field/不正 flag/必須ファイル、未観測 merge・未適用 source の拒否、正しい保存済み coverage 読取、Wave/Task/run/tool operation の非変更を確認する。成立する merge/方向修正/採用・再送の検査は前節の Go port 統合で確認している。CLI の検査だけで後続候補や native P の受入を主張しない。これらは operator 専用であり、model の本文を trusted source 権限へ変換する tool は公開しない。
