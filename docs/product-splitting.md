@@ -350,3 +350,11 @@ Coverage は直近の親の local criterion に対する part ID・part count・
 最新の作成 journal の探索も、一つの読み取り専用 proof walk の中で再利用する。同じ呼び出し内の retry chain と末尾確認を繰り返さず、書き込み後や別呼び出しへ結果を持ち越さない。retry head が失われた後は、以前の読み取りで隠さず正式証拠の欠落として保留する。
 
 retry は Wave 全体の予算を引き継ぐ。祖先の retry で上限に達した場合、深い分割でも追加 retry を拒否し、失敗した予約は予算を変更しない。この fixture は source と metadata の接続確認であり、Task/model/runner 実行、実 GitHub/native model の分割受入、正式承認や全体完了の証拠には数えない。
+
+## 多段のローカル coverage と委譲した親の扱い
+
+coverage ledger は各階層の正式な全件登録を読み、直近の親の canonical local scope・scope digest・登録 digest・深さと全子の mapping を照合する。正式に全件委譲したノードは、子孫の merge が未完了でも独自 PR の義務から退役し、実際に成果を作る各 leaf の義務を残す。どの階層でも正式証拠が欠ければ、当該委譲による退役と完了を認めない。
+
+集約では、子孫の全ローカル criterion と宣言した全 part が満たされた場合にだけ、その子の `delegated_complete` を直近の親へ反映する。親への反映には元の登録・scope・local criterion 集合・深さの一致が必要で、委譲途中の親自身の PR で未完了の子孫を飛ばさない。`merged` はその WorkItem 自身の正式な merge fact だけを表し、委譲完了から仮想 merge receipt を作らない。`complete` と `covered_local_criteria` は各 group のローカル集約を示す。
+
+Wave 全体の criterion へ射影するのは最上位の group だけとし、深い scope に同じ ID が現れても Wave 要件を直接満たさない。静的 verifier 監査も登録が指定する nested history namespace を使い、欠落した typed envelope を legacy history で代用しない。これは metadata と集約の接続であり、子の Task 実行・依存 base SHA・最終 source gate・継続作業の実行許可は後続の統合対象である。
