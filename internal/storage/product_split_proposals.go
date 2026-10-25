@@ -15,10 +15,11 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-var ErrProductSplitHeld = errors.New("product split requires authenticated current root scope and bounded lossless mapping")
+var ErrProductSplitHeld = errors.New("product split requires authenticated current local scope and bounded lossless mapping")
 
 // This trusted metadata port neither creates children nor retires the parent.
-// Initial roots only: child/continuation depth bindings are a separate port.
+// InspectProductSplitProposalContext derives registered children's local scope
+// and original root mapping; durable adoption remains limited to initial roots.
 type ProductSplitProposalRequest struct {
 	Target             contract.Target    `json:"target"`
 	Key                string             `json:"key"`
@@ -27,14 +28,16 @@ type ProductSplitProposalRequest struct {
 	Proposal           splitting.Proposal `json:"proposal"`
 }
 type ProductSplitProposalValue struct {
-	Request                   ProductSplitProposalRequest `json:"request"`
-	InitialRegistrationDigest string                      `json:"initial_registration_digest"`
-	ParentScopeDigest         string                      `json:"parent_scope_digest"`
-	SourceDigest              string                      `json:"source_digest"`
-	Limits                    WaveOperationLimits         `json:"limits"`
-	Depth                     int                         `json:"depth"`
-	Product                   *ProductTargetSnapshot      `json:"product,omitempty"`
-	CreatedAt                 time.Time                   `json:"created_at"`
+	ParentSplitScope          *ProductSplitChildScopeReference `json:"parent_split_scope,omitempty"`
+	ParentCriterionRoots      map[string]string                `json:"parent_criterion_roots,omitempty"`
+	Request                   ProductSplitProposalRequest      `json:"request"`
+	InitialRegistrationDigest string                           `json:"initial_registration_digest"`
+	ParentScopeDigest         string                           `json:"parent_scope_digest"`
+	SourceDigest              string                           `json:"source_digest"`
+	Limits                    WaveOperationLimits              `json:"limits"`
+	Depth                     int                              `json:"depth"`
+	Product                   *ProductTargetSnapshot           `json:"product,omitempty"`
+	CreatedAt                 time.Time                        `json:"created_at"`
 }
 type ProductSplitProposal struct {
 	ID     string                    `json:"id"`
@@ -79,30 +82,55 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 	if registration.Digest != r.RegistrationDigest {
 		return value, ErrProductSplitHeld
 	}
-	var admission productAdmissionReceipt
-	if err := taskEvidenceRecord(ctx, tx, "product_wave_admission", structureID("product-admission-", w.Source, w.SourceID), &admission); err != nil {
+	binding, err := productSplitChildScopeTx(ctx, tx, w, registration)
+	if err != nil {
 		return value, splitEvidenceErr(err)
 	}
-	digest, err := contentDigest(admission.Value)
-	if err != nil {
-		return value, err
+	parentPolicy := ""
+	if binding == nil {
+		var admission productAdmissionReceipt
+		if err := taskEvidenceRecord(ctx, tx, "product_wave_admission", structureID("product-admission-", w.Source, w.SourceID), &admission); err != nil {
+			return value, splitEvidenceErr(err)
+		}
+		digest, err := contentDigest(admission.Value)
+		if err != nil {
+			return value, err
+		}
+		originalDigest := admission.Value.Registrations[r.ParentWorkItemID]
+		if digest != admission.Digest || admission.Value.WaveID != w.ID || admission.Value.Source != w.Source || admission.Value.SourceID != w.SourceID || !validSourceDigest(originalDigest) {
+			return value, ErrProductSplitHeld
+		}
+		var original ProductWorkItemRegistrationSnapshot
+		if err := taskEvidenceRecord(ctx, tx, "product_work_item_registration_version", structureID("product-work-", r.ParentWorkItemID, originalDigest), &original); err != nil {
+			return value, splitEvidenceErr(err)
+		}
+		originalChecksum, err := contentDigest(original.Value)
+		if err != nil {
+			return value, err
+		}
+		if original.Digest != originalDigest || originalChecksum != originalDigest || original.Value.WaveID != w.ID || original.Value.Source != w.Source || original.Value.SourceID != w.SourceID || original.Value.Definition.ID != r.ParentWorkItemID || original.Value.Definition.Repository != registration.Value.Definition.Repository || original.Value.Definition.RepositoryID != registration.Value.Definition.RepositoryID {
+			return value, ErrProductSplitHeld
+		}
+		value.InitialRegistrationDigest = originalDigest
+	} else {
+		value.ParentSplitScope = registration.Value.SplitScope
+		value.Depth = binding.Value.Child.Value.Depth
+		value.InitialRegistrationDigest = registration.Digest
+		value.ParentCriterionRoots, err = nestedSplitCriterionRootsTx(ctx, tx, w, registration, *binding)
+		if err != nil {
+			return value, err
+		}
+		source, e := loadSplitChildSource(ctx, tx, *binding)
+		now := k.clock()
+		if e != nil {
+			return value, splitEvidenceErr(e)
+		}
+		if source.Value.Status != "ready" || now.Before(source.CheckedAt) || now.Sub(source.CheckedAt) > time.Minute {
+			return value, ErrProductSplitHeld
+		}
+		parentPolicy = source.Value.Facts.PolicyDigest
 	}
-	originalDigest := admission.Value.Registrations[r.ParentWorkItemID]
-	if digest != admission.Digest || admission.Value.WaveID != w.ID || admission.Value.Source != w.Source || admission.Value.SourceID != w.SourceID || !validSourceDigest(originalDigest) {
-		return value, ErrProductSplitHeld
-	}
-	var original ProductWorkItemRegistrationSnapshot
-	if err := taskEvidenceRecord(ctx, tx, "product_work_item_registration_version", structureID("product-work-", r.ParentWorkItemID, originalDigest), &original); err != nil {
-		return value, splitEvidenceErr(err)
-	}
-	originalChecksum, err := contentDigest(original.Value)
-	if err != nil {
-		return value, err
-	}
-	if original.Digest != originalDigest || originalChecksum != originalDigest || original.Value.WaveID != w.ID || original.Value.Source != w.Source || original.Value.SourceID != w.SourceID || original.Value.Definition.ID != r.ParentWorkItemID || original.Value.Definition.Repository != registration.Value.Definition.Repository || original.Value.Definition.RepositoryID != registration.Value.Definition.RepositoryID {
-		return value, ErrProductSplitHeld
-	}
-	value.InitialRegistrationDigest = originalDigest
+
 	value.Limits, err = waveOperationLimitsTx(ctx, tx, w.ID)
 	if err != nil {
 		return value, splitEvidenceErr(err)
@@ -135,6 +163,13 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 	if err != nil {
 		return value, err
 	}
+	if binding != nil {
+		value.SourceDigest, err = contentDigest(struct{ RootSourceDigest, BindingDigest, PolicyDigest string }{value.SourceDigest, binding.Digest, parentPolicy})
+		if err != nil {
+			return value, err
+		}
+	}
+
 	scope := verification.Scope{Revision: w.ScopeRevision, OriginalRequest: w.OriginalRequest, Included: append([]string{}, registration.Value.Definition.Criteria...), Remaining: []string{}, PreviouslyMerged: []string{}}
 	for _, id := range scope.Included {
 		for _, criterion := range w.Criteria {
@@ -143,7 +178,11 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 			}
 		}
 	}
-	if err := r.Proposal.Validate(r.ParentWorkItemID, scope, 0, value.Limits.SplitDepth, value.Limits.SplitChildren); err != nil {
+	if binding != nil {
+		scope = binding.Value.Scope
+	}
+
+	if err := r.Proposal.Validate(r.ParentWorkItemID, scope, value.Depth, value.Limits.SplitDepth, value.Limits.SplitChildren); err != nil {
 		return value, errors.Join(ErrProductSplitHeld, err)
 	}
 	value.ParentScopeDigest, err = contentDigest(scope)
@@ -284,6 +323,9 @@ func (k *KernelStore) prepareProductSplitProposalTx(ctx context.Context, tx *sql
 	}
 	prior, err := loadProductSplitProposal(ctx, tx, r)
 	if err == nil {
+		if prior.Value.ParentSplitScope != nil {
+			return ProductSplitProposal{}, ErrProductSplitHeld
+		}
 		if !reflect.DeepEqual(prior.Value.Request, r) {
 			return saved, ErrProductSplitHeld
 		}
@@ -317,6 +359,11 @@ func (k *KernelStore) prepareProductSplitProposalTx(ctx context.Context, tx *sql
 	saved.Value, err = k.productSplitContextTx(ctx, tx, r)
 	if err != nil {
 		return saved, err
+	}
+	// Nested context derivation is read-only until durable ancestry witnesses
+	// and the parent Issue send fence are connected together.
+	if saved.Value.ParentSplitScope != nil {
+		return ProductSplitProposal{}, ErrProductSplitHeld
 	}
 	saved.Value.CreatedAt = k.clock()
 	saved.Digest, err = contentDigest(saved.Value)

@@ -334,6 +334,12 @@ func (k *KernelStore) splitCreatePreflightTx(ctx context.Context, tx *sql.Tx, r 
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest {
 		return ErrProductSplitHeld
 	}
+	// Nested proposals/intents are metadata only until their parent Issue send
+	// fence and recursive registration/coverage adapters are connected.
+	if proposal.Value.ParentSplitScope != nil {
+		return ErrProductSplitHeld
+	}
+
 	if w.Source == "direct" {
 		return nil
 	}
