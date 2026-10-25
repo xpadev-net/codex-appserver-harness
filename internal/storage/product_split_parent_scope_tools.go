@@ -26,7 +26,7 @@ func requireProductSplitParentScopeSessionTx(ctx context.Context, tx *sql.Tx, b 
 	if err := taskEvidenceRecord(ctx, tx, "session_tool_profile", structureID("session-tools-", b.ID, fmt.Sprint(b.Generation)), &profile); err != nil {
 		return err
 	}
-	if profile.SessionID != b.ID || profile.Generation != b.Generation || profile.Profile != "product_v4" || profile.CreatedAt.IsZero() {
+	if profile.SessionID != b.ID || profile.Generation != b.Generation || (profile.Profile != "product_v4" && profile.Profile != "product_v5") || profile.CreatedAt.IsZero() {
 		return ErrProductSplitHeld
 	}
 	return nil

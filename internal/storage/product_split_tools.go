@@ -10,18 +10,20 @@ import (
 	"strings"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/splitting"
 )
 
 type ProductSplitToolAdoption struct {
-	SubscriptionID    string                  `json:"subscription_id,omitempty"`
-	Preparation       ProductSplitPreparation `json:"preparation"`
-	Source            kernelToolOperation     `json:"source"`
-	ArtifactID        string                  `json:"artifact_id"`
-	ArtifactDigest    string                  `json:"artifact_digest"`
-	ParentHeadID      string                  `json:"parent_head_id"`
-	PreparationID     string                  `json:"preparation_id"`
-	PreparationDigest string                  `json:"preparation_digest"`
+	ParentScopeProof  *ProductSplitParentScopeReference `json:"parent_scope_proof,omitempty"`
+	SubscriptionID    string                            `json:"subscription_id,omitempty"`
+	Preparation       ProductSplitPreparation           `json:"preparation"`
+	Source            kernelToolOperation               `json:"source"`
+	ArtifactID        string                            `json:"artifact_id"`
+	ArtifactDigest    string                            `json:"artifact_digest"`
+	ParentHeadID      string                            `json:"parent_head_id"`
+	PreparationID     string                            `json:"preparation_id"`
+	PreparationDigest string                            `json:"preparation_digest"`
 }
 
 func requireProductSplitSessionTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding, request contract.SplitProductRequest) error {
@@ -33,34 +35,16 @@ func requireProductSplitSessionTx(ctx context.Context, tx *sql.Tx, b contract.Se
 	if err := taskEvidenceRecord(ctx, tx, "session_tool_profile", id, &profile); err != nil {
 		return err
 	}
-	if profile.SessionID != b.ID || profile.Generation != b.Generation || (profile.Profile != "product_v3" && profile.Profile != "product_v4") || profile.CreatedAt.IsZero() {
-		return errors.New("product split requires a pinned product_v3/v4 parent session")
+	if profile.SessionID != b.ID || profile.Generation != b.Generation || (profile.Profile != "product_v3" && profile.Profile != "product_v4" && profile.Profile != "product_v5") || profile.CreatedAt.IsZero() {
+		return errors.New("product split requires a pinned product_v3/v4/v5 parent session")
 	}
 	return nil
 }
 
 func (k *KernelStore) acceptProductSplitTx(ctx context.Context, tx *sql.Tx, op kernelToolOperation, b contract.SessionBinding, request contract.SplitProductRequest) (contract.ToolReply, error) {
 	var empty contract.ToolReply
-	_, wave, err := artifactAuthorityTx(ctx, tx, b.ID, op.Target)
+	wave, artifact, proposal, err := k.productSplitToolArtifactTx(ctx, tx, op, b, request.ProposalArtifactID)
 	if err != nil {
-		return empty, err
-	}
-	artifact, err := loadArtifact(ctx, tx, request.ProposalArtifactID)
-	if err != nil {
-		return empty, err
-	}
-	if err := artifactReadableTx(ctx, tx, b, wave, artifact); err != nil {
-		return empty, err
-	}
-	if artifact.Kind != "split_proposal" || artifact.ContentType != "application/json" || artifact.Bytes > 1<<20 {
-		return empty, errors.New("bounded split_proposal JSON Artifact required")
-	}
-	raw, err := k.readArtifactObject(artifact)
-	if err != nil {
-		return empty, err
-	}
-	var proposal splitting.Proposal
-	if err := contract.DecodeStrict(raw, &proposal); err != nil {
 		return empty, err
 	}
 	registration, err := publicationScopeRegistrationTx(ctx, tx, wave, proposal.WorkItemID)
@@ -71,14 +55,50 @@ func (k *KernelStore) acceptProductSplitTx(ctx context.Context, tx *sql.Tx, op k
 	if err != nil {
 		return empty, err
 	}
+	return k.finishProductSplitToolAdoptionTx(ctx, tx, op, artifact, saved, nil)
+}
+
+func (k *KernelStore) productSplitToolArtifactTx(ctx context.Context, tx *sql.Tx, op kernelToolOperation, b contract.SessionBinding, artifactID string) (domain.Wave, domain.Artifact, splitting.Proposal, error) {
+	var artifact domain.Artifact
+	var proposal splitting.Proposal
+	_, wave, err := artifactAuthorityTx(ctx, tx, b.ID, op.Target)
+	if err != nil {
+		return wave, artifact, proposal, err
+	}
+	artifact, err = loadArtifact(ctx, tx, artifactID)
+	if err != nil {
+		return wave, artifact, proposal, err
+	}
+	if err := artifactReadableTx(ctx, tx, b, wave, artifact); err != nil {
+		return wave, artifact, proposal, err
+	}
+	if artifact.Kind != "split_proposal" || artifact.ContentType != "application/json" || artifact.Bytes > 1<<20 {
+		return wave, artifact, proposal, errors.New("bounded split_proposal JSON Artifact required")
+	}
+	raw, err := k.readArtifactObject(artifact)
+	if err != nil {
+		return wave, artifact, proposal, err
+	}
+	if err := contract.DecodeStrict(raw, &proposal); err != nil {
+		return wave, artifact, proposal, err
+	}
+	return wave, artifact, proposal, nil
+}
+
+func (k *KernelStore) finishProductSplitToolAdoptionTx(ctx context.Context, tx *sql.Tx, op kernelToolOperation, artifact domain.Artifact, saved ProductSplitPreparation, parent *ProductSplitParentScopeReference) (contract.ToolReply, error) {
+	var empty contract.ToolReply
 	sub, err := k.ensureOperationSubscriptionTx(ctx, tx, op)
 	if err != nil {
 		return empty, err
 	}
-	adoption := ProductSplitToolAdoption{SubscriptionID: sub.ID, Preparation: saved, Source: op, ArtifactID: artifact.ID, ArtifactDigest: artifact.Digest, ParentHeadID: saved.Value.ParentHeadID, PreparationID: saved.ID, PreparationDigest: saved.Digest}
+	adoption := ProductSplitToolAdoption{ParentScopeProof: parent, SubscriptionID: sub.ID, Preparation: saved, Source: op, ArtifactID: artifact.ID, ArtifactDigest: artifact.Digest, ParentHeadID: saved.Value.ParentHeadID, PreparationID: saved.ID, PreparationDigest: saved.Digest}
 	if err := kernelRecordTx(ctx, tx, "product_split_tool_adoption", op.ID, op.Target.WaveID, adoption); err != nil {
 		return empty, err
 	}
+	return productSplitToolReply(op, saved, sub.ID)
+}
+
+func productSplitToolReply(op kernelToolOperation, saved ProductSplitPreparation, subscriptionID string) (contract.ToolReply, error) {
 	// This reply deliberately contains no private product projection/workspace.
 	content, err := json.Marshal(struct {
 		PreparationID string `json:"preparation_id"`
@@ -87,9 +107,9 @@ func (k *KernelStore) acceptProductSplitTx(ctx context.Context, tx *sql.Tx, op k
 		Stage         string `json:"stage"`
 	}{saved.ID, saved.Digest, len(saved.Value.Creations), "prepared"})
 	if err != nil {
-		return empty, err
+		return contract.ToolReply{}, err
 	}
-	return contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{sub.ID}, ResourceID: saved.ID, Content: string(content)}, nil
+	return contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{subscriptionID}, ResourceID: saved.ID, Content: string(content)}, nil
 }
 
 // Cached completion is an audited preparation response, never a repair of lost

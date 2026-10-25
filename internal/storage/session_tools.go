@@ -22,7 +22,7 @@ type SessionToolProfile struct {
 // not a grant: every call still passes the common kernel gateway. Old threads
 // without a profile can only resume with the original kernel tool set.
 func (k *KernelStore) PinSessionTools(ctx context.Context, expected contract.SessionBinding, profile string) error {
-	if profile != "kernel_v1" && profile != "product_v1" && profile != "product_v2" && profile != "product_v3" && profile != "product_v4" {
+	if profile != "kernel_v1" && profile != "product_v1" && profile != "product_v2" && profile != "product_v3" && profile != "product_v4" && profile != "product_v5" {
 		return errors.New("known session tool profile required")
 	}
 	tx, err := k.kernelTx(ctx)

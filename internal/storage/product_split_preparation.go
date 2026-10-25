@@ -111,14 +111,52 @@ func (k *KernelStore) prepareProductSplitExecutionTx(ctx context.Context, tx *sq
 	if err != nil {
 		return empty, err
 	}
-	request := ProductSplitChildPlanRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID, ProposalID: proposal.ID, ProposalDigest: proposal.Digest}
-	plan, err := k.prepareProductSplitChildPlanTx(ctx, tx, request)
-	if err != nil {
-		return empty, err
+	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, proposal, prior, exists)
+}
+
+func (k *KernelStore) prepareProductNestedSplitExecutionTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest, parent ProductSplitParentScopeReference) (ProductSplitPreparation, error) {
+	prior, err := loadProductSplitPreparationTx(ctx, tx, splitProposalHead(r))
+	exists := err == nil
+	if err != nil && err != sql.ErrNoRows {
+		return ProductSplitPreparation{}, err
 	}
-	allocation, err := k.reserveProductSplitChildrenTx(ctx, tx, request)
+	var nested ProductNestedSplitProposal
+	if exists {
+		nested, err = loadNestedSplitProposal(ctx, tx, r)
+		if err == nil && (!reflect.DeepEqual(nested.Value.Proposal.Value.Request, r) || nested.Value.ParentProof != parent) {
+			err = ErrProductSplitHeld
+		}
+	} else {
+		nested, err = k.prepareProductNestedSplitProposalTx(ctx, tx, r, parent)
+	}
 	if err != nil {
-		return empty, err
+		return ProductSplitPreparation{}, splitEvidenceErr(err)
+	}
+	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, nested.Value.Proposal, prior, exists)
+}
+
+func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest, proposal ProductSplitProposal, prior ProductSplitPreparation, exists bool) (ProductSplitPreparation, error) {
+	var empty ProductSplitPreparation
+	head := splitProposalHead(r)
+	request := ProductSplitChildPlanRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID, ProposalID: proposal.ID, ProposalDigest: proposal.Digest}
+	var plan ProductSplitChildPlan
+	var allocation ProductSplitAllocation
+	var err error
+	if exists {
+		plan, err = loadProductSplitChildPlan(ctx, tx, request)
+	} else {
+		plan, err = k.prepareProductSplitChildPlanTx(ctx, tx, request)
+	}
+	if err != nil {
+		return empty, splitEvidenceErr(err)
+	}
+	if exists {
+		allocation, err = loadProductSplitAllocation(ctx, tx, request)
+	} else {
+		allocation, err = k.reserveProductSplitChildrenTx(ctx, tx, request)
+	}
+	if err != nil {
+		return empty, splitEvidenceErr(err)
 	}
 	requestDigest, err := contentDigest(r)
 	if err != nil {

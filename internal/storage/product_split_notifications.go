@@ -30,10 +30,19 @@ type ProductSplitCompletionSummary struct {
 }
 type productSplitCompletionValue struct {
 	ProductSplitChildScopesValue
-	Source         kernelToolOperation           `json:"source"`
-	SubscriptionID string                        `json:"subscription_id"`
-	Summary        ProductSplitCompletionSummary `json:"summary"`
+	AncestorSet    *ProductSplitAncestorWitnesses `json:"ancestor_set,omitempty"`
+	Source         kernelToolOperation            `json:"source"`
+	SubscriptionID string                         `json:"subscription_id"`
+	Summary        ProductSplitCompletionSummary  `json:"summary"`
 }
+
+func productSplitCompletionAncestors(registered ProductSplitRegistrations) *ProductSplitAncestorWitnesses {
+	if len(registered.Value.Registrations) == 0 || registered.Value.Registrations[0].Value.SplitScope == nil {
+		return nil
+	}
+	return registered.Value.Registrations[0].Value.SplitScope.AncestorSet
+}
+
 type productSplitCompletion struct {
 	Value  productSplitCompletionValue `json:"value"`
 	Digest string                      `json:"digest"`
@@ -81,7 +90,7 @@ func (k *KernelStore) queueProductSplitCompletionTx(ctx context.Context, tx *sql
 	if known {
 		return ErrProductSplitHeld
 	}
-	value := productSplitCompletionValue{ProductSplitChildScopesValue: registered.Value.ProductSplitChildScopesValue, Source: op, SubscriptionID: subID, Summary: productSplitCompletionSummary(registered)}
+	value := productSplitCompletionValue{ProductSplitChildScopesValue: registered.Value.ProductSplitChildScopesValue, AncestorSet: productSplitCompletionAncestors(registered), Source: op, SubscriptionID: subID, Summary: productSplitCompletionSummary(registered)}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -119,7 +128,7 @@ func loadProductSplitCompletionTx(ctx context.Context, tx *sql.Tx, id string) (p
 	if err != nil {
 		return saved, err
 	}
-	if !model || adoption.Source != saved.Value.Source || !reflect.DeepEqual(productSplitCompletionSummary(registered), saved.Value.Summary) || !reflect.DeepEqual(registered.Value.ProductSplitChildScopesValue, saved.Value.ProductSplitChildScopesValue) {
+	if !model || adoption.Source != saved.Value.Source || !reflect.DeepEqual(productSplitCompletionAncestors(registered), saved.Value.AncestorSet) || !reflect.DeepEqual(productSplitCompletionSummary(registered), saved.Value.Summary) || !reflect.DeepEqual(registered.Value.ProductSplitChildScopesValue, saved.Value.ProductSplitChildScopesValue) {
 		return saved, ErrProductSplitHeld
 	}
 	if adoption.SubscriptionID != "" && adoption.SubscriptionID != saved.Value.SubscriptionID {

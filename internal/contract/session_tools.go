@@ -498,6 +498,8 @@ func toolArgument(name string) any {
 	switch name {
 	case "product_split_parent_scope":
 		return &SplitProductParentScopeRequest{}
+	case "product_split_nested":
+		return &NestedSplitProductRequest{}
 	case "product_split":
 		return &SplitProductRequest{}
 	case "pr_publish":
@@ -526,7 +528,7 @@ func toolArgument(name string) any {
 	return nil
 }
 func parentOnly(name string) bool {
-	return name == "wave_create" || name == "wave_plan" || name == "product_split" || name == "product_split_parent_scope"
+	return name == "wave_create" || name == "wave_plan" || name == "product_split" || name == "product_split_parent_scope" || name == "product_split_nested"
 }
 func KernelTools(kind string) []ToolDefinition {
 	if kind != "orchestrator" && kind != "task" {
@@ -649,6 +651,11 @@ func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolRep
 		target = a.Target
 		if a.SchemaVersion != 1 || !inline(a.ParentWorkItemID) || len(a.ParentWorkItemID) > 128 {
 			return reject("invalid product split parent reference")
+		}
+	case *NestedSplitProductRequest:
+		target = a.Target
+		if a.SchemaVersion != 1 || !inline(a.ProposalArtifactID) || len(a.ProposalArtifactID) > 128 || !inline(a.ParentScopeID) || len(a.ParentScopeID) > 128 || len(a.ParentScopeDigest) != 64 || strings.Trim(a.ParentScopeDigest, "0123456789abcdef") != "" {
+			return reject("invalid nested product split reference")
 		}
 	case *SplitProductRequest:
 		target = a.Target

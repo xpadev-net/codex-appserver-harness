@@ -36,6 +36,8 @@ func kernelToolTarget(command any) (string, contract.Target) {
 	switch a := command.(type) {
 	case *contract.SplitProductParentScopeRequest:
 		return "product_split_parent_scope", a.Target
+	case *contract.NestedSplitProductRequest:
+		return "product_split_nested", a.Target
 	case *contract.SplitProductRequest:
 		return "product_split", a.Target
 	case *contract.PublishPRRequest:
@@ -221,6 +223,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 			return reply, err
 		}
 	}
+	if request, ok := command.(*contract.NestedSplitProductRequest); ok {
+		if err := requireProductNestedSplitSessionTx(ctx, tx, b, *request); err != nil {
+			return reply, err
+		}
+	}
 	productOperation := call.Name == "pr_publish" || call.Name == "pr_review_request"
 	var oldRaw, oldReply []byte
 	var oldName, oldDigest, oldThread, state string
@@ -246,6 +253,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 				return contract.ToolReply{}, err
 			}
 		}
+		if request, ok := command.(*contract.NestedSplitProductRequest); ok {
+			if err := verifyProductNestedSplitReplayTx(ctx, tx, prior, *request, reply); err != nil {
+				return contract.ToolReply{}, err
+			}
+		}
 		if productOperation && state == "unknown" {
 			reply.State = "unknown"
 		}
@@ -257,6 +269,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	op := kernelToolOperation{ID: structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID), SessionID: b.ID, RunID: call.RunID, ThreadID: b.ThreadID, TurnID: call.TurnID, CallID: call.CallID, Name: call.Name, ArgumentDigest: digest, Target: target, SnapshotID: snapshotID, CreatedAt: k.clock()}
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
+	case *contract.NestedSplitProductRequest:
+		reply, err = k.acceptProductNestedSplitTx(ctx, tx, op, b, *r)
+		if err != nil {
+			return contract.ToolReply{}, err
+		}
 	case *contract.SplitProductParentScopeRequest:
 		reply, err = k.acceptProductSplitParentScopeTx(ctx, tx, op, *r)
 		if err != nil {

@@ -42,7 +42,7 @@ type SessionDriver struct {
 	RPC                RPC
 	Store              SessionPersistence
 	ProductTools       bool   // explicit trusted host opt-in, never model input
-	ProductToolProfile string // empty preserves product_v1; product_v2 adds external context, product_v3 adds parent split adoption, product_v4 adds nested parent scope preparation
+	ProductToolProfile string // empty preserves product_v1; product_v2 adds external context, product_v3 adds parent split adoption, product_v4 adds nested parent scope preparation, product_v5 adds nested split adoption
 }
 
 type sessionToolProfiles interface {
@@ -93,7 +93,7 @@ func (d SessionDriver) Prepare(ctx context.Context, id string) (PreparedSession,
 		if d.ProductToolProfile != "" {
 			profile = d.ProductToolProfile
 		}
-		if profile != "product_v1" && profile != "product_v2" && profile != "product_v3" && profile != "product_v4" {
+		if profile != "product_v1" && profile != "product_v2" && profile != "product_v3" && profile != "product_v4" && profile != "product_v5" {
 			return PreparedSession{}, errors.New("known product tool profile required")
 		}
 	}

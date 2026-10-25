@@ -118,7 +118,14 @@ common runtime の private 設定を `product_tools: true` / `product_tool_profi
 
 `product_v4` は v3 の tool/schema をそのまま継承し、Main 専用の `product_split_parent_scope` を追加する。入力は `schema_version: 1`、現在の `target`、登録済みの分割子を示す `parent_work_item_id`。controller は実 run の Wave 権限と v4 profile を認証し、親 scope の head/history/admission と呼出元 receipt、tool operation を同じ transaction で保存する。応答は `parent_scope_id` / `parent_scope_digest` と、その子自身の公開 `scope`（local criteria、coverage、dependencies、binding 参照）のみとし、兄弟の Issue 本文や作成・枠・祖先の内部証跡は返さない。応答が inline 上限を超える場合も全体を rollback する。
 
-これは再分割のための参照準備であり、proposal の採用・子の作成・実行許可・source の更新・品質合格ではない。元の v3 thread はそのまま再開し、新 tool へ移行する場合は明示 rotation が必要。Task の v4 tool set は v3 と同じで、構造変更は Main へメッセージで依頼する。exact call replay は保存済みの参照と応答全体を再認証し、欠けた証跡や改変された cached reply を補修しない。内部の tool receipt にも元の完全な親 scope を保持し、head/history/admission の全喪失後でも、その子の新しい参照や上流の子集合・消費済み creation/枠を再作成しない。receipt のコピーは兄弟を含む禁止証跡として参照し、失われた原本を復元する権限には用いない。v4 からの nested proposal 採用とその完了通知の接続は別段階で実装・検証する。
+これは再分割のための参照準備であり、proposal の採用・子の作成・実行許可・source の更新・品質合格ではない。元の v3 thread はそのまま再開し、新 tool へ移行する場合は明示 rotation が必要。Task の v4 tool set は v3 と同じで、構造変更は Main へメッセージで依頼する。exact call replay は保存済みの参照と応答全体を再認証し、欠けた証跡や改変された cached reply を補修しない。内部の tool receipt にも元の完全な親 scope を保持し、head/history/admission の全喪失後でも、その子の新しい参照や上流の子集合・消費済み creation/枠を再作成しない。receipt のコピーは兄弟を含む禁止証跡として参照し、失われた原本を復元する権限には用いない。nested proposal の明示採用は次の v5 tool で扱う。
+
+
+`product_v5` は v4 の tool/schema を継承し、Main 専用 `product_split_nested` を追加する。入力は `schema_version: 1`、現在の `target`、読取可能な `proposal_artifact_id` と、先に取得した `parent_scope_id` / `parent_scope_digest`。Artifact が指す登録済み分割子と親 scope の一致を認証し、nested proposal・全子 plan・Wave lifetime 枠・各子の初回 creation journal・集合 receipt・親 scope の独立禁止証跡・実 call の採用記録・operation subscription を一つの transaction で確定する。元の `product_split` は Root 専用のままとし、参照なしの暗黙の nested 採用を拒否する。
+
+再実行は保存済み集合、元の nested proposal / 親参照、Artifact、実 session/run/call、購読、cached reply 全体を照合する。欠けた原本から plan・枠・journal を再生成せず、source の観測時刻も更新しない。別 call で採用済み集合を置き換えない。応答は v3 と同じ `stage: prepared` と集合参照・子数、登録待ち subscription のみであり、内部の祖先・兄弟・作成証跡は含めない。
+
+nested 子全体の登録 transaction は、その実採用と同じ subscription に `registered` 完了通知を保存する。通知には今回登録した local child の WorkItem/binding/scope 参照と実 depth を含める。内部の completion receipt には完全な canonical ancestor set も保持し、通知だけが残っても全祖先・兄弟の Issue/creation/枠を再利用しない。公開通知には内部の set を含めない。Root と nested の要求 digest を各版の実引数から再構成し、通知を host-only 採用へ付け替えない。登録 receipt・通知の保存が失敗した場合は登録全体を rollback し、exact replay は二重通知を発生させない。この接続も実 model の child execution・正式 Cloud 承認・親の最終受入を証明するものではない。
 
 Task は split_proposal 種別の JSON Artifact と親へのメッセージで分割判断を依頼できる。メッセージ本文だけでは採用しない。main は product_split に schema_version=1、現在の target、proposal_artifact_id を渡して明示採用する。controller は同じ Wave/scope/policy の読取可能な committed Artifact（application/json、最大1MiB）を private object の byte 数・digest と照合し、型付き proposal の全 criterion/part 対応を検証する。repository、現在 registration digest、owner、全送信 journal は host が決める。
 
