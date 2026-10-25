@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-func deeperSplitProposalFixture(t *testing.T, depth int) (*KernelStore, ProductSplitProposalRequest, ProductSplitParentScope, ProductNestedSplitChildScopes) {
+func deeperSplitProposalFixture(t *testing.T, depth int, ownPolicy ...string) (*KernelStore, ProductSplitProposalRequest, ProductSplitParentScope, ProductNestedSplitChildScopes) {
 	t.Helper()
 	ctx := context.Background()
 	k, r, previous := nestedRegistrationScopeFixture(t, depth)
@@ -21,7 +22,11 @@ func deeperSplitProposalFixture(t *testing.T, depth int) (*KernelStore, ProductS
 	}
 	binding := previous.Value.Scopes.Value.Children[0]
 	registration := registered.Value.Registrations[0]
-	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, registration.Value.Definition.ID, "", splitSourceFacts(binding)); err != nil {
+	facts := splitSourceFacts(binding)
+	if len(ownPolicy) > 0 {
+		facts.PolicyDigest = ownPolicy[0]
+	}
+	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, registration.Value.Definition.ID, "", facts); err != nil {
 		t.Fatal(err)
 	}
 	proof, err := k.PrepareProductSplitParentScope(ctx, r.Target, registration.Value.Definition.ID)
@@ -224,5 +229,21 @@ func TestProductDeeperSplitProposalHonorsDefaultDepthTwo(t *testing.T) {
 	ref := ProductSplitParentScopeReference{ID: parent.ID, Digest: parent.Digest}
 	if _, err := k.PrepareProductNestedSplitProposal(context.Background(), r, ref); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("default depth admitted great-grandchildren", err)
+	}
+}
+
+func TestProductDeeperSplitProposalRejectsDifferentAncestorPolicy(t *testing.T) {
+	ctx := context.Background()
+	k, request, parent, previous := deeperSplitProposalFixture(t, 3, strings.Repeat("b", 64))
+	own, err := k.ReadProductSplitChildSource(ctx, request.Target, request.ParentWorkItemID)
+	if err != nil || own.Value.Status != "ready" || own.Value.Facts.PolicyDigest != parent.Value.SourcePolicyDigest {
+		t.Fatal("own policy fixture invalid", err)
+	}
+	ancestor, err := k.ReadProductSplitChildSource(ctx, request.Target, previous.Value.Scopes.Value.Request.ParentWorkItemID)
+	if err != nil || ancestor.Value.Status != "ready" || ancestor.Value.Facts.PolicyDigest == own.Value.Facts.PolicyDigest {
+		t.Fatal("ancestor policy fixture invalid", err)
+	}
+	if _, err := k.PrepareProductNestedSplitProposal(ctx, request, ProductSplitParentScopeReference{ID: parent.ID, Digest: parent.Digest}); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("different pinned ancestor policy admitted", err)
 	}
 }

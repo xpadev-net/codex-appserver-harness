@@ -76,7 +76,7 @@ func splitSourceLineageTx(ctx context.Context, tx *sql.Tx, binding ProductSplitC
 	})
 }
 
-func (k *KernelStore) splitSourceLineageReadyTx(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding, maxAge time.Duration) ([]ProductSplitChildSource, error) {
+func (k *KernelStore) splitSourceLineageReadyTx(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding, policyDigest string, maxAge time.Duration) ([]ProductSplitChildSource, error) {
 	lineage, err := splitSourceLineageTx(ctx, tx, binding)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (k *KernelStore) splitSourceLineageReadyTx(ctx context.Context, tx *sql.Tx,
 		if err != nil {
 			return nil, splitEvidenceErr(err)
 		}
-		if source.Value.Status != "ready" {
+		if source.Value.Status != "ready" || source.Value.Facts.PolicyDigest != policyDigest {
 			return nil, ErrProductSplitHeld
 		}
 		sources = append(sources, source)

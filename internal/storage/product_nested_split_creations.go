@@ -99,7 +99,7 @@ func (k *KernelStore) nestedSplitCreationSourceTx(ctx context.Context, tx *sql.T
 	if err != nil {
 		return empty, nil, err
 	}
-	sources, err := k.splitSourceLineageReadyTx(ctx, tx, binding, 5*time.Second)
+	sources, err := k.splitSourceLineageReadyTx(ctx, tx, binding, job.Value.Ancestry.Value.SourcePolicyDigest, 5*time.Second)
 	if err != nil {
 		return empty, nil, err
 	}
@@ -142,7 +142,7 @@ func validateNestedSplitCreationGateSource(ctx context.Context, tx *sql.Tx, job 
 				}
 				id, digest = ref.SourceID, ref.SourceDigest
 			}
-			if err := validateSplitCreationHistoricalSource(ctx, tx, ancestor, id, digest, gate.ObservedAt); err != nil {
+			if err := validateSplitCreationHistoricalSource(ctx, tx, ancestor, id, digest, job.Value.Ancestry.Value.SourcePolicyDigest, gate.ObservedAt); err != nil {
 				return err
 			}
 		}
@@ -151,7 +151,7 @@ func validateNestedSplitCreationGateSource(ctx context.Context, tx *sql.Tx, job 
 	return ErrProductSplitHeld
 }
 
-func validateSplitCreationHistoricalSource(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding, id, expectedDigest string, observedAt time.Time) error {
+func validateSplitCreationHistoricalSource(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding, id, expectedDigest, expectedPolicy string, observedAt time.Time) error {
 	var source ProductSplitChildSource
 	if err := taskEvidenceRecord(ctx, tx, "product_split_child_source_history", id, &source); err != nil {
 		return splitEvidenceErr(err)
@@ -167,7 +167,7 @@ func validateSplitCreationHistoricalSource(ctx context.Context, tx *sql.Tx, bind
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(source.Value.splitChildSourceReference, policy.Value.splitChildSourceReference) || source.Value.Facts.validate() != nil || source.Value.Status != "ready" || splitChildSourceStatus(binding, source.Value.Facts, policy.Value.PolicyDigest) != "ready" {
+	if policy.Value.PolicyDigest != expectedPolicy || !reflect.DeepEqual(source.Value.splitChildSourceReference, policy.Value.splitChildSourceReference) || source.Value.Facts.validate() != nil || source.Value.Status != "ready" || splitChildSourceStatus(binding, source.Value.Facts, policy.Value.PolicyDigest) != "ready" {
 		return ErrProductSplitHeld
 	}
 	return nil
