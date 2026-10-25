@@ -104,6 +104,13 @@ func (k *KernelStore) productBaseInputTx(ctx context.Context, tx *sql.Tx, taskID
 			}
 		}
 	}
+	splitDependencies, err := productSplitDependencyIDsTx(ctx, tx, w, prep.Task.Spec.WorkItemIDs)
+	if err != nil {
+		return out, err
+	}
+	for _, id := range splitDependencies {
+		required[id] = true
+	}
 	if len(required) > 0 {
 		coverage, err := k.productCoverageTx(ctx, tx, w)
 		if err != nil {
@@ -126,7 +133,11 @@ func (k *KernelStore) productBaseInputTx(ctx context.Context, tx *sql.Tx, taskID
 			}
 			p := receipt.Value.Product.Value
 			out.Value.Dependencies = append(out.Value.Dependencies, ProductBaseDependency{Fact: fact, RepositoryID: p.WorkItem.RepositoryID, Repository: p.Repository, BaseBranch: p.BaseBranch})
+			delete(required, fact.WorkItemID)
 		}
+	}
+	if len(required) != 0 {
+		return out, ErrProductMergeDependencyHeld
 	}
 	sort.Slice(out.Value.Dependencies, func(i, j int) bool {
 		return out.Value.Dependencies[i].Fact.MergeID < out.Value.Dependencies[j].Fact.MergeID
