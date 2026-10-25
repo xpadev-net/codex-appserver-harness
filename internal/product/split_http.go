@@ -32,14 +32,16 @@ type SplitHTTPResult struct {
 	Response       *SplitHTTPResponse `json:"response,omitempty"`
 	Error          string             `json:"error,omitempty"`
 }
-type splitHTTPOutput struct{ bytes.Buffer }
+type splitHTTPOutput struct{ buffer bytes.Buffer }
 
 func (b *splitHTTPOutput) Write(p []byte) (int, error) {
-	if len(p) > mergeHTTPBytes-b.Len() {
+	if len(p) > mergeHTTPBytes-b.buffer.Len() {
 		return 0, errors.New("native split output exceeds limit")
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
+
+func (b *splitHTTPOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job storage.ProductSplitCreate, policy *IssueSourcePolicy, api ResourceAPI) (string, string, error) {
 	if err := validateSplitHTTPPolicy(ctx, k, job, policy); err != nil {

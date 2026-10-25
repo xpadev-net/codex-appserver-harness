@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +103,7 @@ case "$*" in
  "api --method POST repos/owner/repo/issues --input -")
   printf 'POST\n' >> "$HARNESS_SPLIT_HTTP_FIXTURE/calls"
   /bin/cat > "$HARNESS_SPLIT_HTTP_FIXTURE/request.json"
+  if [ "$HARNESS_SPLIT_HTTP_MODE" = "oversize" ];then /bin/head -c 2097152 /dev/zero;exit 0;fi
   if [ "$HARNESS_SPLIT_HTTP_MODE" = "unknown" ]; then printf '{';exit 17;fi
   if [ "$HARNESS_SPLIT_HTTP_MODE" = "hang" ]; then
    trap '' TERM
@@ -486,5 +488,31 @@ func TestSplitHTTPDelayedUnactivatedWrapperCannotPOSTAfterSeal(t *testing.T) {
 	}
 	if splitHTTPCalls(t, bin) != "" {
 		t.Fatal("sealed wrapper reached native request")
+	}
+}
+
+func TestSplitHTTPOutputCannotBypassLimitThroughIOCopy(t *testing.T) {
+	var output splitHTTPOutput
+	// LimitedReader has no WriterTo; io.Copy may choose destination ReadFrom.
+	// Embedding bytes.Buffer would expose ReadFrom and bypass Write's limit.
+	_, err := io.Copy(&output, io.LimitReader(strings.NewReader(strings.Repeat("x", mergeHTTPBytes+1)), mergeHTTPBytes+1))
+	if err == nil || len(output.Bytes()) > mergeHTTPBytes {
+		t.Fatal("native output exceeded bound", len(output.Bytes()), err)
+	}
+}
+func TestSplitHTTPOversizedNativeResponseStaysUnknownWithoutRetry(t *testing.T) {
+	ctx := context.Background()
+	k, job, policy, bin := splitHTTPFixture(t, "direct")
+	t.Setenv("HARNESS_SPLIT_HTTP_MODE", "oversize")
+	stopped, err := splitTestTransport(t, k, policy).Start(ctx, job.ID)
+	if err != nil || stopped.State != "stopped" {
+		t.Fatal(stopped, err)
+	}
+	result, err := ReadSplitHTTPResult(ctx, k, job.ID)
+	if err != nil || result.Disposition != "outcome_unknown" || result.Response != nil {
+		t.Fatal(result, err)
+	}
+	if strings.Count(splitHTTPCalls(t, bin), "POST\n") != 1 {
+		t.Fatal("oversize response repeated native POST")
 	}
 }
