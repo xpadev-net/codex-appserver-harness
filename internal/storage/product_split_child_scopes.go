@@ -85,6 +85,11 @@ func deriveProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSpl
 	if err != nil {
 		return out, splitEvidenceErr(err)
 	}
+	// A nested binding must itself preserve the full ancestor group. Until
+	// that representation is connected, never save a naked legacy scope set.
+	if proposal.Value.ParentSplitScope != nil {
+		return out, ErrProductSplitHeld
+	}
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest || len(plan.Children) < 2 {
 		return out, ErrProductSplitHeld
 	}

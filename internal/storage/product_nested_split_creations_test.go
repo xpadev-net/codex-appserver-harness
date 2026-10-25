@@ -114,8 +114,31 @@ func TestProductNestedSplitCreationPinsWholeAncestryAndPhysicalOwnerBeforeGETBin
 	if err != nil || replay.State != "observed" || !reflect.DeepEqual(replay.Value.Ancestry, job.Value.Ancestry) {
 		t.Fatal("replay changed creation", err)
 	}
+	second := job.Value.Ancestry.Value.Plan.Children[1]
+	secondJob, err := k.PrepareProductSplitCreate(ctx, r, second.ID, "second-nested-controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil {
+		t.Fatal(err)
+	}
+	secondOwner := startSplitCreationOwner(t, k, secondJob)
+	secondStop, secondCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer secondCancel()
+	if err := process.StopGroup(secondStop, secondOwner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.FinishProductSplitCreateHTTP(ctx, secondJob.ID, secondJob.Value.OwnerID, secondJob.Digest, strings.Repeat("a", 64), "second-nested-stop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.RecordProductSplitCreatedIssue(ctx, secondJob.ID, ProductSplitCreatedIssue{RepositoryID: 17, ID: 502, Number: 52, Title: second.Value.Child.Title, Body: second.Value.Body, State: "open", ObservedAt: k.clock()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.BindProductSplitChildScopes(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("nested scopes lost ancestor in legacy format", err)
+	}
 	if _, err := k.RegisterProductSplitChildren(ctx, r); !readinessHoldError(err) {
-		t.Fatal("partial nested group registered", err)
+		t.Fatal("nested registration enabled before recursive binding", err)
 	}
 }
 
