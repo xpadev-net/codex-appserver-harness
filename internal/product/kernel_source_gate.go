@@ -11,7 +11,8 @@ import (
 
 // KernelSourceGate refreshes an admitted Issue immediately before publication
 // quality is evaluated. Periodic source polling alone is not a send-time proof.
-// Direct requests use their saved version; other source kinds stay held.
+// Direct roots use their saved version; their split children still require a
+// fresh read of the child's own Issue. Other source kinds stay held.
 type KernelSourceGate struct {
 	Store    *storage.KernelStore
 	Policies map[int64]IssueSourcePolicy
@@ -29,6 +30,31 @@ func (g KernelSourceGate) Check(ctx context.Context, saved storage.ProductTarget
 	}
 	if w.Target() != p.Target {
 		return storage.ErrProductQualityHeld
+	}
+	child, err := g.Store.IsKnownProductSplitChildWorkItem(ctx, p.WorkItem.ID)
+	if err != nil {
+		return err
+	}
+	if child {
+		policy, ok := g.Policies[p.WorkItem.RepositoryID]
+		if !ok || policy.RepositoryID != p.WorkItem.RepositoryID || policy.Repository != p.Repository || g.API == nil {
+			return storage.ErrProductQualityHeld
+		}
+		api := g.API(p)
+		if api == nil {
+			return storage.ErrProductQualityHeld
+		}
+		o := SplitChildSourceObserver{Store: g.Store, API: api, Policy: policy, Attempts: 1}
+		update, acknowledged, err := o.Observe(ctx, p.Target, p.WorkItem.ID)
+		if err != nil {
+			return err
+		}
+		if !acknowledged || update.Snapshot.Value.Status != "ready" {
+			return storage.ErrProductQualityHeld
+		}
+		if _, err := g.Store.RequireProductSplitChildSource(ctx, p.Target, p.WorkItem.ID, policy.Digest(), time.Minute); err != nil {
+			return err
+		}
 	}
 	if w.Source == "direct" {
 		return nil
