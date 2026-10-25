@@ -208,6 +208,6 @@ KernelSourceGate は親 Wave が direct でも子 issue 自身を公開直前に
 
 ProductCoverage は current scope/policy/source の全子登録、scope/history/admission、creation/配賦の証拠と親 registration を照合し、全件が揃った分割だけを splits に示す。親は split ID/digest と全子 WorkItem ID を付けて retired に移し、子が未 merge の間は元条件を residual として維持する。親の registration・projection・要求・Wave 予算は書き換えない。登録証拠の欠落時は退役を成立させず、exact 復旧を必要とする。
 
-各子の descriptor は local criterion と親条件の whole/part、part ID/count/basis、local scope/binding digest を保持する。子の merge fact では親条件の Criteria を空にし、独立して seal された verifier plan がその子の local scope 全体と一致することを監査した LocalCriteria / SplitScopeDigest を記録する。同じ親条件に対応する全 part の current merge fact が揃って初めて親条件の merge coverage を満たす。一つの part、親条件 ID だけの claim、別 scope/registration の fact、過去 epoch の分割を充足に転用しない。
+各子の descriptor は local criterion と親条件の whole/part、part ID/count/basis、local scope/binding digest を保持する。子の merge fact では親条件の Criteria を空にし、独立して seal された verifier plan がその子の local scope 全体と一致することを監査し、停止済み runner の保存証拠から検証結果を再計算して quality の verifier digest・対象候補・合格状態との一致を確認した LocalCriteria / SplitScopeDigest を記録する。現行の実行 gate は従来どおり preflight を行い、履歴監査を新規実行の許可に使わない。同じ親条件に対応する各 part ID の集合・宣言個数と全 part の current merge fact が揃って初めて親条件の merge coverage を満たす。一つの part、親条件 ID だけの claim、別 scope/registration の fact、過去 epoch の分割を充足に転用しない。
 
 これは merge coverage と受入候補の管理であり、親の最終検証・正式承認・外部 Issue 完了を代用しない。子の実行保留は維持しており、実 model/GitHub を通す分割 E2E は依存・多段 depth 等の接続後に確認する。

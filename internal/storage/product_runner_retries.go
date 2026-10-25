@@ -110,7 +110,7 @@ func (k *KernelStore) ReserveProductRunnerRetry(ctx context.Context, previousID 
 	return job, tx.Commit()
 }
 
-func productRunnerJobAdmittedTx(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
+func productRunnerJobAdmittedTx(ctx context.Context, tx queryer, id string) (bool, error) {
 	var admitted bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_runner_job_history','product_runner_job_terminal')) OR EXISTS(SELECT 1 FROM kernel_dispatch_intents WHERE run_id=?)`, id, id).Scan(&admitted)
 	return admitted, err
@@ -118,7 +118,7 @@ func productRunnerJobAdmittedTx(ctx context.Context, tx *sql.Tx, id string) (boo
 
 // Follow only authenticated successors. Lost admitted evidence must never fall
 // back to an older result, and an outstanding retry makes the profile pending.
-func latestProductRunnerJobTx(ctx context.Context, tx *sql.Tx, planID, profileID string) (ProductRunnerJob, error) {
+func latestProductRunnerJobTx(ctx context.Context, tx queryer, planID, profileID string) (ProductRunnerJob, error) {
 	job, err := loadProductRunnerJob(ctx, tx, productRunnerJobID(planID, profileID))
 	if err != nil {
 		return job, err

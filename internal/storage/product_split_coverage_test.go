@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -203,16 +205,29 @@ func TestProductSplitCoverageOldEpochDoesNotRetireNewRequirements(t *testing.T) 
 // Audit boundary only: reuse an actual sealed verifier and runner fixture, and
 // inject the binding/readiness inputs. This does not enable child execution or
 // represent a completed split pipeline.
-func TestProductSplitCoverageLocalAuditChecksSealedVerifierScope(t *testing.T) {
+func splitLocalCoverageAuditFixture(t *testing.T, status string) (*KernelStore, domain.Wave, ProductVerificationPlanSnapshot, ProductWorkItemRegistrationSnapshot, ProductSplitChildScopeBinding, ProductPublicationReadiness, ProductMerge) {
+	t.Helper()
 	ctx := context.Background()
 	k, w, plan, runtime, review, run := productQualityFixture(t)
 	if _, err := k.ApplyTaskResult(ctx, review.SessionID, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	completeProductRunnerFixture(t, k, plan, runtime, "unit", "passed")
-	quality, err := k.CheckProductQuality(ctx, w.Target(), "work")
-	if err != nil {
-		t.Fatal(err)
+	completeProductRunnerFixture(t, k, plan, runtime, "unit", status)
+	var quality ProductQualityProof
+	var err error
+	if status == "passed" {
+		quality, err = k.CheckProductQuality(ctx, w.Target(), "work")
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		// An adversarial saved quality can name the exact digest of a failed
+		// verifier. Digest equality alone must still never grant coverage.
+		machine, e := k.ReadProductVerificationEvidence(ctx, plan.ID)
+		if e != nil || !machine.Value.Complete || machine.Value.Passed {
+			t.Fatal(machine, e)
+		}
+		quality.Value = ProductQualityValue{Target: w.Target(), WorkItemID: "work", Candidate: plan.Value.Candidate, Verifications: map[string]string{plan.ID: machine.Digest}}
 	}
 	registration, err := k.ReadProductWorkItemRegistration(ctx, "work")
 	if err != nil {
@@ -251,11 +266,26 @@ func TestProductSplitCoverageLocalAuditChecksSealedVerifierScope(t *testing.T) {
 	}
 	job := ProductMerge{}
 	job.Value.ReadinessID = "split-local-audit"
+	return k, w, plan, registration, binding, ready, job
+}
+
+func TestProductSplitCoverageLocalAuditRejectsFailedVerifierEvenWithMatchingDigest(t *testing.T) {
+	k, _, _, registration, _, _, job := splitLocalCoverageAuditFixture(t, "failed")
+	if _, _, err := splitMergedLocalScope(context.Background(), k.DB, registration, job); !errors.Is(err, ErrTaskEvidence) {
+		t.Fatal("failed verifier counted as local coverage", err)
+	}
+}
+
+func TestProductSplitCoverageLocalAuditChecksSealedVerifierScope(t *testing.T) {
+	ctx := context.Background()
+	k, w, plan, registration, binding, ready, job := splitLocalCoverageAuditFixture(t, "passed")
+	scope := binding.Value.Scope
+
 	got, criteria, err := splitMergedLocalScope(ctx, k.DB, registration, job)
 	if err != nil || got != binding.Value.ScopeDigest || !reflect.DeepEqual(criteria, scope.Included) {
 		t.Fatal("exact sealed local plan rejected", got, criteria, err)
 	}
-	for _, mode := range []string{"wrong_scope", "missing_plan_history", "no_verifier", "wrong_candidate"} {
+	for _, mode := range []string{"wrong_scope", "missing_plan_history", "missing_runner_terminal", "no_verifier", "wrong_candidate", "wrong_verifier_digest"} {
 		t.Run(mode, func(t *testing.T) {
 			changed := ready
 			switch mode {
@@ -294,6 +324,26 @@ func TestProductSplitCoverageLocalAuditChecksSealedVerifierScope(t *testing.T) {
 					t.Fatal(err)
 				}
 				return
+
+			case "missing_runner_terminal":
+				id := productRunnerJobID(plan.ID, "unit")
+				var owner string
+				var raw []byte
+				if err := k.DB.QueryRow("SELECT work_item_id,payload FROM records WHERE kind='product_runner_job_terminal' AND id=?", id).Scan(&owner, &raw); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_runner_job_terminal' AND id=?", id); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := splitMergedLocalScope(ctx, k.DB, registration, job); err == nil {
+					t.Fatal("missing terminal runner proof accepted")
+				}
+				if _, err := k.DB.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES('product_runner_job_terminal',?,?,?)", id, owner, raw); err != nil {
+					t.Fatal(err)
+				}
+				return
+			case "wrong_verifier_digest":
+				changed.Value.Quality.Value.Verifications = map[string]string{plan.ID: strings.Repeat("b", 64)}
 			case "no_verifier":
 				changed.Value.Quality.Value.Verifications = nil
 			case "wrong_candidate":

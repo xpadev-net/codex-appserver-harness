@@ -222,6 +222,13 @@ func splitMergedLocalScope(ctx context.Context, q queryer, registration ProductW
 		if input == nil || input.ScopeDigest != scopeDigest || input.Subject.Value.WorkItemID != registration.Value.Definition.ID || plan.Value.Target != quality.Value.Target || plan.Value.Candidate != quality.Value.Candidate || !plan.Value.Plan.Ready() || plan.Value.Plan.Validate(registration.Value.Definition.ID, plan.Value.Candidate, binding.Value.Scope, input.Policy.Value.Verification) != nil {
 			return "", nil, ErrTaskEvidence
 		}
+		machine, err := productVerificationEvidenceFromPlan(ctx, q, plan)
+		if err != nil {
+			return "", nil, err
+		}
+		if !machine.Value.Complete || !machine.Value.Passed || machine.Value.Candidate != quality.Value.Candidate || machine.Digest != quality.Value.Verifications[id] {
+			return "", nil, ErrTaskEvidence
+		}
 	}
 	return scopeDigest, slices.Clone(binding.Value.Scope.Included), nil
 }

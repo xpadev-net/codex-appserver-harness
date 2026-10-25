@@ -57,12 +57,20 @@ func (k *KernelStore) productVerificationEvidenceTx(ctx context.Context, tx *sql
 	if _, err := k.productRunnerPreflightTx(ctx, tx, plan, true); err != nil {
 		return saved, err
 	}
-	sealed, err := sealedProductEvidence(ctx, tx, plan.Value.TaskID, plan.Value.RunID)
+	return productVerificationEvidenceFromPlan(ctx, tx, plan)
+}
+
+// Static audit of the immutable plan, policy and stopped runner evidence. It
+// grants no new execution or publication. Current gates run preflight above;
+// merged coverage uses this audit after current execution is no longer allowed.
+func productVerificationEvidenceFromPlan(ctx context.Context, q queryer, plan ProductVerificationPlanSnapshot) (ProductVerificationEvidence, error) {
+	var saved ProductVerificationEvidence
+	sealed, err := sealedProductEvidence(ctx, q, plan.Value.TaskID, plan.Value.RunID)
 	if err != nil {
 		return saved, err
 	}
 	p := sealed.Value.Verification.Policy
-	current, err := loadProductVerificationPolicy(ctx, tx, p.Value.WaveID, p.Value.PolicyRevision, p.Value.RepositoryID)
+	current, err := loadProductVerificationPolicy(ctx, q, p.Value.WaveID, p.Value.PolicyRevision, p.Value.RepositoryID)
 	if err != nil {
 		return saved, err
 	}
@@ -78,10 +86,10 @@ func (k *KernelStore) productVerificationEvidenceTx(ctx context.Context, tx *sql
 	for _, profileID := range profiles {
 		id := productRunnerJobID(plan.ID, profileID)
 		observation := ProductRunnerObservation{ProfileID: profileID, JobID: id, State: "not_run"}
-		job, err := latestProductRunnerJobTx(ctx, tx, plan.ID, profileID)
+		job, err := latestProductRunnerJobTx(ctx, q, plan.ID, profileID)
 		if errors.Is(err, sql.ErrNoRows) {
 			// A missing head after admission is lost evidence, never a new job.
-			admitted, err := productRunnerJobAdmittedTx(ctx, tx, id)
+			admitted, err := productRunnerJobAdmittedTx(ctx, q, id)
 			if err != nil {
 				return saved, err
 			}
