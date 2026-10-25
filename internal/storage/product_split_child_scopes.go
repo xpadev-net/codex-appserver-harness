@@ -153,16 +153,23 @@ func splitChildScopeSourceValue(set ProductSplitChildScopes, binding ProductSpli
 }
 
 func loadProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildScopes, error) {
+	malformed, err := splitScopeUnreadableForWave(ctx, tx, r.Target.WaveID)
+	if err != nil {
+		return ProductSplitChildScopes{}, err
+	}
+	if malformed {
+		return ProductSplitChildScopes{}, ErrProductSplitHeld
+	}
 	var saved, history, admission ProductSplitChildScopes
-	err := taskEvidenceRecord(ctx, tx, "product_split_child_scopes", r.ProposalID, &saved)
+	err = taskEvidenceRecord(ctx, tx, "product_split_child_scopes", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scopes_admission' AND id=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scopes_history' AND work_item_id=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(payload,'$.value.request.proposal_id')=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scope_source' AND json_extract(payload,'$.request.proposal_id')=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(payload,'$.value.request.proposal_id')=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(payload,'$.value.split_scope.request.proposal_id'),json_extract(payload,'$.split_scope.request.proposal_id'))=?)`, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scope_source' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.request.proposal_id')=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id'))=?)`, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
