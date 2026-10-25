@@ -16,6 +16,10 @@ func productWorkItemExecutionHeld(ctx context.Context, q queryer, w domain.Wave,
 	if err != nil || held {
 		return held, err
 	}
+	held, err = productSplitChildExecutionHeld(ctx, q, workID)
+	if err != nil || held {
+		return held, err
+	}
 	return productSplitParentPreparationHeld(ctx, q, w, workID, "")
 }
 
