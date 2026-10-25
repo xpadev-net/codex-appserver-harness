@@ -90,6 +90,18 @@ func (s *KernelSource) bindingContract(ctx context.Context, b contract.SessionBi
 		if storage.UsesProductVerificationOutput(wave, task) {
 			return contract.StrictOutputSchema(contract.ProductVerificationTaskResultSchema()), worker.ValidateProductVerificationTaskOutput, nil
 		}
+		if storage.UsesProductReviewOutput(wave, task) {
+			registration, err := s.Store.ReadProductWorkItemRegistration(ctx, task.Spec.WorkItemIDs[0])
+			if err != nil {
+				return nil, nil, err
+			}
+			if registration.Value.SplitScope != nil {
+				if _, err := s.Store.ReadProductSplitChildScope(ctx, wave.Target(), task.Spec.WorkItemIDs[0]); err != nil {
+					return nil, nil, err
+				}
+				return contract.StrictOutputSchema(contract.ProductLocalReviewTaskResultSchema()), worker.ValidateProductLocalReviewTaskOutput, nil
+			}
+		}
 	}
 	return sourceContract(b.Kind)
 }

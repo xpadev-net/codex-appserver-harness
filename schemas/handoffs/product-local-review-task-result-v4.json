@@ -1,0 +1,302 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "maxLength": 16384,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "blockers": {
+      "items": {
+        "maxLength": 16384,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "criterion_results": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "criterion_id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "claimed",
+              "unverified"
+            ],
+            "maxLength": 16384,
+            "type": "string"
+          }
+        },
+        "required": [
+          "criterion_id",
+          "evidence_ids",
+          "status",
+          "basis"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "outcome": {
+      "enum": [
+        "result",
+        "waiting",
+        "blocked"
+      ],
+      "maxLength": 16384,
+      "type": "string"
+    },
+    "phase_id": {
+      "maxLength": 16384,
+      "type": "string"
+    },
+    "product_local_review": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "basis": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "criterion_id": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "items": {
+                      "maxLength": 16384,
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array"
+                  },
+                  "status": {
+                    "enum": [
+                      "claimed",
+                      "unverified"
+                    ],
+                    "maxLength": 16384,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "criterion_id",
+                  "evidence_ids",
+                  "status",
+                  "basis"
+                ],
+                "type": "object"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            },
+            "scope_digest": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope_digest",
+            "criteria"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "remaining": {
+      "items": {
+        "maxLength": 16384,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "review": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "findings": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "basis": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "classification": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "id": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  },
+                  "target_digest": {
+                    "maxLength": 16384,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "classification",
+                  "target_digest",
+                  "basis",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "target_digest": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "verdict": {
+              "enum": [
+                "clean",
+                "findings",
+                "inconclusive"
+              ],
+              "maxLength": 16384,
+              "type": "string"
+            }
+          },
+          "required": [
+            "target_digest",
+            "verdict",
+            "findings"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "const": 4,
+      "type": "integer"
+    },
+    "subscription_ids": {
+      "items": {
+        "maxLength": 16384,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "target": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_revision": {
+          "type": "integer"
+        },
+        "policy_revision": {
+          "type": "integer"
+        },
+        "scope_revision": {
+          "type": "integer"
+        },
+        "wave_id": {
+          "maxLength": 16384,
+          "type": "string"
+        }
+      },
+      "required": [
+        "wave_id",
+        "scope_revision",
+        "plan_revision",
+        "policy_revision"
+      ],
+      "type": "object"
+    },
+    "task_id": {
+      "maxLength": 16384,
+      "type": "string"
+    },
+    "verification": {
+      "type": "null"
+    },
+    "work_item_refs": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "sha": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "work_item_id": {
+            "maxLength": 16384,
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "candidate_id",
+          "sha"
+        ],
+        "type": "object"
+      },
+      "maxItems": 0,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "target",
+    "phase_id",
+    "task_id",
+    "outcome",
+    "artifacts",
+    "criterion_results",
+    "work_item_refs",
+    "remaining",
+    "blockers",
+    "subscription_ids",
+    "review",
+    "verification",
+    "product_local_review"
+  ],
+  "type": "object"
+}

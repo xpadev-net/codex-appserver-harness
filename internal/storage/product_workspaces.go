@@ -205,7 +205,8 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 			return w, task, b, ErrProductBasePlanHeld
 		}
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, task.Spec.WorkItemIDs[0], &sourcePermit)
 	if err != nil {
 		return w, task, b, err
 	}
@@ -266,6 +267,9 @@ func (k *KernelStore) productWorkspaceOwnerTx(ctx context.Context, tx *sql.Tx, v
 		if !slices.Contains(registration.Value.Definition.Criteria, criterion) {
 			return w, task, b, ErrProductWorkspaceHeld
 		}
+	}
+	if !sourcePermit.current(k, tx) {
+		return w, task, b, ErrProductWorkspaceHeld
 	}
 	return w, task, b, nil
 }

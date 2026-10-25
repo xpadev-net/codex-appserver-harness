@@ -83,7 +83,8 @@ func (k *KernelStore) productBaseConflictInputTx(ctx context.Context, tx *sql.Tx
 
 func (k *KernelStore) baseConflictCurrentProductTx(ctx context.Context, tx *sql.Tx, w domain.Wave, source ProductWorkspace) (ProductTargetSnapshot, error) {
 	var current ProductTargetSnapshot
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, source.Value.WorkItemID)
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, source.Value.WorkItemID, &sourcePermit)
 	if err != nil || held {
 		return current, errors.Join(ErrProductWorkspaceHeld, err)
 	}
@@ -107,6 +108,9 @@ func (k *KernelStore) baseConflictCurrentProductTx(ctx context.Context, tx *sql.
 	// A merge-only hold must survive the carry without blocking local repair.
 	normalized.WorkItem.MergeHold = old.Value.WorkItem.MergeHold
 	if !reflect.DeepEqual(normalized, old.Value) {
+		return current, ErrProductWorkspaceHeld
+	}
+	if !sourcePermit.current(k, tx) {
 		return current, ErrProductWorkspaceHeld
 	}
 	return current, nil

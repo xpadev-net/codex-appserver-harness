@@ -122,7 +122,8 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 	if !UsesProductChangeOutput(w, task) && !usesProductSubject(w, task.Spec) || len(task.Spec.WorkItemIDs) != 1 {
 		return "product_role_unavailable", nil
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, task.Spec.WorkItemIDs[0], &sourcePermit)
 	if err != nil {
 		return "", err
 	}
@@ -224,6 +225,9 @@ func (k *KernelStore) productTaskReadinessTx(ctx context.Context, tx *sql.Tx, w 
 	}
 	if input != task.InputDigest {
 		return "product_input_changed", nil
+	}
+	if !sourcePermit.current(k, tx) {
+		return "product_work_item_held", nil
 	}
 	return "", nil
 }

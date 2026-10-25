@@ -58,7 +58,8 @@ func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, 
 			return out, unusedErr
 		}
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, task.Spec.WorkItemIDs[0], &sourcePermit)
 	if err != nil {
 		return out, err
 	}
@@ -129,6 +130,9 @@ func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, 
 		if !evidence.Value.Passed {
 			return out, ErrProductRunnerHeld
 		}
+	}
+	if !sourcePermit.current(k, tx) {
+		return out, ErrProductWorkspaceHeld
 	}
 	return out, nil
 }

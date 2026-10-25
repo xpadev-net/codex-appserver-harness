@@ -384,3 +384,9 @@ canonical な source 確認と並列 GET の controlled Go テストを実施す
 Root Issue の定期観測では、`ObserveProductSourceAt` に読み取り前の snapshot ID と、外部取得を完了した時刻を渡す。取得中の状態変更と同じ内容への復帰も ID で検出する。`product_source_read` とその照合用コピーは現在の Target・source・snapshot ID/digest・policy・実取得時刻を結び付け、source の内容と同じ transaction で更新する。同じ内容の再取得は semantic snapshot/history、通知、model run を増やさず、保存の遅れを新しい GET 時刻として扱わない。従来の digest による観測や metadata の参照では実取得時刻を更新しない。
 
 `ReadProductSourceRead` は照合済み metadata の参照であり、実行許可ではない。呼出側は現在の source 状態、Wave/WorkItem の優先操作と全証明の確認後の経過時間を別途検査する。失敗した取得の記録を ready と見なさず、欠落・不一致・古い snapshot から取得時刻を推定しない。この取得時刻の追加だけでは、子 WorkItem の一律保留、quality gate、Cloud 承認、親最終受入を解除しない。
+
+実行経路では、登録済みの葉に対してローカル scope と全祖先を canonical な登録から照合する。子自身・各祖先の source が同じ選択 policy で ready であることを要求し、GitHub Root には実 GET の照合済み記録も要求する。直接依頼には外部 Root Issue がないため、その不変原本と Wave の優先操作を用いる。親の SPLIT と自身の担当分の MERGED は子の終了を意味せず、親子の pause/cancel は停止条件となる。MergeHold は従来どおり merge に限定する。
+
+workspace、model readiness、runner、seal、独立 review、quality 等の処理では、同じ transaction 内だけで使える一時的な確認結果を保持し、後続の証明を読み終えた時点でも全取得時刻が5秒以内であることを確認する。時刻を永続 permit や proof memo に保存しない。Candidate 更新では membership の split_scope を保持する。後続の葉は元の merge 依存を必要とし、source が ready なだけで quality や親最終受入を合格にしない。metadata 用の一律保留 predicate は実行許可に使わない。実 model による分割工程全体・既定8子・正式 Cloud 承認・managed close・tree continuation の受入は別途必要である。
+
+分割された葉の独立 review は `product-local-review-task-result-v4` を用い、`product_local_review.scope_digest` と全 `scope.included` 項目の評価・根拠・実在する Artifact evidence ID を返す。通常の `criterion_results` は Wave 計画用の担当 ID のまま保持する。元要求の criterion を主張するだけではローカル review を満たさず、quality は全ローカル項目の独立した claimed 評価を要求する。同じ ID でも異なる scope の意味へ読み替えない。review 証拠に含まれる Artifact は既存の参照権限・保持の対象となる。Root の review v1 と work/verification v2/v3 schema は変更しない。

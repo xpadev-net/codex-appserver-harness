@@ -151,6 +151,11 @@ func resultArtifactReferences(result contract.TaskResult) []string {
 	for _, criterion := range result.CriterionResults {
 		ids = append(ids, criterion.EvidenceIDs...)
 	}
+	if result.ProductLocalReview != nil {
+		for _, criterion := range result.ProductLocalReview.Criteria {
+			ids = append(ids, criterion.EvidenceIDs...)
+		}
+	}
 	if result.Verification != nil {
 		ids = append(ids, result.Verification.EvidenceIDs...)
 	}

@@ -245,7 +245,13 @@ type ProductVerificationReference struct {
 	PlanArtifactID string `json:"plan_artifact_id"`
 }
 
+type ProductLocalReview struct {
+	ScopeDigest string            `json:"scope_digest"`
+	Criteria    []CriterionResult `json:"criteria"`
+}
+
 type TaskResult struct {
+	ProductLocalReview  *ProductLocalReview           `json:"product_local_review,omitempty"`
 	ProductVerification *ProductVerificationReference `json:"product_verification,omitempty"`
 	SchemaVersion       int                           `json:"schema_version"`
 	Target              Target                        `json:"target"`
@@ -289,8 +295,28 @@ func (r TaskResult) ValidateAssignment(target Target, taskID, phaseID string, cr
 }
 
 func (r TaskResult) Validate() error {
-	if (r.SchemaVersion != 1 && r.SchemaVersion != 2 && r.SchemaVersion != 3) || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
+	if (r.SchemaVersion != 1 && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4) || !r.Target.Valid() || r.PhaseID == "" || r.TaskID == "" {
 		return errors.New("result identity missing")
+	}
+	if r.SchemaVersion != 4 && r.ProductLocalReview != nil {
+		return errors.New("local product review requires TaskResult schema 4")
+	}
+	if r.SchemaVersion == 4 {
+		if len(r.WorkItemRefs) != 0 || r.ProductChanges != nil || r.ProductVerification != nil || r.Verification != nil || r.Outcome == "result" && (r.ProductLocalReview == nil || r.Review == nil) {
+			return errors.New("scoped product review requires its independent review and local scope evidence")
+		}
+		if local := r.ProductLocalReview; local != nil {
+			if len(local.ScopeDigest) != 64 || strings.Trim(local.ScopeDigest, "0123456789abcdef") != "" || len(local.Criteria) < 1 || len(local.Criteria) > 256 {
+				return errors.New("bounded local review scope and criteria required")
+			}
+			seen := map[string]bool{}
+			for _, criterion := range local.Criteria {
+				if !inline(criterion.CriterionID) || seen[criterion.CriterionID] || !inline(criterion.Basis) || !validIDs(criterion.EvidenceIDs) || criterion.Status != "claimed" && criterion.Status != "unverified" || criterion.Status == "claimed" && len(criterion.EvidenceIDs) == 0 {
+					return errors.New("invalid local review criterion evidence")
+				}
+				seen[criterion.CriterionID] = true
+			}
+		}
 	}
 	if r.SchemaVersion == 1 && r.ProductChanges != nil {
 		return errors.New("product change references require TaskResult schema 2")
@@ -550,6 +576,7 @@ func TaskResultSchema() map[string]any {
 	properties := s["properties"].(map[string]any)
 	delete(properties, "product_changes") // Keep the versioned K/review schema byte-for-byte unchanged.
 	delete(properties, "product_verification")
+	delete(properties, "product_local_review")
 	properties["outcome"].(map[string]any)["enum"] = []string{"result", "waiting", "blocked"}
 	properties["criterion_results"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)["enum"] = []string{"claimed", "unverified"}
 	properties["review"].(map[string]any)["anyOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)["verdict"].(map[string]any)["enum"] = []string{"clean", "findings", "inconclusive"}
@@ -583,6 +610,25 @@ func ProductVerificationTaskResultSchema() map[string]any {
 	digest["minLength"], digest["maxLength"], digest["pattern"] = 64, 64, "^[0-9a-f]{64}$"
 	properties["product_verification"] = map[string]any{"anyOf": []any{ref, map[string]any{"type": "null"}}}
 	s["required"] = append(s["required"].([]string), "product_verification")
+	return s
+}
+
+// Only a trusted scoped P review assignment selects this profile. Existing
+// generic/review v1 and work/verification v2/v3 schemas remain unchanged.
+func ProductLocalReviewTaskResultSchema() map[string]any {
+	s := TaskResultSchema()
+	properties := s["properties"].(map[string]any)
+	properties["schema_version"].(map[string]any)["const"] = 4
+	local := Schema(ProductLocalReview{})
+	digest := local["properties"].(map[string]any)["scope_digest"].(map[string]any)
+	digest["minLength"], digest["maxLength"], digest["pattern"] = 64, 64, "^[0-9a-f]{64}$"
+	criteria := local["properties"].(map[string]any)["criteria"].(map[string]any)
+	criteria["minItems"], criteria["maxItems"] = 1, 256
+	criteria["items"].(map[string]any)["properties"].(map[string]any)["status"].(map[string]any)["enum"] = []string{"claimed", "unverified"}
+	properties["product_local_review"] = map[string]any{"anyOf": []any{local, map[string]any{"type": "null"}}}
+	s["required"] = append(s["required"].([]string), "product_local_review")
+	properties["work_item_refs"].(map[string]any)["maxItems"] = 0
+	properties["verification"] = map[string]any{"type": "null"}
 	return s
 }
 

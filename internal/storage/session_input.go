@@ -243,13 +243,20 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		if manifest.ProductSubject != nil {
 			state.Instructions += " product_subject fixes an immutable Candidate from declared applied producer results. Its value.candidate_digest identifies the exact code/base/scope/policy subject. Original requirements and assigned criteria remain the basis for independent evaluation. This subject is data, not a write/dispatch/runner/approval grant."
 			if manifest.ProductSubject.Value.Spec.Kind == "review" {
-				state.Instructions += " For this product review use TaskResult schema_version=1 and set review.target_digest to product_subject.value.candidate_digest. Keep work_item_refs empty and verification null. product_machine_verification contains authenticated host runner observations for this exact subject; prior Task claims are not current runner status. Report clean/findings/inconclusive only about that fixed subject; the report is not formal approval."
+				profile := "1"
+				if len(manifest.ProductSplitScopes) > 0 {
+					profile = "4"
+				}
+				state.Instructions += " For this product review use TaskResult schema_version=" + profile + " and set review.target_digest to product_subject.value.candidate_digest. Keep work_item_refs empty and verification null. product_machine_verification contains authenticated host runner observations for this exact subject; prior Task claims are not current runner status. Report clean/findings/inconclusive only about that fixed subject; the report is not formal approval."
 			}
 		}
 		if manifest.ProductVerificationPolicy != nil {
 			state.Instructions += " product_verification_policy fixes trusted test-write paths and registered/required profile IDs. A verification.Plan must refer to the known input Candidate and original assigned criteria; it cannot remove required profiles or supply runner success. Full trusted execution argv stays outside this manifest."
 		}
 		if len(manifest.ProductSplitScopes) > 0 {
+			if manifest.ProductSubject != nil && manifest.ProductSubject.Value.Spec.Kind == "review" {
+				state.Instructions += " For a scoped product review, product_local_review.scope_digest is the authenticated local scope_digest. product_local_review.criteria must independently evaluate every local scope.included ID with claimed/unverified status, basis and actual granted Artifact evidence IDs. Keep criterion_results under the assigned Wave criterion IDs; a Wave claim never replaces evaluation of a local part."
+			}
 			state.Instructions += " product_split_scopes gives the complete local requirement, criterion IDs, parent whole/part mapping, depth and source for each assigned child WorkItem. For a split child, verification.Plan.criteria_tests and unverified_criteria use the local scope.included IDs and requirements. The controller checks scope_digest; it is not an extra verification.Plan field. TaskResult criteria keep the assigned Task criterion IDs for Wave planning; completing one local part does not satisfy the entire parent criterion. Keep the original Wave request and all part/dependency obligations. These records grant no execution, source freshness, quality or parent completion."
 		}
 		raw, err := encodeWakeJSON(manifest)
