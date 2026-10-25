@@ -151,8 +151,9 @@ func TestProductNestedSplitCreationPinsWholeAncestryAndPhysicalOwnerBeforeGETBin
 	if _, err := k.RecordProductSplitCreatedIssue(ctx, secondJob.ID, ProductSplitCreatedIssue{RepositoryID: 17, ID: 502, Number: 52, Title: second.Value.Child.Title, Body: second.Value.Body, State: "open", ObservedAt: k.clock()}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.BindProductSplitChildScopes(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
-		t.Fatal("nested scopes lost ancestor in legacy format", err)
+	scopes, err := k.BindProductSplitChildScopes(ctx, r)
+	if err != nil || len(scopes.Value.Children) != 2 {
+		t.Fatal("complete nested scope binding denied", err)
 	}
 	if _, err := k.RegisterProductSplitChildren(ctx, r); !readinessHoldError(err) {
 		t.Fatal("nested registration enabled before recursive binding", err)

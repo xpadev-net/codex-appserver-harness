@@ -69,6 +69,10 @@ type splitChildScopeSource struct {
 }
 
 func deriveProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, at time.Time) (ProductSplitChildScopes, error) {
+	return deriveSplitChildScopesWithAncestry(ctx, tx, r, at, nil)
+}
+
+func deriveSplitChildScopesWithAncestry(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, at time.Time, ancestry *ProductNestedSplitAllocation) (ProductSplitChildScopes, error) {
 	var out ProductSplitChildScopes
 	if !r.Target.Valid() || r.ParentWorkItemID == "" || at.IsZero() {
 		return out, ErrProductSplitHeld
@@ -85,9 +89,13 @@ func deriveProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSpl
 	if err != nil {
 		return out, splitEvidenceErr(err)
 	}
-	// A nested binding must itself preserve the full ancestor group. Until
-	// that representation is connected, never save a naked legacy scope set.
+	// Only the typed nested envelope may carry these bindings; a root reader
+	// must never authenticate a naked nested legacy set.
 	if proposal.Value.ParentSplitScope != nil {
+		if ancestry == nil || !reflect.DeepEqual(ancestry.Value.Allocation, allocation) || !reflect.DeepEqual(ancestry.Value.Plan, plan) || !reflect.DeepEqual(ancestry.Value.Proposal, proposal) {
+			return out, ErrProductSplitHeld
+		}
+	} else if ancestry != nil {
 		return out, ErrProductSplitHeld
 	}
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest || len(plan.Children) < 2 {
@@ -158,6 +166,14 @@ func splitChildScopeSourceValue(set ProductSplitChildScopes, binding ProductSpli
 }
 
 func loadProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildScopes, error) {
+	var nested bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_child_scopes' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?)", r.ProposalID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})).Scan(&nested); err != nil {
+		return ProductSplitChildScopes{}, err
+	}
+	if nested {
+		saved, err := loadNestedSplitChildScopes(ctx, tx, r)
+		return saved.Value.Scopes, err
+	}
 	malformed, err := splitScopeUnreadableForWave(ctx, tx, r.Target.WaveID)
 	if err != nil {
 		return ProductSplitChildScopes{}, err
@@ -168,12 +184,19 @@ func loadProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplit
 	var saved, history, admission ProductSplitChildScopes
 	err = taskEvidenceRecord(ctx, tx, "product_split_child_scopes", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {
+		nested, nestedErr := loadNestedSplitChildScopes(ctx, tx, r)
+		if nestedErr == nil {
+			return nested.Value.Scopes, nil
+		}
+		if nestedErr != sql.ErrNoRows {
+			return saved, nestedErr
+		}
 		var known bool
 		if err := tx.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_child_scopes_admission' AND id=?)
  OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_child_scopes_history' AND (work_item_id=? OR json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?))
  OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
  OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_child_scope_source' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.request.proposal_id')=?)
- OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_split_completion') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
+ OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source','product_nested_split_scope_group','product_split_completion') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
  OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id'))=?)`), r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
@@ -241,6 +264,17 @@ func (k *KernelStore) BindProductSplitChildScopes(ctx context.Context, r Product
 	}
 	if err != sql.ErrNoRows {
 		return ProductSplitChildScopes{}, err
+	}
+	proposal, err := loadProductSplitProposal(ctx, tx, ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})
+	if err != nil {
+		return ProductSplitChildScopes{}, splitEvidenceErr(err)
+	}
+	if proposal.Value.ParentSplitScope != nil {
+		saved, err := k.bindNestedSplitChildScopesTx(ctx, tx, r)
+		if err != nil {
+			return ProductSplitChildScopes{}, err
+		}
+		return saved, tx.Commit()
 	}
 	saved, err = deriveProductSplitChildScopes(ctx, tx, r, k.clock())
 	if err != nil {

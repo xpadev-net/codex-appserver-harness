@@ -47,6 +47,9 @@ func splitScopeWitnessSQL(query string) string {
  wave_id,json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry')
  FROM kernel_budget_ledger WHERE kind='split_create_retry'
  AND json_type(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry') IS NOT NULL
+ UNION ALL SELECT rowid,'product_nested_split_scope_group',kind||':'||id,work_item_id,
+ json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.scopes')
+ FROM main.records WHERE kind IN ('product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source')
  ) ` + query
 }
 
