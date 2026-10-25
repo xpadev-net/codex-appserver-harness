@@ -36,6 +36,25 @@ func configDigest(c Config) string {
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
+func (c Config) legacyPolicyProjection() Config {
+	if c.UpgradeOrigin.ImplicitExecution {
+		c.Execution = nil
+	}
+	c.Version = 1
+	c.UpgradeOrigin = nil
+	return c
+}
+
+func (c Config) policySnapshotConfig() (Config, error) {
+	if err := c.validateUpgradeOrigin(); err != nil {
+		return Config{}, err
+	}
+	if c.UpgradeOrigin != nil {
+		c = c.legacyPolicyProjection()
+	}
+	return c, nil
+}
+
 func (c Config) validateUpgradeOrigin() error {
 	origin := c.UpgradeOrigin
 	if origin == nil {
@@ -49,11 +68,8 @@ func (c Config) validateUpgradeOrigin() error {
 		if *c.Execution != domain.LegacyExecutionLimits() {
 			return errors.New("implicit legacy execution must remain serial; explicitly adopt policy changes")
 		}
-		c.Execution = nil
 	}
-	c.Version = 1
-	c.UpgradeOrigin = nil
-	if configDigest(c) != origin.PolicyDigest {
+	if configDigest(c.legacyPolicyProjection()) != origin.PolicyDigest {
 		return errors.New("upgraded config differs from its legacy policy; explicitly adopt policy changes")
 	}
 	return nil

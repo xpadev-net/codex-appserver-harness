@@ -145,7 +145,11 @@ func forbiddenPaths(c Config) []string {
 	return paths
 }
 func (c *Controller) ensurePolicy(ctx context.Context) error {
-	return c.Store.EnsureRecord(ctx, "policy_version", fmt.Sprintf("%d:%d", c.Config.RepositoryID, c.Config.Verification.Revision), c.Config)
+	config, err := c.Config.policySnapshotConfig()
+	if err != nil {
+		return err
+	}
+	return c.Store.EnsureRecord(ctx, "policy_version", fmt.Sprintf("%d:%d", config.RepositoryID, config.Verification.Revision), config)
 }
 
 type writeGuardKey struct{}

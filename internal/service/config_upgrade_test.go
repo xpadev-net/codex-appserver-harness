@@ -12,6 +12,8 @@ import (
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/gate"
+	"github.com/xpadev-net/codex-appserver-harness/internal/github"
+	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
 func writeUpgradeSource(t *testing.T, cfg Config) (string, string, []byte) {
@@ -222,5 +224,52 @@ func TestConfigUpgradeRejectsUnknownOrUnsafeInputs(t *testing.T) {
 				t.Fatal("unsafe conversion accepted", mode)
 			}
 		})
+	}
+}
+
+func TestConfigUpgradeExistingPolicyVersionStillAdmitsAndAdoptsWork(t *testing.T) {
+	c, _, _, _ := setup(t)
+	ctx := context.Background()
+	c.Config.RequiredChecks = []gate.RequiredCheck{}
+	// Establish an actual v1 policy revision before upgrading. Revision 1 from
+	// the older fixture remains untouched, as does its existing WorkItem.
+	c.Config.Verification.Revision++
+	if err := c.ensurePolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := c.Store.Records(ctx, "policy_version", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDigest := c.policyDigest()
+	source, target, _ := writeUpgradeSource(t, c.Config)
+	if _, err := UpgradeTrustedConfig(ctx, source, target); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Config = cfg
+	scope := verification.Scope{Revision: 1, OriginalRequest: "new admitted request", Criteria: []verification.Criterion{{ID: "AC", Requirement: "behavior"}}, Included: []string{"AC"}, Remaining: []string{}, PreviouslyMerged: []string{}}
+	item := domain.WorkItem{ID: "after-upgrade", RepositoryID: 1, Issue: 2, ScopeRevision: 1, PolicyRevision: cfg.Verification.Revision, Phase: domain.Ready}
+	if err := c.Enqueue(ctx, item, scope, github.Issue{Number: 2, State: "open", Body: scope.OriginalRequest}); err != nil {
+		t.Fatal("upgraded config conflicts with its own immutable policy version", err)
+	}
+	// This is the same policy registration used by the operator adopt path.
+	if err := c.ensurePolicy(ctx); err != nil {
+		t.Fatal("adoption policy registration failed", err)
+	}
+	scope.Revision++
+	if err := c.Store.Adopt(ctx, item.ID, scope.Revision, cfg.Verification.Revision, map[string]any{"scope": scope, "policy_snapshot": c.policyDigest()}); err != nil {
+		t.Fatal("existing policy could not adopt a new scope", err)
+	}
+	after, err := c.Store.Records(ctx, "policy_version", "")
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("old policy records rewritten", err)
+	}
+	var saved string
+	if err := c.Store.Record(ctx, "policy_snapshot", item.ID, &saved); err != nil || saved != oldDigest {
+		t.Fatal("new work lost preserved identity", err)
 	}
 }
