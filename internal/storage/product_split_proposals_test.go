@@ -16,8 +16,21 @@ import (
 
 func productSplitProposalFixture(t *testing.T, extraRoots ...string) (*KernelStore, domain.Wave, ProductSplitProposalRequest) {
 	t.Helper()
+	return productSplitProposalFixtureWithDepth(t, nil, extraRoots...)
+}
+
+func productSplitProposalFixtureWithDepth(t *testing.T, depth []int, extraRoots ...string) (*KernelStore, domain.Wave, ProductSplitProposalRequest) {
+	t.Helper()
 	k, r := waveStoreFixture(t)
 	r.Policy.Stage, r.Policy.Product = "P", true
+	if len(depth) > 1 {
+		t.Fatal("one initial split depth required")
+	}
+	if len(depth) == 1 {
+		limits := DefaultWaveOperationLimits()
+		limits.SplitDepth = depth[0]
+		r.OperationLimits = &limits
+	}
 	r.Criteria = append(r.Criteria, domain.WaveCriterion{ID: "extra", Requirement: "second original requirement"})
 	definition := ProductWorkItemDefinition{ID: "split-root", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC", "extra"}}
 	definitions := []ProductWorkItemDefinition{definition}

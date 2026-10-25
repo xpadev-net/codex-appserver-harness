@@ -11,9 +11,9 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-func splitChildPlanFixture(t *testing.T) (*KernelStore, ProductSplitProposalRequest, ProductSplitProposal, ProductSplitChildPlanRequest) {
+func splitChildPlanFixture(t *testing.T, depth ...int) (*KernelStore, ProductSplitProposalRequest, ProductSplitProposal, ProductSplitChildPlanRequest) {
 	t.Helper()
-	k, _, r := productSplitProposalFixture(t)
+	k, _, r := productSplitProposalFixtureWithDepth(t, depth)
 	r.Proposal.Children[0].Coverage[0] = splitting.Coverage{ParentCriterion: "AC", ChildCriterion: "first-ac", PartID: "one", PartCount: 2, Basis: "first part"}
 	r.Proposal.Children[1].Coverage[0] = splitting.Coverage{ParentCriterion: "AC", ChildCriterion: "second-ac", PartID: "two", PartCount: 2, Basis: "remaining part"}
 	r.Proposal.Children[1].Criteria = append(r.Proposal.Children[1].Criteria, verification.Criterion{ID: "extra-ac", Requirement: "complete extra requirement"})

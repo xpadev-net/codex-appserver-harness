@@ -30,8 +30,8 @@ func bindNestedParentProof(ctx context.Context, tx *sql.Tx, value *ProductSplitP
 	if value.ParentSplitScope == nil || value.Depth < 1 || ref.ID == "" || !validSourceDigest(ref.Digest) {
 		return ErrProductSplitHeld
 	}
-	var binding ProductSplitChildScopeBinding
-	if err := taskEvidenceRecord(ctx, tx, "product_split_child_scope", value.Request.ParentWorkItemID, &binding); err != nil {
+	binding, err := splitChildSourceBindingTx(ctx, tx, value.Request.Target, value.Request.ParentWorkItemID)
+	if err != nil {
 		return splitEvidenceErr(err)
 	}
 	proof, err := loadSplitParentScope(ctx, tx, binding)
@@ -82,8 +82,8 @@ func loadNestedSplitProposalUncached(ctx context.Context, tx *sql.Tx, r ProductS
 	if saved.Digest != digest || saved.ID != structureID("nested-split-envelope-", head, digest) || v.ProposalHeadID != head || splitProposalHead(request) != head || v.RequestKeyID != splitProposalRequestID(request) || p.Digest != proposalDigest || p.ID != structureID("product-split-", head, proposalDigest) || p.Value.CreatedAt.IsZero() || p.Value.CreatedAt.Before(v.SavedAt) || p.Value.ParentScopeProof == nil || *p.Value.ParentScopeProof != v.ParentProof || p.Value.ParentSplitScope == nil || request.ParentWorkItemID != v.ParentWorkItemID {
 		return saved, ErrProductSplitHeld
 	}
-	var binding ProductSplitChildScopeBinding
-	if err := taskEvidenceRecord(ctx, tx, "product_split_child_scope", v.ParentWorkItemID, &binding); err != nil {
+	binding, err := splitChildSourceBindingTx(ctx, tx, request.Target, v.ParentWorkItemID)
+	if err != nil {
 		return saved, splitEvidenceErr(err)
 	}
 	proof, err := loadSplitParentScope(ctx, tx, binding)
@@ -190,8 +190,8 @@ func (k *KernelStore) PrepareProductNestedSplitProposal(ctx context.Context, r P
 	if err := bindNestedParentProof(ctx, tx, &value, parent); err != nil {
 		return empty, err
 	}
-	var binding ProductSplitChildScopeBinding
-	if err := taskEvidenceRecord(ctx, tx, "product_split_child_scope", r.ParentWorkItemID, &binding); err != nil {
+	binding, err := splitChildSourceBindingTx(ctx, tx, r.Target, r.ParentWorkItemID)
+	if err != nil {
 		return empty, splitEvidenceErr(err)
 	}
 	proof, err := loadSplitParentScope(ctx, tx, binding)

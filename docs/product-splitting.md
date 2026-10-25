@@ -329,3 +329,13 @@ split の正式な loader は、一つの同期的・読み取り専用 call tre
 再利用する値は毎回独立した JSON copy へ戻し、返した slice/map の変更が別の読み取りへ伝播しないようにする。失敗は再利用せず、従来の部分的な返却値と error を保持する。循環参照と過大な active walk は保留し、cache は最大2048件・64MiBまでとする。cache の容量に達した場合は追加の再利用を止め、正式な読み取り検証を続ける。
 
 source head/policy の更新・鮮度判定、Task/model/runner の実行許可、予算はこの再利用の対象にしない。source の時刻と5秒の送信制約は変更しない。
+
+## canonical binding を参照する深い分割提案
+
+PrepareProductNestedSplitProposal とその正式 reader は、親 WorkItem の登録に結び付く canonical binding を読む。Root child の旧形式と、登録済み孫の typed scope を同じ認証経路で扱い、孫のために旧形式の scope head を作らない。親 proof・登録集合・すべての上流 scope の正式記録が必要で、compact ancestor witness から欠落を再構成しない。
+
+trusted な初期設定で分割深さを3にした Wave では、登録済み孫の fresh な source と固定済み parent scope proof を使い、深さ3の子を計画する提案を保存できる。既定値2の Wave ではその提案を保留する。深さの設定は最初の Wave 作成時から各祖先の snapshot に固定し、途中で上限を付け替えない。
+
+Coverage は直近の親の local criterion に対する part ID・part count・basis を保持する。元 Wave の条件への対応は ParentCriterionRoots と ParentCriteria に別途保持し、local criterion の名前が元条件と同じでも whole coverage の証拠にしない。提案は全4記録を同じ transaction で保存し、pause・古い source・途中失敗では部分保存しない。
+
+この接続は提案と child plan の metadata に限る。Task/model/runner、再帰的な local coverage、main 通知、親最終受入の許可にはしない。枠・retry・operation budget を補充しない。
