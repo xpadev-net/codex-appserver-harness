@@ -242,7 +242,7 @@ PrepareProductNestedSplitProposal は、host が保存済み ParentScope の ID/
 
 root と再分割の operation key は Wave 内で共有し、同じ key の別用途への再利用、固定済み head の本文変更、欠落証拠の自動再作成を拒否する。既存の proposal reader は元 scope を検査して専用 envelope を返し、reopen/pause の exact replay と方向修正後の失効を区別する。root の保存形式は維持する。
 
-通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの intent は後述の全祖先 envelope でのみ保存し、割当・作成 journal、Issue 送信は引き続き保留する。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
+通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの intent は後述の全祖先 envelope でのみ保存し、割当は後述の祖先証拠付き形式だけで許可し、作成 journal・Issue 送信は引き続き保留する。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
 
 ## 全祖先証拠を保持した再分割の child plan / intent
 
@@ -250,4 +250,12 @@ root と再分割の operation key は Wave 内で共有し、同じ key の別�
 
 local coverage、元 Wave の ParentCriteria、保存済み depth + 1、安定した intent/WorkItem ID を維持する。既知の集合・index・proposal・親証拠が欠けた場合は再生成せず、exact 復旧を必要とする。新規 intent は live な current target と fresh な own source を必要とし、reopen/pause の exact replay は新規保存や時刻/ID の変更をしない。旧 scope の plan は履歴として読めるが、新しい要求へ付け替えない。
 
-この metadata 保存では実行枠や追加予算を消費せず、Task・作成 journal・Issue を生成しない。孫の割当と送信は、各段階へ祖先証拠を引き継ぐ処理と own source fence を接続するまで保留する。通常 root の既存形式は変更しない。
+この metadata 保存では実行枠や追加予算を消費せず、Task・作成 journal・Issue を生成しない。孫の割当は次の専用 envelope で行い、送信は own source fence と作成 journal への祖先証拠の接続まで保留する。通常 root の既存形式は変更しない。
+
+## 全祖先証拠を保持した再分割の lifetime 枠予約
+
+ReserveProductSplitChildren は再分割の全 plan・proposal・親証拠を認証し、全孫の枠を一つの transaction で予約する。専用の割当 head/history/admission、各 WorkItem seat、split_children 台帳はいずれも全祖先 sibling group と孫自身の完全な割当を保持する。通常登録・過去 version・祖先と孫の予約を合わせて lifetime 128 枠を照合し、一部だけの予約、再送・pause・方向修正・再起動による返却を許可しない。
+
+台帳だけが残る場合も負の証拠として扱い、祖先の全 sibling Issue の root 取込み、元の creation/retry の再作成、親の再実行、孫の再予約を拒否する。台帳を含む独立 witness を recovery work list に載せるが、失われた正式記録を自動復元する権限は与えない。新規予約は live target と fresh own source が必要で、監査 replay は旧 scope の値を保持する。
+
+SQLite の検査は枠上限・全件原子性・途中失敗 rollback・各証拠の欠落と exact 復旧・各 witness 単独残存・reopen/pause/方向修正を確認する。孫 Issue の送信、作成 journal、Task・model 実行、再帰登録・品質判定はまだ保留する。root の保存形式と既存の実行予算は維持する。

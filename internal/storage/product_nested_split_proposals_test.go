@@ -47,9 +47,6 @@ func TestProductNestedSplitProposalPinsWholeParentProofAndDoesNotCreateExecution
 	if err != nil || len(plan.Children) != 2 {
 		t.Fatal("ancestor-pinned metadata plan denied", plan, err)
 	}
-	if _, err := k.ReserveProductSplitChildren(ctx, planRequest); !errors.Is(err, ErrProductSplitHeld) {
-		t.Fatal("metadata plan reserved execution seats", err)
-	}
 	if _, err := k.PrepareProductSplitExecution(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("ordinary root port adopted nested implicitly", err)
 	}

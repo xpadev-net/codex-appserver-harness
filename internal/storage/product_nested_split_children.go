@@ -45,7 +45,7 @@ func loadNestedSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitChi
 	err := taskEvidenceRecord(ctx, tx, "product_nested_split_children", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_children_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_nested_split_children_history','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.plan.set.value.request.proposal_id')=?)`, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_nested_split_children_admission' AND id=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_nested_split_children_history','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.plan.set.value.request.proposal_id')=?)`), r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
