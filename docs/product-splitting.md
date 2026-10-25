@@ -294,4 +294,15 @@ RegisterProductSplitChildren は、明示採用された再分割の全孫 scope
 
 Definition.Criteria は元 Wave の条件への対応を保持し、local scope は孫自身の criterion と part 対応を保持する。通常の登録 port で scoped identity を上書きしたり、部分集合だけを登録したり、枠や retry 予算を補充したりしない。登録・version・membership の一つだけが残っても、compact group witness が祖先と今回の全 sibling Issue、creation chain、予約枠、親の再実行禁止を保持する。復旧 cursor は各 compact group を識別し、同じ物理 row の複数 group を区別する。
 
-この段階は WorkItem metadata の登録のみ。孫の source 観測/policy 初期化は、source reference 自身へ祖先 witness を接続するまで明示保留し、さらに深い再分割にも進めない。Task/model/runner 実行は既存の child gate で保留する。nested completion の main 購読・通知、再帰 coverage、実行許可は後続で接続する。compact witness や登録済みである事実を source ready・品質・親最終受入の代用にはしない。
+この段階は WorkItem metadata の登録のみ。孫の source 観測/policy 初期化は後述の祖先 witness 付き source reference に接続する。さらに深い再分割は parent scope proof への祖先接続まで保留する。Task/model/runner 実行は既存の child gate で保留する。nested completion の main 購読・通知、再帰 coverage、実行許可は後続で接続する。compact witness や登録済みである事実を source ready・品質・親最終受入の代用にはしない。
+
+
+## 孫 Issue の source 観測と祖先 witness
+
+正式な孫登録から local binding を認証して source を観測する。source と policy の各 head/history は、登録が固定した同一の compact ancestor set を保持する。4種類の記録のいずれか一つしか残らない場合も、全祖先と今回の sibling の numeric Issue 所有権・creation chain・消費 retry・予約枠を忘れない。失われた正式 binding や source head を witness から再初期化しない。Root child の既存 JSON では追加 field を省略する。
+
+source 観測の一覧は孫の typed scope head/history/admission も opaque cursor でたどる。実際の GET は登録と scope の認証後に行い、一覧にあるだけでは観測・実行の許可にしない。
+
+host は最後の Issue GET を終えた時刻を ObserveProductSplitChildSourceAt に渡す。保存処理のための認証に時間がかかっても CheckedAt を保存完了時刻へ更新しない。通常 port も呼び出し開始時刻を固定する。future・時刻の逆行を拒否し、source gate の5秒の制約は維持する。保存の context は最大1分だが、親 context の取消・期限に従い、鮮度を延長しない。
+
+source ready は source のみの状態。Task/model/runner 実行、再帰的な完了判定、さらに深い parent scope の新規作成、main への nested completion 通知はまだ許可しない。予算・登録・scope revision を変更しない。

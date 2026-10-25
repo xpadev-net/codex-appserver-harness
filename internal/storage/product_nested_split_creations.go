@@ -65,7 +65,11 @@ func validateNestedSplitCreationGateSource(ctx context.Context, tx *sql.Tx, job 
 	}
 	for _, binding := range job.Value.Ancestry.Value.Children {
 		if binding.Value.Child.Value.WorkItemID == job.Value.Request.ParentWorkItemID {
-			if !reflect.DeepEqual(source.Value.splitChildSourceReference, splitSourceReference(binding)) || source.Value.Facts.validate() != nil || source.Value.Status != "ready" || splitChildSourceStatus(binding, source.Value.Facts, job.Value.Ancestry.Value.SourcePolicyDigest) != "ready" {
+			reference, err := splitSourceReferenceTx(ctx, tx, binding)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(source.Value.splitChildSourceReference, reference) || source.Value.Facts.validate() != nil || source.Value.Status != "ready" || splitChildSourceStatus(binding, source.Value.Facts, job.Value.Ancestry.Value.SourcePolicyDigest) != "ready" {
 				return ErrProductSplitHeld
 			}
 			return nil

@@ -54,9 +54,6 @@ func TestProductNestedSplitRegistrationsKeepLocalScopesAndCompactAncestorsWithou
 		if err != nil || binding.Value.Child.Value.Depth != 2 || !reflect.DeepEqual(binding, proof.Value.Scopes.Value.Children[i]) {
 			t.Fatal("registered local scope unavailable", err)
 		}
-		if _, err := base.ObserveProductSplitChildSource(ctx, r.Target, id, "", splitSourceFacts(binding)); !errors.Is(err, ErrProductSplitHeld) {
-			t.Fatal("source ancestry integration bypassed", err)
-		}
 		held, err := productWorkItemExecutionHeld(ctx, base.DB, wave, id)
 		if err != nil || !held {
 			t.Fatal("registration granted execution", held, err)

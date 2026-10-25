@@ -32,6 +32,10 @@ type ProductSplitParentScope struct {
 
 func deriveSplitParentScope(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding, at time.Time) (ProductSplitParentScope, error) {
 	var out ProductSplitParentScope
+	// Deeper admission needs flat ancestor witnesses on this proof first.
+	if binding.Value.Child.Value.Depth > 1 {
+		return out, ErrProductSplitHeld
+	}
 	group, err := loadProductSplitRegistrations(ctx, tx, binding.Value.Request)
 	if err != nil {
 		return out, splitEvidenceErr(err)
