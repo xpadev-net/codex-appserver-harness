@@ -8,16 +8,18 @@ import (
 )
 
 type ProductSplitCreateGate struct {
-	Ancestry           *ProductNestedSplitAllocation `json:"ancestry,omitempty"`
-	ParentSourceID     string                        `json:"parent_source_id,omitempty"`
-	ParentSourceDigest string                        `json:"parent_source_digest,omitempty"`
-	CreationID         string                        `json:"creation_id"`
-	CreationDigest     string                        `json:"creation_digest"`
-	Request            ProductSplitChildPlanRequest  `json:"request"`
-	ParentHeadID       string                        `json:"parent_head_id"`
-	SourceID           string                        `json:"source_id"`
-	SourceDigest       string                        `json:"source_digest"`
-	ObservedAt         time.Time                     `json:"observed_at"`
+	AncestorSourcesVersion int                                   `json:"ancestor_sources_version,omitempty"`
+	AncestorSources        []ProductSplitAncestorSourceReference `json:"ancestor_sources,omitempty"`
+	Ancestry               *ProductNestedSplitAllocation         `json:"ancestry,omitempty"`
+	ParentSourceID         string                                `json:"parent_source_id,omitempty"`
+	ParentSourceDigest     string                                `json:"parent_source_digest,omitempty"`
+	CreationID             string                                `json:"creation_id"`
+	CreationDigest         string                                `json:"creation_digest"`
+	Request                ProductSplitChildPlanRequest          `json:"request"`
+	ParentHeadID           string                                `json:"parent_head_id"`
+	SourceID               string                                `json:"source_id"`
+	SourceDigest           string                                `json:"source_digest"`
+	ObservedAt             time.Time                             `json:"observed_at"`
 }
 type splitCreateGateRecord struct {
 	Value  ProductSplitCreateGate `json:"value"`
@@ -109,11 +111,15 @@ func (k *KernelStore) ObserveProductSplitCreateGate(ctx context.Context, id, own
 	}
 	value := ProductSplitCreateGate{Ancestry: job.Value.Ancestry, CreationID: job.ID, CreationDigest: job.Digest, Request: job.Value.Request, ParentHeadID: job.Value.ParentHeadID, SourceID: sourceID, SourceDigest: sourceDigest, ObservedAt: k.clock()}
 	if job.Value.Ancestry != nil {
-		source, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
+		source, ancestors, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
 		if err != nil {
 			return empty, err
 		}
 		value.ParentSourceID, value.ParentSourceDigest = source.ID, source.Digest
+		value.AncestorSources = ancestors
+		if len(ancestors) != 0 {
+			value.AncestorSourcesVersion = 1
+		}
 	}
 	checksum, err := contentDigest(value)
 	if err != nil {
@@ -155,11 +161,11 @@ func (k *KernelStore) splitCreateSendGateTx(ctx context.Context, tx *sql.Tx, job
 		}
 	}
 	if job.Value.Ancestry != nil {
-		source, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
+		source, ancestors, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
 		if err != nil {
 			return "", err
 		}
-		if source.ID != gate.Value.ParentSourceID || source.Digest != gate.Value.ParentSourceDigest {
+		if source.ID != gate.Value.ParentSourceID || source.Digest != gate.Value.ParentSourceDigest || !reflect.DeepEqual(ancestors, gate.Value.AncestorSources) {
 			return "", ErrProductSplitHeld
 		}
 	}

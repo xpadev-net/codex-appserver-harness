@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-func deeperSplitProposalFixture(t *testing.T, depth int) (*KernelStore, ProductSplitProposalRequest, ProductSplitParentScope, ProductNestedSplitChildScopes) {
+func deeperSplitProposalFixture(t *testing.T, depth int, ownPolicy ...string) (*KernelStore, ProductSplitProposalRequest, ProductSplitParentScope, ProductNestedSplitChildScopes) {
 	t.Helper()
 	ctx := context.Background()
 	k, r, previous := nestedRegistrationScopeFixture(t, depth)
@@ -21,7 +22,11 @@ func deeperSplitProposalFixture(t *testing.T, depth int) (*KernelStore, ProductS
 	}
 	binding := previous.Value.Scopes.Value.Children[0]
 	registration := registered.Value.Registrations[0]
-	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, registration.Value.Definition.ID, "", splitSourceFacts(binding)); err != nil {
+	facts := splitSourceFacts(binding)
+	if len(ownPolicy) > 0 {
+		facts.PolicyDigest = ownPolicy[0]
+	}
+	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, registration.Value.Definition.ID, "", facts); err != nil {
 		t.Fatal(err)
 	}
 	proof, err := k.PrepareProductSplitParentScope(ctx, r.Target, registration.Value.Definition.ID)
@@ -47,7 +52,7 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 		t.Fatal(err)
 	}
 	head := splitProposalHead(r)
-	for _, mode := range []string{"pause", "stale", "late_failure"} {
+	for _, mode := range []string{"pause", "stale", "late_failure", "ancestor_hold", "ancestor_closed", "ancestor_stale"} {
 		t.Run(mode, func(t *testing.T) {
 			k := cloneNestedScopeStore(t, base)
 			switch mode {
@@ -58,19 +63,69 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 			case "stale":
 				now := k.clock()
 				k.Now = func() time.Time { return now.Add(2 * time.Minute) }
+			case "ancestor_hold", "ancestor_closed", "ancestor_stale":
+				ancestorID := previous.Value.Scopes.Value.Request.ParentWorkItemID
+				ancestor, err := k.ReadProductSplitChildScope(ctx, r.Target, ancestorID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prior, err := k.ReadProductSplitChildSource(ctx, r.Target, ancestorID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				facts := splitSourceFacts(ancestor)
+				if mode == "ancestor_hold" {
+					facts.Hold = true
+				} else if mode == "ancestor_closed" {
+					facts.IssueState = "closed"
+				}
+				if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, ancestorID, prior.ID, facts); err != nil {
+					t.Fatal(err)
+				}
+				own, err := k.ReadProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "ancestor_stale" {
+					now := k.clock()
+					k.Now = func() time.Time { return now.Add(2 * time.Minute) }
+					if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID, own.ID, own.Value.Facts); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := k.RequireProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID, own.Value.Facts.PolicyDigest, time.Minute); err != nil {
+					t.Fatal("fixture own source was not ready", err)
+				}
 			case "late_failure":
 				if _, err := k.DB.Exec("CREATE TRIGGER fail_deeper_proposal BEFORE INSERT ON records WHEN NEW.kind='product_nested_split_proposal_request' BEGIN SELECT RAISE(ABORT,'late deeper proposal failure'); END"); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if _, err := k.PrepareProductNestedSplitProposal(ctx, r, ref); err == nil {
-				t.Fatal("invalid deeper admission accepted")
+			if _, err := k.PrepareProductNestedSplitProposal(ctx, r, ref); err == nil || mode != "late_failure" && !errors.Is(err, ErrProductSplitHeld) {
+				t.Fatal("invalid deeper admission accepted or failed for an unrelated reason", err)
 			}
 			var n int
 			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind IN ('product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request') AND json_extract(payload,'$.value.proposal_head_id')=?", head).Scan(&n); err != nil || n != 0 {
 				t.Fatal("partial deeper proposal", n, err)
 			}
+			if mode == "ancestor_stale" {
+				ancestorID := previous.Value.Scopes.Value.Request.ParentWorkItemID
+				source, err := k.ReadProductSplitChildSource(ctx, r.Target, ancestorID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, ancestorID, source.ID, source.Value.Facts); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.PrepareProductNestedSplitProposal(ctx, r, ref); err != nil {
+					t.Fatal("refreshing only the stale ancestor did not admit the same proposal at the same clock", err)
+				}
+			}
+
 		})
+	}
+	if t.Failed() {
+		return
 	}
 	saved, err := base.PrepareProductNestedSplitProposal(ctx, r, ref)
 	if err != nil {
@@ -188,5 +243,21 @@ func TestProductDeeperSplitProposalHonorsDefaultDepthTwo(t *testing.T) {
 	ref := ProductSplitParentScopeReference{ID: parent.ID, Digest: parent.Digest}
 	if _, err := k.PrepareProductNestedSplitProposal(context.Background(), r, ref); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("default depth admitted great-grandchildren", err)
+	}
+}
+
+func TestProductDeeperSplitProposalRejectsDifferentAncestorPolicy(t *testing.T) {
+	ctx := context.Background()
+	k, request, parent, previous := deeperSplitProposalFixture(t, 3, strings.Repeat("b", 64))
+	own, err := k.ReadProductSplitChildSource(ctx, request.Target, request.ParentWorkItemID)
+	if err != nil || own.Value.Status != "ready" || own.Value.Facts.PolicyDigest != parent.Value.SourcePolicyDigest {
+		t.Fatal("own policy fixture invalid", err)
+	}
+	ancestor, err := k.ReadProductSplitChildSource(ctx, request.Target, previous.Value.Scopes.Value.Request.ParentWorkItemID)
+	if err != nil || ancestor.Value.Status != "ready" || ancestor.Value.Facts.PolicyDigest == own.Value.Facts.PolicyDigest {
+		t.Fatal("ancestor policy fixture invalid", err)
+	}
+	if _, err := k.PrepareProductNestedSplitProposal(ctx, request, ProductSplitParentScopeReference{ID: parent.ID, Digest: parent.Digest}); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("different pinned ancestor policy admitted", err)
 	}
 }

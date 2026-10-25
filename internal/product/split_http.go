@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
@@ -51,35 +52,107 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 	if err != nil {
 		return "", "", err
 	}
+	var reads []func(context.Context) error
 	if job.Value.Ancestry != nil {
+		ids := []string{job.Value.Request.ParentWorkItemID}
+		if job.Value.Child.Value.Depth > 2 {
+			ids, err = k.ReadProductSplitSourceLineage(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID)
+			if err != nil {
+				return "", "", err
+			}
+		}
 		observer := SplitChildSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
-		update, acknowledged, err := observer.Observe(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID)
+		for _, id := range ids {
+			reads = append(reads, func(read context.Context) error {
+				update, acknowledged, err := observer.Observe(read, job.Value.Request.Target, id)
+				if err != nil {
+					return err
+				}
+				if !acknowledged || update.Snapshot.Value.Status != "ready" {
+					return storage.ErrProductSplitHeld
+				}
+				_, err = k.RequireProductSplitChildSource(read, job.Value.Request.Target, id, policy.Digest(), 5*time.Second)
+				return err
+			})
+		}
+	}
+	if err := runSplitSourceReads(ctx, reads); err != nil {
+		return "", "", err
+	}
+	sourceID, sourceDigest := "", ""
+	if w.Source != "direct" {
+		observer := IssueSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
+		if err := observer.Validate(); err != nil {
+			return "", "", err
+		}
+		// Keep the Wave Issue's existing immediate-GET/gate contract: unlike
+		// child sources its semantic snapshot has no replaceable CheckedAt.
+		budget := github.WithResourceReadBudget(ctx, 16<<20)
+		update, acknowledged, err := observer.observe(ctx, budget, &budgetResourceAPI{ResourceAPI: api}, w, 5*time.Second)
 		if err != nil {
 			return "", "", err
 		}
-		if !acknowledged || update.Snapshot.Value.Status != "ready" {
+		if !acknowledged || update.Hold != nil || update.Snapshot.Value.Status != "ready" {
 			return "", "", storage.ErrProductSplitHeld
 		}
-		if _, err := k.RequireProductSplitChildSource(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID, policy.Digest(), 5*time.Second); err != nil {
-			return "", "", err
-		}
+		sourceID, sourceDigest = update.Snapshot.ID, update.Snapshot.Digest
 	}
-	if w.Source == "direct" {
-		return "", "", nil
+	return sourceID, sourceDigest, nil
+}
+
+// Join every observer, including source saves, before activation or returning
+// an error. A failed/canceled read never leaves detached freshness updates.
+func runSplitSourceReads(ctx context.Context, reads []func(context.Context) error) error {
+	if len(reads) > 128 {
+		return storage.ErrProductSplitHeld
 	}
-	observer := IssueSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
-	if err := observer.Validate(); err != nil {
-		return "", "", err
+	if len(reads) == 1 {
+		return reads[0](ctx)
 	}
-	read := github.WithResourceReadBudget(ctx, 16<<20)
-	update, acknowledged, err := observer.observe(ctx, read, &budgetResourceAPI{ResourceAPI: api}, w, 5*time.Second)
-	if err != nil {
-		return "", "", err
+	work, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan func(context.Context) error, len(reads))
+	for _, read := range reads {
+		jobs <- read
 	}
-	if !acknowledged || update.Hold != nil || update.Snapshot.Value.Status != "ready" {
-		return "", "", storage.ErrProductSplitHeld
+	close(jobs)
+	results := make(chan error, len(reads))
+	var joined sync.WaitGroup
+	for i := 0; i < min(4, len(reads)); i++ {
+		joined.Add(1)
+		go func() {
+			defer joined.Done()
+			for read := range jobs {
+				if work.Err() != nil {
+					return
+				}
+				err := read(work)
+				results <- err
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}()
 	}
-	return update.Snapshot.ID, update.Snapshot.Digest, nil
+	joined.Wait()
+	close(results)
+	count := 0
+	var failed error
+	for err := range results {
+		count++
+		failed = errors.Join(failed, err)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if failed != nil {
+		return failed
+	}
+	if count != len(reads) {
+		return storage.ErrProductSplitHeld
+	}
+	return nil
 }
 
 // The wrapper performs bounded read-only identity/source GETs before the
