@@ -56,6 +56,21 @@ func (g KernelSourceGate) Check(ctx context.Context, saved storage.ProductTarget
 			return err
 		}
 	}
+	return g.checkRoot(ctx, saved)
+}
+
+func (g KernelSourceGate) checkRoot(ctx context.Context, saved storage.ProductTargetSnapshot) error {
+	if g.Store == nil {
+		return storage.ErrProductQualityHeld
+	}
+	p := saved.Value
+	w, err := g.Store.Wave(ctx, p.Target.WaveID)
+	if err != nil {
+		return err
+	}
+	if w.Target() != p.Target {
+		return storage.ErrProductQualityHeld
+	}
 	if w.Source == "direct" {
 		return nil
 	}
