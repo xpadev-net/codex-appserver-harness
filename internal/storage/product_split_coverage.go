@@ -111,20 +111,50 @@ func aggregateProductSplitCoverage(groups []ProductSplitCoverage, facts map[stri
 	covered := map[string]bool{}
 	for gi := range groups {
 		group := &groups[gi]
-		expected, complete := map[string]int{}, map[string]int{}
+		type parts struct {
+			count    int
+			whole    bool
+			valid    bool
+			expected map[string]bool
+			merged   map[string]bool
+		}
+		obligations := map[string]*parts{}
 		for ci := range group.Children {
 			child := &group.Children[ci]
 			fact, ok := facts[child.WorkItemID]
-			child.Merged = ok && fact.RegistrationDigest == child.RegistrationDigest && fact.SplitScopeDigest == child.ScopeDigest && sameStringSet(fact.LocalCriteria, child.LocalCriteria)
+			child.Merged = ok && fact.WorkItemID == child.WorkItemID && fact.RegistrationDigest == child.RegistrationDigest && fact.SplitScopeDigest == child.ScopeDigest && sameStringSet(fact.LocalCriteria, child.LocalCriteria)
 			for _, mapping := range child.Coverage {
-				expected[mapping.ParentCriterion]++
+				obligation := obligations[mapping.ParentCriterion]
+				if obligation == nil {
+					obligation = &parts{valid: true, expected: map[string]bool{}, merged: map[string]bool{}}
+					obligations[mapping.ParentCriterion] = obligation
+				}
+				if mapping.PartID == "" {
+					if len(obligation.expected) > 0 || mapping.PartCount != 0 {
+						obligation.valid = false
+					}
+					obligation.whole = true
+				} else {
+					if obligation.whole || mapping.PartCount < 2 || obligation.count != 0 && obligation.count != mapping.PartCount {
+						obligation.valid = false
+					}
+					obligation.count = mapping.PartCount
+				}
+				if obligation.expected[mapping.PartID] {
+					obligation.valid = false
+				}
+				obligation.expected[mapping.PartID] = true
 				if child.Merged && slices.Contains(fact.LocalCriteria, mapping.ChildCriterion) {
-					complete[mapping.ParentCriterion]++
+					obligation.merged[mapping.PartID] = true
 				}
 			}
 		}
-		for criterion, count := range expected {
-			if count > 0 && complete[criterion] == count {
+		for criterion, obligation := range obligations {
+			expected := obligation.count
+			if obligation.whole {
+				expected = 1
+			}
+			if obligation.valid && expected > 0 && len(obligation.expected) == expected && len(obligation.merged) == expected {
 				covered[criterion] = true
 			}
 		}

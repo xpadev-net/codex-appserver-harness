@@ -312,3 +312,45 @@ func TestProductSplitCoverageLocalAuditChecksSealedVerifierScope(t *testing.T) {
 		})
 	}
 }
+
+func TestProductSplitCoverageReducerRequiresDistinctDeclaredPartIDs(t *testing.T) {
+	ctx := context.Background()
+	k, w, _ := splitScopeInputFixture(t)
+	ledger, err := k.ProductCoverage(ctx, w.Target())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := json.Marshal(ledger.Value.Splits)
+	for _, mode := range []string{"all_parts", "missing_child", "duplicate_part", "missing_declared_part", "count_mismatch", "whole_overlap"} {
+		t.Run(mode, func(t *testing.T) {
+			var groups []ProductSplitCoverage
+			if err := json.Unmarshal(original, &groups); err != nil {
+				t.Fatal(err)
+			}
+			facts := map[string]ProductCoverageFact{}
+			for _, child := range groups[0].Children {
+				facts[child.WorkItemID] = ProductCoverageFact{WorkItemID: child.WorkItemID, RegistrationDigest: child.RegistrationDigest, SplitScopeDigest: child.ScopeDigest, LocalCriteria: slices.Clone(child.LocalCriteria)}
+			}
+			second := &groups[0].Children[1].Coverage[0]
+			switch mode {
+			case "missing_child":
+				delete(facts, groups[0].Children[1].WorkItemID)
+			case "duplicate_part":
+				second.PartID = groups[0].Children[0].Coverage[0].PartID
+			case "missing_declared_part":
+				for i := range groups[0].Children {
+					groups[0].Children[i].Coverage[0].PartCount = 3
+				}
+			case "count_mismatch":
+				second.PartCount = 3
+			case "whole_overlap":
+				second.PartID = ""
+				second.PartCount = 0
+			}
+			covered := aggregateProductSplitCoverage(groups, facts)
+			if covered["AC"] != (mode == "all_parts") {
+				t.Fatal("declared distinct part set was not enforced", mode, covered)
+			}
+		})
+	}
+}
