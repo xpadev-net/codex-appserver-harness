@@ -304,3 +304,35 @@ func TestSplitChildSourceScanIsolatesCorruptionAndFailedCommitAndRejectsStaleCal
 		t.Fatal("concurrent prohibition lost", current, err)
 	}
 }
+
+type delayedSplitSourceBookendAPI struct {
+	ResourceAPI
+	afterGET func(string)
+}
+
+func (a delayedSplitSourceBookendAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
+	raw, err := a.ResourceAPI.ResourceGET(ctx, path)
+	a.afterGET(path)
+	return raw, err
+}
+
+func TestSplitChildSourceObserverPreservesIssueReadTimeAcrossSlowRepositoryBookend(t *testing.T) {
+	o, api, saved, _ := splitChildSourceFixture(t)
+	readAt := time.Now().Add(time.Minute).UTC().Round(0)
+	clock := readAt
+	o.Store.Now = func() time.Time { return clock }
+	o.API = delayedSplitSourceBookendAPI{ResourceAPI: api, afterGET: func(path string) {
+		if path == "" && len(api.calls) == 4 {
+			clock = clock.Add(10 * time.Second)
+		}
+	}}
+	target := saved.Value.Request.Target
+	id := saved.Value.Registrations[0].Value.Definition.ID
+	update, ack, err := o.Observe(context.Background(), target, id)
+	if err != nil || !ack || update.Snapshot.Value.Status != "ready" || !update.Snapshot.CheckedAt.Equal(readAt) {
+		t.Fatal("repository bookend renewed the Issue GET timestamp", update, ack, err)
+	}
+	if _, err := o.Store.RequireProductSplitChildSource(context.Background(), target, id, o.Policy.Digest(), 5*time.Second); !errors.Is(err, storage.ErrProductSplitHeld) {
+		t.Fatal("delayed bookend was treated as a fresh Issue GET", err)
+	}
+}

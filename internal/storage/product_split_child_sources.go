@@ -15,6 +15,7 @@ const maxSplitSourceVersions = 1024
 // The compact reference preserves negative creation/budget/source witnesses;
 // authoritative reads still require the complete registered local binding.
 type splitChildSourceReference struct {
+	AncestorSet       *ProductSplitAncestorWitnesses       `json:"ancestor_set,omitempty"`
 	Request           ProductSplitChildPlanRequest         `json:"request"`
 	ParentHeadID      string                               `json:"parent_head_id"`
 	BindingID         string                               `json:"binding_id"`
@@ -83,6 +84,26 @@ func splitSourceReference(binding ProductSplitChildScopeBinding) splitChildSourc
 	return splitChildSourceReference{Request: v.Request, ParentHeadID: v.ParentHeadID, BindingID: binding.ID, BindingDigest: binding.Digest, ScopeDigest: v.ScopeDigest, SourceID: v.SourceID, Child: splitChildSourceChild{ID: v.Child.ID, Value: splitChildSourceWork{WorkItemID: v.Child.Value.WorkItemID}}, Issue: splitChildSourceIssue{RepositoryID: v.Issue.RepositoryID, ID: v.Issue.ID, Number: v.Issue.Number}, InitialCreationID: v.InitialCreationID, CreationID: v.CreationID, Creations: append([]ProductSplitChildCreationReference{}, v.Creations...)}
 }
 
+// Callers authenticate the complete binding first. This inexpensive current
+// registration comparison carries its exact negative witnesses into every source
+// copy; the compact set never substitutes for canonical binding authority.
+func splitSourceReferenceTx(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding) (splitChildSourceReference, error) {
+	out := splitSourceReference(binding)
+	if binding.Value.Child.Value.Depth < 2 {
+		return out, nil
+	}
+	registration, err := loadProductWorkItemRegistration(ctx, tx, binding.Value.Child.Value.WorkItemID)
+	if err != nil {
+		return out, splitEvidenceErr(err)
+	}
+	ref := registration.Value.SplitScope
+	if ref == nil || ref.AncestorSet == nil || ref.BindingID != binding.ID || ref.BindingDigest != binding.Digest || ref.Request != binding.Value.Request || ref.SourceID != binding.Value.SourceID || ref.ParentHeadID != binding.Value.ParentHeadID || !reflect.DeepEqual(ref.Creations, binding.Value.Creations) {
+		return out, ErrProductSplitHeld
+	}
+	out.AncestorSet = ref.AncestorSet
+	return out, nil
+}
+
 func (facts ProductSplitChildSourceFacts) validate() error {
 	if facts.RepositoryID < 1 || facts.IssueID < 1 || facts.IssueNumber < 1 || !validSourceDigest(facts.PolicyDigest) {
 		return ErrProductSplitHeld
@@ -132,9 +153,6 @@ func splitChildSourceBindingTx(ctx context.Context, tx *sql.Tx, target contract.
 	if err != nil {
 		return ProductSplitChildScopeBinding{}, splitEvidenceErr(err)
 	}
-	if registration.Value.SplitScope != nil && registration.Value.SplitScope.AncestorSet != nil {
-		return ProductSplitChildScopeBinding{}, ErrProductSplitHeld
-	}
 	binding, err := productSplitChildScopeTx(ctx, tx, w, registration)
 	if err != nil {
 		return ProductSplitChildScopeBinding{}, err
@@ -155,7 +173,11 @@ func loadSplitChildSourcePolicy(ctx context.Context, tx *sql.Tx, binding Product
 	if err != nil {
 		return saved, err
 	}
-	if saved.Digest != digest || !validSourceDigest(saved.Value.PolicyDigest) || !reflect.DeepEqual(saved.Value.splitChildSourceReference, splitSourceReference(binding)) {
+	reference, err := splitSourceReferenceTx(ctx, tx, binding)
+	if err != nil {
+		return saved, err
+	}
+	if saved.Digest != digest || !validSourceDigest(saved.Value.PolicyDigest) || !reflect.DeepEqual(saved.Value.splitChildSourceReference, reference) {
 		return saved, ErrProductSplitHeld
 	}
 	if err := taskEvidenceRecord(ctx, tx, "product_split_child_source_policy_history", id, &history); err != nil {
@@ -192,7 +214,7 @@ func loadSplitChildSource(ctx context.Context, tx *sql.Tx, binding ProductSplitC
 	if err != nil {
 		return saved, err
 	}
-	if digest != saved.Digest || saved.Version < 1 || saved.Version > maxSplitSourceVersions || saved.ID != structureID("split-child-source-", id, strconv.Itoa(saved.Version)+":"+digest) || saved.ObservedAt.IsZero() || saved.CheckedAt.Before(saved.ObservedAt) || !reflect.DeepEqual(saved.Value.splitChildSourceReference, splitSourceReference(binding)) || saved.Value.Facts.validate() != nil || saved.Value.Status != splitChildSourceStatus(binding, saved.Value.Facts, policy.Value.PolicyDigest) {
+	if digest != saved.Digest || saved.Version < 1 || saved.Version > maxSplitSourceVersions || saved.ID != structureID("split-child-source-", id, strconv.Itoa(saved.Version)+":"+digest) || saved.ObservedAt.IsZero() || saved.CheckedAt.Before(saved.ObservedAt) || !reflect.DeepEqual(saved.Value.splitChildSourceReference, policy.Value.splitChildSourceReference) || saved.Value.Facts.validate() != nil || saved.Value.Status != splitChildSourceStatus(binding, saved.Value.Facts, policy.Value.PolicyDigest) {
 		return saved, ErrProductSplitHeld
 	}
 	if err := taskEvidenceRecord(ctx, tx, "product_split_child_source_history", saved.ID, &history); err != nil {
@@ -241,6 +263,17 @@ func (k *KernelStore) ReadProductSplitChildSourcePolicy(ctx context.Context, tar
 // the prior snapshot ID (including its version), not its semantic digest.
 // It changes no Wave hold, budgets, Tasks or execution authority.
 func (k *KernelStore) ObserveProductSplitChildSource(ctx context.Context, target contract.Target, workID, expectedSnapshotID string, facts ProductSplitChildSourceFacts) (ProductSplitChildSourceUpdate, error) {
+	return k.ObserveProductSplitChildSourceAt(ctx, target, workID, expectedSnapshotID, facts, k.clock())
+}
+
+// ObserveProductSplitChildSourceAt preserves the trusted host's GET completion
+// time across potentially expensive canonical proof validation. Saving a receipt
+// cannot renew the age of an earlier external observation.
+func (k *KernelStore) ObserveProductSplitChildSourceAt(ctx context.Context, target contract.Target, workID, expectedSnapshotID string, facts ProductSplitChildSourceFacts, readAt time.Time) (ProductSplitChildSourceUpdate, error) {
+	readAt = readAt.UTC().Round(0)
+	if readAt.IsZero() || readAt.After(k.clock()) {
+		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
+	}
 	if err := facts.validate(); err != nil {
 		return ProductSplitChildSourceUpdate{}, err
 	}
@@ -261,9 +294,13 @@ func (k *KernelStore) ObserveProductSplitChildSource(ctx context.Context, target
 	if priorErr == nil && expectedSnapshotID != prior.ID || priorErr != nil && expectedSnapshotID != "" {
 		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
 	}
-	now := k.clock()
+	now := readAt
 	if now.Before(binding.Value.CreatedAt) || priorErr == nil && now.Before(prior.CheckedAt) {
 		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
+	}
+	reference, err := splitSourceReferenceTx(ctx, tx, binding)
+	if err != nil {
+		return ProductSplitChildSourceUpdate{}, err
 	}
 	pin := facts.PolicyDigest
 	if priorErr == nil {
@@ -273,7 +310,7 @@ func (k *KernelStore) ObserveProductSplitChildSource(ctx context.Context, target
 		}
 		pin = policy.Value.PolicyDigest
 	} else {
-		value := splitChildSourcePolicyValue{splitChildSourceReference: splitSourceReference(binding), PolicyDigest: pin}
+		value := splitChildSourcePolicyValue{splitChildSourceReference: reference, PolicyDigest: pin}
 		digest, err := contentDigest(value)
 		if err != nil {
 			return ProductSplitChildSourceUpdate{}, err
@@ -284,7 +321,7 @@ func (k *KernelStore) ObserveProductSplitChildSource(ctx context.Context, target
 			}
 		}
 	}
-	value := ProductSplitChildSourceValue{splitChildSourceReference: splitSourceReference(binding), Facts: facts, Status: splitChildSourceStatus(binding, facts, pin)}
+	value := ProductSplitChildSourceValue{splitChildSourceReference: reference, Facts: facts, Status: splitChildSourceStatus(binding, facts, pin)}
 	digest, err := contentDigest(value)
 	if err != nil {
 		return ProductSplitChildSourceUpdate{}, err

@@ -28,7 +28,7 @@ func TestSplitAncestorMalformedGroupsHoldOnlyTheirOwningWave(t *testing.T) {
 			case "invalid_element":
 				groups = []any{"broken"}
 			}
-			kinds := []string{"product_work_item_registration", "product_work_item_registration_version", "wave_work_item", "product_nested_split_registrations", "product_nested_split_registrations_history", "product_nested_split_registrations_admission"}
+			kinds := []string{"product_work_item_registration", "product_work_item_registration_version", "wave_work_item", "product_nested_split_registrations", "product_nested_split_registrations_history", "product_nested_split_registrations_admission", "product_split_child_source", "product_split_child_source_history", "product_split_child_source_policy", "product_split_child_source_policy_history"}
 			for _, kind := range kinds {
 				payload := map[string]any{"value": map[string]any{"wave_id": "foreign-wave", "definition": map[string]any{"id": "foreign-work"}, "request": map[string]any{"target": map[string]any{"wave_id": "foreign-wave"}, "proposal_id": "foreign-proposal"}, "parent_head_id": "foreign-head", "split_scope": map[string]any{"ancestor_set": map[string]any{"value": map[string]any{"groups": groups}}}, "ancestor_set": map[string]any{"value": map[string]any{"groups": groups}}}, "target": map[string]any{"wave_id": "foreign-wave"}, "split_scope": map[string]any{"ancestor_set": map[string]any{"value": map[string]any{"groups": groups}}}}
 				raw, err := json.Marshal(payload)

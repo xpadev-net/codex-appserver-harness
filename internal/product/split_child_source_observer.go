@@ -63,6 +63,11 @@ func (o SplitChildSourceObserver) Observe(parent context.Context, target contrac
 }
 
 func (o SplitChildSourceObserver) observe(parent, readParent context.Context, api ResourceAPI, target contract.Target, workID string, timeout time.Duration) (storage.ProductSplitChildSourceUpdate, bool, error) {
+	clock := time.Now
+	if o.Store.Now != nil {
+		clock = o.Store.Now
+	}
+	readAt := clock()
 	binding, err := o.Store.ReadProductSplitChildScope(readParent, target, workID)
 	if err != nil {
 		return storage.ProductSplitChildSourceUpdate{}, false, err
@@ -98,6 +103,7 @@ func (o SplitChildSourceObserver) observe(parent, readParent context.Context, ap
 			issue, readErr = readSplitChildSourceIssue(readCtx, api, v.Issue.Number)
 			if readErr == nil {
 				current, readErr = readSplitChildSourceIssue(readCtx, api, v.Issue.Number)
+				readAt = clock()
 			}
 			if readErr == nil && !reflect.DeepEqual(issue, current) {
 				readErr = storage.ErrProductSplitHeld
@@ -129,9 +135,9 @@ func (o SplitChildSourceObserver) observe(parent, readParent context.Context, ap
 	if parent.Err() != nil {
 		return storage.ProductSplitChildSourceUpdate{}, false, parent.Err()
 	}
-	save, stop := context.WithTimeout(parent, time.Second)
+	save, stop := context.WithTimeout(parent, time.Minute)
 	defer stop()
-	update, saveErr := o.Store.ObserveProductSplitChildSource(save, target, workID, expected, facts)
+	update, saveErr := o.Store.ObserveProductSplitChildSourceAt(save, target, workID, expected, facts, readAt)
 	return update, saveErr == nil, errors.Join(readErr, saveErr)
 }
 

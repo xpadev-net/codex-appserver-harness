@@ -34,7 +34,7 @@ func splitScopeWitnessSQL(query string) string {
  WHEN 'product_work_item_registration_version' THEN json_extract(payload,'$.value.split_scope.ancestor_set')
  WHEN 'wave_work_item' THEN json_extract(payload,'$.split_scope.ancestor_set')
  ELSE json_extract(payload,'$.value.ancestor_set') END ELSE NULL END AS ancestor_set
- FROM main.records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission')
+ FROM main.records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')
  ), split_scope_witnesses AS NOT MATERIALIZED (
  SELECT rowid,kind,id,work_item_id,payload FROM main.records
  UNION ALL SELECT rowid,'product_nested_split_allocation_ledger',operation_key,wave_id,payload

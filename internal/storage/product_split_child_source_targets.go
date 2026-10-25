@@ -34,8 +34,8 @@ func (k *KernelStore) ProductSplitChildSourceTargets(ctx context.Context, reposi
 		return page, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT rowid,kind,id FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission')
- AND CASE WHEN json_valid(payload) THEN coalesce(json_extract(payload,'$.value.issue.repository_id')=?,1) ELSE 1 END
+	rows, err := tx.QueryContext(ctx, `SELECT rowid,kind,id FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission')
+ AND CASE WHEN kind IN ('product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission') THEN 1 WHEN json_valid(payload) THEN coalesce(json_extract(payload,'$.value.issue.repository_id')=?,1) ELSE 1 END
  AND 'child-source:'||printf('%020d',rowid)>? ORDER BY rowid LIMIT ?`, repositoryID, after, limit+1)
 	if err != nil {
 		return page, err
@@ -65,7 +65,32 @@ func (k *KernelStore) ProductSplitChildSourceTargets(ctx context.Context, reposi
 	for _, e := range found {
 		target := ProductSplitChildSourceTarget{Cursor: fmt.Sprintf("child-source:%020d", e.row)}
 		var binding ProductSplitChildScopeBinding
-		err := taskEvidenceRecord(ctx, tx, e.kind, e.id, &binding)
+		var err error
+		switch e.kind {
+		case "product_nested_split_child_scope", "product_nested_split_child_scope_history", "product_nested_split_child_scope_admission":
+			var envelope ProductNestedSplitChildScopes
+			err = taskEvidenceRecord(ctx, tx, e.kind, e.id, &envelope)
+			if err == nil {
+				matched := false
+				for _, child := range envelope.Value.Scopes.Value.Children {
+					if child.Value.Child.Value.WorkItemID == e.id || child.ID == e.id {
+						if matched {
+							err = ErrTaskEvidence
+							break
+						}
+						binding, matched = child, true
+					}
+				}
+				if !matched {
+					err = ErrTaskEvidence
+				}
+			}
+			if err == nil && binding.Value.Issue.RepositoryID != repositoryID {
+				continue
+			}
+		default:
+			err = taskEvidenceRecord(ctx, tx, e.kind, e.id, &binding)
+		}
 		if err != nil && !errors.Is(err, ErrTaskEvidence) {
 			return page, err
 		}
