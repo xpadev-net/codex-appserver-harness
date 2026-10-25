@@ -141,6 +141,19 @@ func loadSplitIntentRegistrationTx(ctx context.Context, tx *sql.Tx, proposal Pro
 // It is not a send fence, budget reservation or child registration permission.
 func loadProductSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildPlan, error) {
 	var plan ProductSplitChildPlan
+	// Typed nested evidence selects its own namespace before decoding any
+	// legacy set. A stray legacy record cannot shadow an authenticated plan.
+	var nested bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_children' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?)", r.ProposalID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})).Scan(&nested); err != nil {
+		return plan, err
+	}
+	if nested {
+		saved, err := loadNestedSplitChildPlan(ctx, tx, r)
+		if err != nil {
+			return plan, err
+		}
+		return saved.Value.Plan, nil
+	}
 	var set, history ProductSplitChildSet
 	err := taskEvidenceRecord(ctx, tx, "product_split_children", r.ProposalID, &set)
 	if errors.Is(err, sql.ErrNoRows) {

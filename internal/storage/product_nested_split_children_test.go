@@ -236,3 +236,24 @@ func TestProductNestedSplitChildPlanEachWitnessAlonePreservesAllAncestorSiblings
 		})
 	}
 }
+
+func TestProductNestedSplitChildPlanTypedEvidencePrecedesUnrelatedLegacySet(t *testing.T) {
+	ctx := context.Background()
+	k, r, saved := nestedChildPlanFixture(t)
+	// This record belongs to a different proposal; its key cannot turn it into
+	// the authoritative representation of the explicitly nested proposal.
+	unrelated := ProductSplitChildSet{ID: "legacy-other", Value: ProductSplitChildSetValue{Request: ProductSplitChildPlanRequest{Target: r.Target, ParentWorkItemID: "other", ProposalID: "other", ProposalDigest: "other"}}}
+	if err := k.Put(ctx, "product_split_children", r.ProposalID, r.Target.WaveID, unrelated); err != nil {
+		t.Fatal(err)
+	}
+	got, err := k.ReadProductSplitChildPlan(ctx, r)
+	if err != nil || !reflect.DeepEqual(got, saved.Value.Plan) {
+		t.Fatal("unrelated legacy representation shadowed nested authority", got, err)
+	}
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_nested_split_child_intent_history' AND id=?", saved.Value.Plan.Children[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReadProductSplitChildPlan(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("legacy shadow filled missing nested proof", err)
+	}
+}
