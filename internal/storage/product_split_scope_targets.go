@@ -12,9 +12,9 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 	var id string
 	var err error
 	switch kind {
-	case "product_nested_split_allocation_ledger":
+	case "product_nested_split_allocation_ledger", "product_nested_split_creation_ancestor", "product_nested_split_retry_ancestor":
 		var raw []byte
-		err = q.QueryRowContext(ctx, "SELECT payload FROM kernel_budget_ledger WHERE kind='split_children' AND operation_key=?", key).Scan(&raw)
+		err = q.QueryRowContext(ctx, splitScopeWitnessSQL("SELECT payload FROM split_scope_witnesses WHERE kind=? AND id=?"), kind, key).Scan(&raw)
 		if err == nil {
 			var saved ProductNestedSplitAllocation
 			if decodeErr := json.Unmarshal(raw, &saved); decodeErr != nil {

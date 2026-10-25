@@ -10,7 +10,7 @@ import (
 func TestSplitCreationReconciliationDiscoveryRetainsOpaqueWitnessesAndSkipsBadResource(t *testing.T) {
 	ctx := context.Background()
 	k, _, r, job := splitCreationFixture(t)
-	resource := splitCreatedResource{job.ID, r.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, 101}
+	resource := splitCreatedResource{nil, job.ID, r.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, 101}
 	if err := k.Put(ctx, "product_split_created_resource", "github:17:issue:11", r.Target.WaveID, resource); err != nil {
 		t.Fatal(err)
 	}

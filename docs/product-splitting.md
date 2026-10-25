@@ -242,7 +242,7 @@ PrepareProductNestedSplitProposal は、host が保存済み ParentScope の ID/
 
 root と再分割の operation key は Wave 内で共有し、同じ key の別用途への再利用、固定済み head の本文変更、欠落証拠の自動再作成を拒否する。既存の proposal reader は元 scope を検査して専用 envelope を返し、reopen/pause の exact replay と方向修正後の失効を区別する。root の保存形式は維持する。
 
-通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの intent は後述の全祖先 envelope でのみ保存し、割当は後述の祖先証拠付き形式だけで許可し、作成 journal・Issue 送信は引き続き保留する。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
+通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの intent は後述の全祖先 envelope でのみ保存し、割当は後述の祖先証拠付き形式だけで許可し、作成 journal・Issue 送信は後述の祖先付き記録と own source fence の下でのみ行う。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
 
 ## 全祖先証拠を保持した再分割の child plan / intent
 
@@ -250,7 +250,7 @@ root と再分割の operation key は Wave 内で共有し、同じ key の別�
 
 local coverage、元 Wave の ParentCriteria、保存済み depth + 1、安定した intent/WorkItem ID を維持する。既知の集合・index・proposal・親証拠が欠けた場合は再生成せず、exact 復旧を必要とする。新規 intent は live な current target と fresh な own source を必要とし、reopen/pause の exact replay は新規保存や時刻/ID の変更をしない。旧 scope の plan は履歴として読めるが、新しい要求へ付け替えない。
 
-この metadata 保存では実行枠や追加予算を消費せず、Task・作成 journal・Issue を生成しない。孫の割当は次の専用 envelope で行い、送信は own source fence と作成 journal への祖先証拠の接続まで保留する。通常 root の既存形式は変更しない。
+この metadata 保存では実行枠や追加予算を消費せず、Task・作成 journal・Issue を生成しない。孫の割当は次の専用 envelope で行い、送信は次の作成 journal と own source fence に従う。通常 root の既存形式は変更しない。
 
 ## 全祖先証拠を保持した再分割の lifetime 枠予約
 
@@ -258,4 +258,14 @@ ReserveProductSplitChildren は再分割の全 plan・proposal・親証拠を認
 
 台帳だけが残る場合も負の証拠として扱い、祖先の全 sibling Issue の root 取込み、元の creation/retry の再作成、親の再実行、孫の再予約を拒否する。台帳を含む独立 witness を recovery work list に載せるが、失われた正式記録を自動復元する権限は与えない。新規予約は live target と fresh own source が必要で、監査 replay は旧 scope の値を保持する。
 
-SQLite の検査は枠上限・全件原子性・途中失敗 rollback・各証拠の欠落と exact 復旧・各 witness 単独残存・reopen/pause/方向修正を確認する。孫 Issue の送信、作成 journal、Task・model 実行、再帰登録・品質判定はまだ保留する。root の保存形式と既存の実行予算は維持する。
+SQLite の検査は枠上限・全件原子性・途中失敗 rollback・各証拠の欠落と exact 復旧・各 witness 単独残存・reopen/pause/方向修正を確認する。孫 Issue の作成は次の dedicated ancestry と source gate へ接続する。Task・model 実行、再帰登録・品質判定はまだ保留する。root の保存形式と既存の実行予算は維持する。
+
+## 孫 Issue の作成 journal と親 Issue の送信直前検査
+
+採用済みの再分割からの PrepareProductSplitCreate は、実在する完全な nested allocation と全祖先証拠を固定する。作成 head/event/history/admission、send gate/history、created resource、未送信 retry の記録と台帳はいずれも同じ ancestry を保持し、通常 root では optional field を省略して既存形式を保つ。正式読取では保存された ancestry を現在の実在する元証拠と照合し、sidecar の欠落を埋めない。
+
+作成記録や retry 台帳の一つだけが残った場合も、祖先の全 sibling source の root 取り込み・creation の再構成・既知 retry の返却を許可しない。負の witness の共通 SQL と bounded recovery work list は ancestry を参照するが、実行許可の代用にはしない。
+
+private HTTP spec は親となる子自身の保存済み source policy を必要とする。Wave が direct の場合も、実 HTTP helper はその子 Issue を repository/Issue の bookend GET で再取得する。send gate は5秒以内の ready snapshot の ID/digest を固定し、activation 時にも同じ snapshot と freshness を照合する。hold、closed、本文/identity の変更、古い source、変更後に本文だけ元へ戻す ABA は以前の gate を再利用できない。GitHub 起点の Wave では元の root source 検査も維持する。
+
+one-use activation、物理 process group の停止、停止後の GET 照合、unknown 時の非再送と未 activation 時だけの有界 retry は既存契約を維持する。送信前に source が不成立なら activation/POST を行わず、安全な abort として戻る場合がある。試験は SQLite、実 subprocess/process-group と deterministic gh transport を使い、実 GitHub への孫 Issue 作成や model の split E2E とは区別する。孫の全件登録・再帰 part coverage・Task/model 実行は後続の接続まで保留する。

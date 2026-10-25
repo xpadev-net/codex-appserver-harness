@@ -56,8 +56,9 @@ func TestProductNestedSplitAllocationReservesWholeSetAndRetainsLifetime(t *testi
 	if _, err := k.RegisterProductWorkItem(ctx, r.Target, "", ProductWorkItemDefinition{ID: "overflow-nested", Repository: "owner/repo", RepositoryID: 17, Criteria: []string{"AC"}}); err == nil {
 		t.Fatal("nested seats refunded")
 	}
-	if _, err := k.PrepareProductSplitCreate(ctx, r, plan.Value.Plan.Children[0].ID, "nested-owner"); !errors.Is(err, ErrProductSplitHeld) {
-		t.Fatal("allocation granted Issue send", err)
+	job, err := k.PrepareProductSplitCreate(ctx, r, plan.Value.Plan.Children[0].ID, "nested-owner")
+	if err != nil || job.State != "prepared" || job.HTTP != nil || !reflect.DeepEqual(job.Value.Ancestry, &envelope) {
+		t.Fatal("creation did not retain allocation without activation", err)
 	}
 	after, err := k.WaveOperationBudget(ctx, r.Target.WaveID)
 	if err != nil || !reflect.DeepEqual(before, after) {

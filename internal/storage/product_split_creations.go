@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,16 +17,17 @@ import (
 )
 
 type ProductSplitCreateValue struct {
-	Request          ProductSplitChildPlanRequest `json:"request"`
-	ParentHeadID     string                       `json:"parent_head_id"`
-	AllocationID     string                       `json:"allocation_id"`
-	AllocationDigest string                       `json:"allocation_digest"`
-	Child            ProductSplitChildIntent      `json:"child"`
-	OwnerID          string                       `json:"owner_id"`
-	CreatedAt        time.Time                    `json:"created_at"`
-	RetryOf          string                       `json:"retry_of,omitempty"`
-	RetryOfDigest    string                       `json:"retry_of_digest,omitempty"`
-	Attempt          int                          `json:"attempt,omitempty"`
+	Ancestry         *ProductNestedSplitAllocation `json:"ancestry,omitempty"`
+	Request          ProductSplitChildPlanRequest  `json:"request"`
+	ParentHeadID     string                        `json:"parent_head_id"`
+	AllocationID     string                        `json:"allocation_id"`
+	AllocationDigest string                        `json:"allocation_digest"`
+	Child            ProductSplitChildIntent       `json:"child"`
+	OwnerID          string                        `json:"owner_id"`
+	CreatedAt        time.Time                     `json:"created_at"`
+	RetryOf          string                        `json:"retry_of,omitempty"`
+	RetryOfDigest    string                        `json:"retry_of_digest,omitempty"`
+	Attempt          int                           `json:"attempt,omitempty"`
 }
 type ProductSplitCreateOwner struct {
 	GateDigest  string           `json:"gate_digest"`
@@ -51,11 +53,12 @@ type ProductSplitCreatedIssue struct {
 	ObservedAt    time.Time `json:"observed_at"`
 }
 type splitCreatedResource struct {
-	CreationID   string `json:"creation_id"`
-	ProposalID   string `json:"proposal_id"`
-	ParentHeadID string `json:"parent_head_id"`
-	ChildID      string `json:"child_id"`
-	IssueID      int64  `json:"issue_id"`
+	Ancestry     *ProductNestedSplitAllocation `json:"ancestry,omitempty"`
+	CreationID   string                        `json:"creation_id"`
+	ProposalID   string                        `json:"proposal_id"`
+	ParentHeadID string                        `json:"parent_head_id"`
+	ChildID      string                        `json:"child_id"`
+	IssueID      int64                         `json:"issue_id"`
 }
 type ProductSplitCreate struct {
 	ID             string                    `json:"id"`
@@ -75,10 +78,11 @@ type splitCreateRecord struct {
 	Digest string             `json:"digest"`
 }
 type splitCreateAdmission struct {
-	ProposalID   string `json:"proposal_id"`
-	ParentHeadID string `json:"parent_head_id"`
-	ChildID      string `json:"child_id"`
-	Digest       string `json:"digest"`
+	Ancestry     *ProductNestedSplitAllocation `json:"ancestry,omitempty"`
+	ProposalID   string                        `json:"proposal_id"`
+	ParentHeadID string                        `json:"parent_head_id"`
+	ChildID      string                        `json:"child_id"`
+	Digest       string                        `json:"digest"`
 }
 type ProductSplitCreateClaim struct {
 	Creation ProductSplitCreate `json:"creation"`
@@ -112,6 +116,13 @@ func saveSplitCreateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, 
 		return job, err
 	}
 	record := splitCreateRecord{job, digest}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return job, err
+	}
+	if len(raw) > 16<<20 {
+		return job, ErrProductSplitHeld
+	}
 	if err := kernelRecordTx(ctx, tx, "product_split_create", job.ID, job.Value.Request.Target.WaveID, record); err != nil {
 		return job, err
 	}
@@ -177,7 +188,7 @@ func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int)
 	if err := taskEvidenceRecord(ctx, tx, "product_split_create_admission", id, &admission); err != nil {
 		return job, splitEvidenceErr(err)
 	}
-	if !reflect.DeepEqual(original, job.Value) || admission != (splitCreateAdmission{job.Value.Request.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, job.Digest}) {
+	if !reflect.DeepEqual(original, job.Value) || !reflect.DeepEqual(admission, splitCreateAdmission{job.Value.Ancestry, job.Value.Request.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, job.Digest}) {
 		return job, ErrProductSplitHeld
 	}
 	// The complete bounded chain, including its current tail, is required.
@@ -227,6 +238,13 @@ func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int)
 	if allocation.ID != job.Value.AllocationID || allocation.Digest != job.Value.AllocationDigest || allocation.Value.ParentHeadID != job.Value.ParentHeadID {
 		return job, ErrProductSplitHeld
 	}
+	ancestry, err := loadSplitCreationAncestry(ctx, tx, job.Value.Request)
+	if err != nil {
+		return job, err
+	}
+	if !reflect.DeepEqual(ancestry, job.Value.Ancestry) {
+		return job, ErrProductSplitHeld
+	}
 	plan, err := loadProductSplitChildPlan(ctx, tx, job.Value.Request)
 	if err != nil {
 		return job, splitEvidenceErr(err)
@@ -261,7 +279,7 @@ func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int)
 		if err := taskEvidenceRecord(ctx, tx, "product_split_created_resource", key, &resource); err != nil {
 			return job, splitEvidenceErr(err)
 		}
-		if resource != (splitCreatedResource{job.ID, job.Value.Request.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, observation.ID}) {
+		if !reflect.DeepEqual(resource, splitCreatedResource{job.Value.Ancestry, job.ID, job.Value.Request.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, observation.ID}) {
 			return job, ErrProductSplitHeld
 		}
 	}
@@ -332,11 +350,6 @@ func (k *KernelStore) splitCreatePreflightTx(ctx context.Context, tx *sql.Tx, r 
 		return err
 	}
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest {
-		return ErrProductSplitHeld
-	}
-	// Nested proposals/intents are metadata only until their parent Issue send
-	// fence and recursive registration/coverage adapters are connected.
-	if proposal.Value.ParentSplitScope != nil {
 		return ErrProductSplitHeld
 	}
 
@@ -423,7 +436,11 @@ func (k *KernelStore) prepareProductSplitCreateTx(ctx context.Context, tx *sql.T
 	if child.ID == "" {
 		return job, ErrProductSplitHeld
 	}
-	job = ProductSplitCreate{ID: splitCreateID(childID), Value: ProductSplitCreateValue{Request: r, ParentHeadID: plan.Set.Value.ParentHeadID, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Child: child, OwnerID: ownerID, CreatedAt: k.clock()}, State: "prepared"}
+	ancestry, err := loadSplitCreationAncestry(ctx, tx, r)
+	if err != nil {
+		return job, err
+	}
+	job = ProductSplitCreate{ID: splitCreateID(childID), Value: ProductSplitCreateValue{Ancestry: ancestry, Request: r, ParentHeadID: plan.Set.Value.ParentHeadID, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Child: child, OwnerID: ownerID, CreatedAt: k.clock()}, State: "prepared"}
 	job.Digest, err = contentDigest(job.Value)
 	if err != nil {
 		return job, err
@@ -435,7 +452,7 @@ func (k *KernelStore) prepareProductSplitCreateTx(ctx context.Context, tx *sql.T
 	if err := kernelRecordTx(ctx, tx, "product_split_create_history", job.ID, r.ProposalID, job.Value); err != nil {
 		return job, err
 	}
-	if err := kernelRecordTx(ctx, tx, "product_split_create_admission", job.ID, r.Target.WaveID, splitCreateAdmission{r.ProposalID, job.Value.ParentHeadID, childID, job.Digest}); err != nil {
+	if err := kernelRecordTx(ctx, tx, "product_split_create_admission", job.ID, r.Target.WaveID, splitCreateAdmission{job.Value.Ancestry, r.ProposalID, job.Value.ParentHeadID, childID, job.Digest}); err != nil {
 		return job, err
 	}
 	job, err = saveSplitCreateTx(ctx, tx, job, nil)
@@ -622,10 +639,10 @@ func (k *KernelStore) RecordProductSplitCreatedIssue(ctx context.Context, id str
 		return empty, ErrProductSplitHeld
 	}
 	key := fmt.Sprintf("github:%d:issue:%d", observation.RepositoryID, observation.Number)
-	resource := splitCreatedResource{job.ID, job.Value.Request.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, observation.ID}
+	resource := splitCreatedResource{job.Value.Ancestry, job.ID, job.Value.Request.ProposalID, job.Value.ParentHeadID, job.Value.Child.ID, observation.ID}
 	var existing splitCreatedResource
 	err = taskEvidenceRecord(ctx, tx, "product_split_created_resource", key, &existing)
-	if err == nil && existing != resource {
+	if err == nil && !reflect.DeepEqual(existing, resource) {
 		return empty, ErrProductSplitHeld
 	}
 	if err != nil && err != sql.ErrNoRows {

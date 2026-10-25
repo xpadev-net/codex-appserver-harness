@@ -51,6 +51,19 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 	if err != nil {
 		return "", "", err
 	}
+	if job.Value.Ancestry != nil {
+		observer := SplitChildSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
+		update, acknowledged, err := observer.Observe(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID)
+		if err != nil {
+			return "", "", err
+		}
+		if !acknowledged || update.Snapshot.Value.Status != "ready" {
+			return "", "", storage.ErrProductSplitHeld
+		}
+		if _, err := k.RequireProductSplitChildSource(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID, policy.Digest(), 5*time.Second); err != nil {
+			return "", "", err
+		}
+	}
 	if w.Source == "direct" {
 		return "", "", nil
 	}
