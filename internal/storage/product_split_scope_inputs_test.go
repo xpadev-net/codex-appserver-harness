@@ -249,6 +249,21 @@ func TestProductSplitScopeMetadataReopensPausedAndSurvivesReplanning(t *testing.
 	original := w.Target()
 	for i, key := range []string{"plan-local-scope-1", "plan-local-scope-2"} {
 		plan := storagePlanFixture()
+		for p := range plan.Phases {
+			phase := &plan.Phases[p]
+			phase.ID += "-" + key
+			for j := range phase.Tasks {
+				task := &phase.Tasks[j]
+				task.ID += "-" + key
+				task.Criteria = []string{"AC", "extra"}
+				for d := range task.DependsOn {
+					task.DependsOn[d].TaskID += "-" + key
+				}
+			}
+			for j := range phase.Completion.RequiredTaskIDs {
+				phase.Completion.RequiredTaskIDs[j] += "-" + key
+			}
+		}
 		if _, err := k.AdoptPlan(ctx, w.Target(), key, plan); err != nil {
 			t.Fatal(i, err)
 		}
