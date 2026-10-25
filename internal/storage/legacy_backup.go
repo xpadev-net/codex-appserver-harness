@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mattn/go-sqlite3"
+	"golang.org/x/sys/unix"
 )
 
 // LegacyBackup describes a self-contained, consistent v1 snapshot. It is not a
@@ -29,6 +30,12 @@ type LegacyBackup struct {
 // contents, through SQLite's backup API. It never opens the source for writes,
 // initializes it, or overwrites an existing destination or companion file.
 func BackupLegacyDatabase(ctx context.Context, source, destination string) (LegacyBackup, error) {
+	return backupLegacyDatabase(ctx, source, destination, nil)
+}
+
+// A synchronous checkpoint is used by fault-injection tests, never stored or
+// exposed to model tools. Production passes nil.
+func backupLegacyDatabase(ctx context.Context, source, destination string, checkpoint func(string) error) (LegacyBackup, error) {
 	var empty LegacyBackup
 	if err := ctx.Err(); err != nil {
 		return empty, err
@@ -39,6 +46,18 @@ func BackupLegacyDatabase(ctx context.Context, source, destination string) (Lega
 	if err := privateBackupPath(destination); err != nil {
 		return empty, err
 	}
+	unlock, err := lockLegacyBackupSource(source)
+	if err != nil {
+		return empty, err
+	}
+	defer unlock()
+	if filepath.Dir(destination) != filepath.Dir(source) {
+		release, err := lockLegacyBackupSource(destination)
+		if err != nil {
+			return empty, err
+		}
+		defer release()
+	}
 	sourceInfo, err := os.Lstat(source)
 	if err != nil {
 		return empty, err
@@ -46,16 +65,8 @@ func BackupLegacyDatabase(ctx context.Context, source, destination string) (Lega
 	if !privateBackupFile(sourceInfo) || source == destination {
 		return empty, errors.New("private same-user regular source and separate destination required")
 	}
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		if destination == source+suffix {
-			return empty, errors.New("backup cannot replace a source companion")
-		}
-		if _, err := os.Lstat(destination + suffix); !os.IsNotExist(err) {
-			if err != nil {
-				return empty, err
-			}
-			return empty, errors.New("backup destination has existing SQLite companions")
-		}
+	if err := vacantLegacyBackupDestination(source, destination); err != nil {
+		return empty, err
 	}
 	version, err := inspectDatabaseFile(source)
 	if err != nil {
@@ -64,7 +75,15 @@ func BackupLegacyDatabase(ctx context.Context, source, destination string) (Lega
 	if version != 1 {
 		return empty, errors.New("existing version-one database required for legacy backup")
 	}
-	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	// SQLite opens only this unique private staging name. Another host operation
+	// may reserve the public destination at any point without being overwritten.
+	stage, err := os.MkdirTemp(filepath.Dir(destination), ".legacy-backup-")
+	if err != nil {
+		return empty, err
+	}
+	defer os.RemoveAll(stage)
+	staged := filepath.Join(stage, "snapshot.db")
+	file, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 	if err != nil {
 		return empty, err
 	}
@@ -73,29 +92,20 @@ func BackupLegacyDatabase(ctx context.Context, source, destination string) (Lega
 	if err != nil {
 		return empty, err
 	}
-	complete := false
-	defer func() {
-		if !complete {
-			// Never remove a replacement installed by another host operation.
-			if current, err := os.Lstat(destination); err == nil && os.SameFile(current, owned) {
-				_ = os.Remove(destination)
-			}
-		}
-	}()
 	copyCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	if err := copyLegacySQLite(copyCtx, source, destination); err != nil {
+	if err := copyLegacySQLite(copyCtx, source, staged, sourceInfo, checkpoint); err != nil {
 		return empty, err
 	}
 	current, err := os.Lstat(source)
-	if err != nil || !os.SameFile(current, sourceInfo) {
+	if err != nil || !os.SameFile(current, sourceInfo) || !privateBackupFile(current) {
 		return empty, errors.New("source identity changed during backup")
 	}
-	current, err = os.Lstat(destination)
+	current, err = os.Lstat(staged)
 	if err != nil || !os.SameFile(current, owned) || !privateBackupFile(current) {
-		return empty, errors.New("backup destination identity changed")
+		return empty, errors.New("staged backup identity changed")
 	}
-	version, err = inspectDatabaseFileWith(destination, func(db *sql.DB, _ int) error {
+	version, err = inspectDatabaseFileWith(staged, func(db *sql.DB, _ int) error {
 		var result string
 		if err := db.QueryRowContext(copyCtx, "PRAGMA integrity_check").Scan(&result); err != nil {
 			return err
@@ -111,15 +121,28 @@ func BackupLegacyDatabase(ctx context.Context, source, destination string) (Lega
 	if version != 1 {
 		return empty, errors.New("source schema changed during backup")
 	}
-	if err := copyCtx.Err(); err != nil {
-		return empty, err
-	}
 	if err := file.Sync(); err != nil {
 		return empty, err
 	}
 	hash := sha256.New()
-	bytes, err := io.Copy(hash, legacyBackupReader{ctx: copyCtx, reader: file})
+	size, err := io.Copy(hash, legacyBackupReader{ctx: copyCtx, reader: file})
 	if err != nil {
+		return empty, err
+	}
+	if err := copyCtx.Err(); err != nil {
+		return empty, err
+	}
+	if err := vacantLegacyBackupDestination(source, destination); err != nil {
+		return empty, err
+	}
+	if checkpoint != nil {
+		if err := checkpoint("publish"); err != nil {
+			return empty, err
+		}
+	}
+	// Atomically publish without replacing another host's destination. SQLite
+	// never opens the public path, even when publication loses a race.
+	if err := unix.Renameat2(unix.AT_FDCWD, staged, unix.AT_FDCWD, destination, unix.RENAME_NOREPLACE); err != nil {
 		return empty, err
 	}
 	directory, err := os.Open(filepath.Dir(destination))
@@ -129,13 +152,50 @@ func BackupLegacyDatabase(ctx context.Context, source, destination string) (Lega
 	err = directory.Sync()
 	err = errors.Join(err, directory.Close())
 	if err != nil {
+		// Retain a fully verified snapshot after uncertain publication durability;
+		// a retry must inspect it explicitly rather than deleting or overwriting it.
 		return empty, err
 	}
-	if err := copyCtx.Err(); err != nil {
-		return empty, err
+	return LegacyBackup{SchemaVersion: version, SHA256: hex.EncodeToString(hash.Sum(nil)), Bytes: size}, nil
+}
+
+func vacantLegacyBackupDestination(source, destination string) error {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		if suffix != "" && destination == source+suffix {
+			return errors.New("backup cannot replace a source companion")
+		}
+		if _, err := os.Lstat(destination + suffix); !os.IsNotExist(err) {
+			if err != nil {
+				return err
+			}
+			return errors.New("backup destination or SQLite companion already exists")
+		}
 	}
-	complete = true
-	return LegacyBackup{SchemaVersion: version, SHA256: hex.EncodeToString(hash.Sum(nil)), Bytes: bytes}, nil
+	return nil
+}
+
+// All offline host operations that replace a legacy source path must hold the
+// same controller.lock as the legacy controller. The lock does not prove that
+// its model/runner processes or unknown remote operations have been reconciled.
+func lockLegacyBackupSource(source string) (func(), error) {
+	lock, err := os.OpenFile(filepath.Join(filepath.Dir(source), "controller.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	if err != nil {
+		return nil, err
+	}
+	info, err := lock.Stat()
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	if !privateBackupFile(info) {
+		lock.Close()
+		return nil, errors.New("private same-user controller lock required")
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, errors.New("stop the legacy controller before taking an offline snapshot")
+	}
+	return func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); _ = lock.Close() }, nil
 }
 
 type legacyBackupReader struct {
@@ -175,7 +235,7 @@ func privateBackupFile(info os.FileInfo) bool {
 	return info.Mode().IsRegular() && info.Mode().Perm()&0077 == 0 && ok && stat.Uid == uint32(os.Geteuid()) && stat.Nlink == 1
 }
 
-func copyLegacySQLite(ctx context.Context, source, destination string) error {
+func copyLegacySQLite(ctx context.Context, source, destination string, sourceInfo os.FileInfo, checkpoint func(string) error) error {
 	sourceDSN, err := sqliteFileDSN(source, "ro")
 	if err != nil {
 		return err
@@ -194,11 +254,21 @@ func copyLegacySQLite(ctx context.Context, source, destination string) error {
 		return err
 	}
 	defer dst.Close()
+	if checkpoint != nil {
+		if err := checkpoint("source_open"); err != nil {
+			return err
+		}
+	}
 	sourceConn, err := src.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer sourceConn.Close()
+	current, err := os.Lstat(source)
+	if err != nil || !os.SameFile(current, sourceInfo) || !privateBackupFile(current) {
+		return errors.New("source identity changed before copy")
+	}
+
 	destinationConn, err := dst.Conn(ctx)
 	if err != nil {
 		return err
@@ -216,6 +286,12 @@ func copyLegacySQLite(ctx context.Context, source, destination string) error {
 					return err
 				}
 				done, err := backup.Step(64)
+				if err == nil && checkpoint != nil {
+					if err := checkpoint("copy"); err != nil {
+						return err
+					}
+				}
+
 				if err != nil || done {
 					return err
 				}

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
 	"time"
 
@@ -237,48 +238,141 @@ func TestLegacyBackupRejectsUnsupportedOrUnsafeInputsWithoutOverwriting(t *testi
 	}
 }
 
-func TestLegacyBackupCancellationAfterWritingRemovesPartialAndAllowsFreshRetry(t *testing.T) {
+func TestLegacyBackupCancellationBetweenCopyStepsRemovesPartialAndAllowsFreshRetry(t *testing.T) {
 	s, source, destination := legacyBackupFixture(t)
 	if _, err := s.DB.Exec("INSERT INTO future_audit VALUES('large',zeroblob(16777216))"); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { _, err := BackupLegacyDatabase(ctx, source, destination); done <- err }()
-	tick := time.NewTicker(time.Millisecond)
-	defer tick.Stop()
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-waiting:
-	for {
-		select {
-		case err := <-done:
-			t.Fatal("backup completed before mid-copy cancellation", err)
-		case <-deadline.C:
-			t.Fatal("backup never started writing")
-		case <-tick.C:
-			if info, err := os.Stat(destination); err == nil && info.Size() > 0 {
-				cancel()
-				break waiting
-			}
+	checkpoints := 0
+	_, err := backupLegacyDatabase(ctx, source, destination, func(phase string) error {
+		if phase != "copy" {
+			return nil
 		}
-	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatal("copy cancellation lost", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("canceled backup did not stop")
+		checkpoints++
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || checkpoints != 1 {
+		t.Fatal("mid-copy cancellation lost", err, checkpoints)
 	}
 	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 		if _, err := os.Lstat(destination + suffix); !os.IsNotExist(err) {
 			t.Fatal("partial backup retained", suffix, err)
 		}
 	}
+	staged, err := filepath.Glob(filepath.Join(filepath.Dir(destination), ".legacy-backup-*"))
+	if err != nil || len(staged) != 0 {
+		t.Fatal("private staging retained", staged, err)
+	}
 	if _, err := BackupLegacyDatabase(context.Background(), source, destination); err != nil {
 		t.Fatal("fresh retry could not use cleaned destination", err)
+	}
+}
+
+func TestLegacyBackupNeverOverwritesDestinationReservedDuringCopy(t *testing.T) {
+	_, source, destination := legacyBackupFixture(t)
+	var retained []byte
+	_, err := backupLegacyDatabase(context.Background(), source, destination, func(phase string) error {
+		if phase != "publish" {
+			return nil
+		}
+		if retained != nil {
+			return nil
+		}
+		other, err := Open(destination)
+		if err != nil {
+			return err
+		}
+		if err := other.Put(context.Background(), "other_host", "retained", "other", "must not be overwritten"); err != nil {
+			other.Close()
+			return err
+		}
+		if err := other.Close(); err != nil {
+			return err
+		}
+		retained, err = os.ReadFile(destination)
+		return err
+	})
+	if err == nil || retained == nil {
+		t.Fatal("copy overwrote a concurrently reserved destination", err)
+	}
+	if !bytes.Equal(retained, backupFileBytes(t, destination)) {
+		t.Fatal("another host's database was modified")
+	}
+}
+
+func TestLegacyBackupRequiresLegacyControllerRootLock(t *testing.T) {
+	for _, which := range []string{"source", "destination"} {
+		t.Run(which, func(t *testing.T) {
+			_, source, destination := legacyBackupFixture(t)
+			path := source
+			if which == "destination" {
+				path = destination
+			}
+			lock, err := os.OpenFile(filepath.Join(filepath.Dir(path), "controller.lock"), os.O_CREATE|os.O_RDWR, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				t.Fatal(err)
+			}
+			defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+			if _, err := BackupLegacyDatabase(context.Background(), source, destination); err == nil {
+				t.Fatal("active controller root allowed snapshot")
+			}
+			if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+				t.Fatal("locked root created a destination", err)
+			}
+		})
+	}
+}
+
+func TestLegacyBackupSourceReplacementNeverPublishesSnapshot(t *testing.T) {
+	_, source, destination := legacyBackupFixture(t)
+	otherPath := kernelPath(t)
+	other, err := Open(otherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Put(context.Background(), "unapproved", "other", "other", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Close(); err != nil {
+		t.Fatal(err)
+	}
+	retained := backupFileBytes(t, otherPath)
+	replaced := false
+	original := source + ".original"
+	defer func() {
+		if replaced {
+			_ = os.Remove(source)
+			_ = os.Rename(original, source)
+		}
+	}()
+	_, err = backupLegacyDatabase(context.Background(), source, destination, func(phase string) error {
+		if phase != "copy" {
+			return nil
+		}
+		if replaced {
+			return nil
+		}
+		if err := os.Rename(source, original); err != nil {
+			return err
+		}
+		replaced = true
+		return os.Symlink(otherPath, source)
+	})
+	if err == nil || !replaced {
+		t.Fatal("source replacement was not rejected", err)
+	}
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		t.Fatal("unapproved snapshot was published", err)
+	}
+	if !bytes.Equal(retained, backupFileBytes(t, otherPath)) {
+		t.Fatal("replacement source changed")
 	}
 }
 
