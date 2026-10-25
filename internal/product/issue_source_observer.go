@@ -55,6 +55,11 @@ func (o IssueSourceObserver) Validate() error {
 // observe captures the authoritative observation CAS before performing GETs.
 // An unavailable or changing source is a saved prohibition, never ready data.
 func (o IssueSourceObserver) observe(parent, readParent context.Context, api ResourceAPI, w domain.Wave, timeout time.Duration) (storage.ProductSourceUpdate, bool, error) {
+	clock := time.Now
+	if o.Store.Now != nil {
+		clock = o.Store.Now
+	}
+	var readAt time.Time
 	number, err := strconv.Atoi(strings.TrimPrefix(w.SourceID, fmt.Sprintf("r%d-i", o.Policy.RepositoryID)))
 	if err != nil || number < 1 || w.SourceID != issueSourceID(o.Policy.RepositoryID, number) {
 		return storage.ProductSourceUpdate{}, false, errors.New("noncanonical Issue source identity")
@@ -65,7 +70,7 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	}
 	expected := ""
 	if priorErr == nil {
-		expected = prior.Digest
+		expected = prior.ID
 	}
 	facts := storage.ProductSourceFacts{RepositoryID: o.Policy.RepositoryID, IssueNumber: number, PolicyDigest: o.Policy.Digest(), Failure: "read_failed"}
 	var readErr error
@@ -89,6 +94,9 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 			if readErr == nil {
 				current, err := readSourceIssue(readCtx, api, number)
 				readErr = err
+				if readErr == nil {
+					readAt = clock().UTC().Round(0)
+				}
 				if readErr == nil && !reflect.DeepEqual(issue, current) {
 					readErr = errors.New("Issue changed during source observation")
 				}
@@ -116,9 +124,12 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	if parent.Err() != nil {
 		return storage.ProductSourceUpdate{}, false, parent.Err()
 	}
+	if !facts.Available {
+		readAt = time.Time{}
+	}
 	saveCtx, stop := context.WithTimeout(parent, time.Second)
 	defer stop()
-	update, saveErr := o.Store.ObserveProductSource(saveCtx, w.Target(), expected, facts)
+	update, saveErr := o.Store.ObserveProductSourceAt(saveCtx, w.Target(), expected, facts, readAt)
 	// ErrTaskEvidence can accompany a committed state_invalid prohibition (or
 	// its read-only retry). SQL/CAS/deadline failures return no acknowledgement.
 	acknowledged := saveErr == nil || (errors.Is(saveErr, storage.ErrTaskEvidence) && update.Hold != nil && update.Hold.Reason == "state_invalid")

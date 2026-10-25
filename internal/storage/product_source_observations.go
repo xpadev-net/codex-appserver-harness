@@ -246,6 +246,23 @@ func sameSourceHold(a, b *domain.WaveSourceHold) bool {
 // source prohibition; manual pause, directions, scope and acceptance stay owned
 // by their existing controllers. Source "ready" is not a quality approval.
 func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.Target, expected string, facts ProductSourceFacts) (ProductSourceUpdate, error) {
+	return k.observeProductSource(ctx, target, expected, facts, nil)
+}
+
+// ObserveProductSourceAt accepts the pre-read snapshot ID and the actual
+// completed observation time from the trusted host. Saving or reading source
+// metadata cannot renew that time. Unlike digest-only legacy replay, this
+// precondition fences semantic ABA and requires the complete current target.
+// Unavailable facts require a zero readAt and publish no successful-read header.
+func (k *KernelStore) ObserveProductSourceAt(ctx context.Context, target contract.Target, expectedID string, facts ProductSourceFacts, readAt time.Time) (ProductSourceUpdate, error) {
+	readAt = readAt.UTC().Round(0)
+	if facts.Available && (readAt.IsZero() || readAt.After(k.clock())) || !facts.Available && !readAt.IsZero() {
+		return ProductSourceUpdate{}, errors.New("actual completed source observation time required")
+	}
+	return k.observeProductSource(ctx, target, "", facts, &productSourceReadRequest{expectedID, readAt})
+}
+
+func (k *KernelStore) observeProductSource(ctx context.Context, target contract.Target, expected string, facts ProductSourceFacts, read *productSourceReadRequest) (ProductSourceUpdate, error) {
 	var result ProductSourceUpdate
 	if !target.Valid() {
 		return result, errors.New("current product source target required")
@@ -266,6 +283,9 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 	if w.Policy.Stage != "P" || !w.Policy.Product || w.Source != "github" || w.ScopeRevision != target.ScopeRevision || w.Policy.Revision != target.PolicyRevision || w.SourceID != fmt.Sprintf("r%d-i%d", facts.RepositoryID, facts.IssueNumber) {
 		return result, errors.New("product source ownership or scope conflict")
 	}
+	if read != nil && w.Target() != target {
+		return result, errors.New("source observation target changed during read")
+	}
 	prior, priorErr := loadProductSourceSnapshot(ctx, tx, w.ID)
 	if errors.Is(priorErr, ErrTaskEvidence) {
 		return k.prohibitInvalidSourceTx(ctx, tx, w, priorErr)
@@ -281,6 +301,16 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 		if count != 0 {
 			return k.prohibitInvalidSourceTx(ctx, tx, w, fmt.Errorf("%w: current source observation missing", ErrTaskEvidence))
 		}
+	}
+	if read != nil {
+		if err := preflightProductSourceRead(ctx, tx, w, prior, priorErr, *read); err != nil {
+			if errors.Is(err, ErrTaskEvidence) {
+				return k.prohibitInvalidSourceTx(ctx, tx, w, err)
+			}
+			return result, err
+		}
+		// The ID precondition above is stronger than the legacy digest CAS.
+		expected = prior.Digest
 	}
 	status, err := k.sourceStatusTx(ctx, tx, w, facts)
 	if errors.Is(err, ErrTaskEvidence) {
@@ -313,6 +343,11 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 		hold = &domain.WaveSourceHold{Reason: status, Digest: digest, ObservedAt: k.clock()}
 	}
 	if priorErr == nil && prior.Digest == digest && sameSourceHold(w.SourceHold, hold) {
+		if read != nil && !read.At.IsZero() {
+			if err := saveProductSourceRead(ctx, tx, w, prior, read.At); err != nil {
+				return result, err
+			}
+		}
 		return ProductSourceUpdate{Snapshot: prior, Hold: w.SourceHold}, tx.Commit()
 	}
 	if (priorErr == nil && expected != prior.Digest) || (priorErr != nil && expected != "") {
@@ -332,11 +367,20 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 		if err != nil {
 			return result, err
 		}
-		saved = ProductSourceSnapshot{ID: id, Version: prior.Version + 1, ObservedAt: k.clock(), Value: value, Digest: digest}
+		observedAt := k.clock()
+		if read != nil && !read.At.IsZero() {
+			observedAt = read.At
+		}
+		saved = ProductSourceSnapshot{ID: id, Version: prior.Version + 1, ObservedAt: observedAt, Value: value, Digest: digest}
 		if err := kernelRecordTx(ctx, tx, "product_source_observation", w.ID, w.ID, saved); err != nil {
 			return result, err
 		}
 		if err := kernelRecordTx(ctx, tx, "product_source_observation_history", saved.ID, w.ID, saved); err != nil {
+			return result, err
+		}
+	}
+	if read != nil && !read.At.IsZero() {
+		if err := saveProductSourceRead(ctx, tx, w, saved, read.At); err != nil {
 			return result, err
 		}
 	}
