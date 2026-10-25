@@ -132,7 +132,8 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 	if err != nil {
 		return receipt, err
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, workID)
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, workID, &sourcePermit)
 	if err != nil {
 		return receipt, err
 	}
@@ -411,6 +412,9 @@ func (k *KernelStore) expandProductTemplateTx(ctx context.Context, tx *sql.Tx, w
 	}
 	if err := k.followTemplateTerminalWaitsTx(ctx, tx, w, receipt); err != nil {
 		return receipt, err
+	}
+	if !sourcePermit.current(k, tx) {
+		return receipt, ErrProductSubjectHeld
 	}
 	return receipt, tx.Commit()
 }

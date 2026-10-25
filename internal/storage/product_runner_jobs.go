@@ -245,7 +245,8 @@ func (k *KernelStore) productRunnerPreflightTx(ctx context.Context, tx *sql.Tx, 
 	if source.Value.VerificationPlan == nil || source.Value.VerificationPlan.ID != plan.ID || source.Value.VerificationPlan.Digest != plan.Digest {
 		return w, ErrTaskEvidence
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, plan.Value.Plan.WorkItemID)
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, plan.Value.Plan.WorkItemID, &sourcePermit)
 	if err != nil {
 		return w, err
 	}
@@ -273,6 +274,9 @@ func (k *KernelStore) productRunnerPreflightTx(ctx context.Context, tx *sql.Tx, 
 		return w, err
 	}
 	if !productRegistrationScope(registration, w) || digest != sealed.Value.Verification.ScopeDigest {
+		return w, ErrProductRunnerHeld
+	}
+	if !sourcePermit.current(k, tx) {
 		return w, ErrProductRunnerHeld
 	}
 	return w, nil

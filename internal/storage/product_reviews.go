@@ -48,7 +48,8 @@ func (k *KernelStore) productReviewEvidenceTx(ctx context.Context, tx *sql.Tx, w
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
 		return saved, err
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, task.Spec.WorkItemIDs[0], &sourcePermit)
 	if err != nil {
 		return saved, err
 	}
@@ -120,6 +121,9 @@ func (k *KernelStore) productReviewEvidenceTx(ctx context.Context, tx *sql.Tx, w
 	}
 	value := ProductTaskReviewValue{TaskID: task.ID, RunID: runID, ResultID: structureID("result-", task.ID, runID), Target: task.Target(), InputDigest: input, OutputDigest: bytesDigest([]byte(run.Final)), SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, SubjectID: subject.ID, SubjectDigest: subject.Digest, WorkspaceID: ready.ID, WorkspaceDigest: ready.Digest, Candidate: subject.Value.Candidate, Review: *result.Review}
 	digest, err := contentDigest(value)
+	if err == nil && !sourcePermit.current(k, tx) {
+		return saved, ErrProductSubjectHeld
+	}
 	return ProductTaskReviewSnapshot{Value: value, Digest: digest}, err
 }
 

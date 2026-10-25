@@ -197,7 +197,8 @@ func (k *KernelStore) BindProductCandidateSubject(ctx context.Context, taskID st
 	if b.Kind != "task" || b.TaskID != task.ID || b.Target != task.Target() || b.ParentSessionID != w.OrchestratorSessionID || b.Closed || b.ThreadID != "" || b.Sandbox != "read-only" || active != "" || !stopped || creating || used {
 		return saved, ErrProductSubjectHeld
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, task.Spec.WorkItemIDs[0], &sourcePermit)
 	if err != nil {
 		return saved, err
 	}
@@ -262,6 +263,9 @@ func (k *KernelStore) BindProductCandidateSubject(ctx context.Context, taskID st
 	}
 	if err := k.materializeTaskInputTx(ctx, tx, w, task); err != nil {
 		return saved, err
+	}
+	if !sourcePermit.current(k, tx) {
+		return saved, ErrProductSubjectHeld
 	}
 	return saved, tx.Commit()
 }

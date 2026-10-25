@@ -69,7 +69,8 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 	if !productRegistrationScope(registration, w) {
 		return proof, productQualityHeld("current WorkItem registration required")
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, workID)
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, workID, &sourcePermit)
 	if err != nil {
 		return proof, err
 	}
@@ -240,6 +241,9 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 	digest, err = contentDigest(value)
 	if err != nil {
 		return proof, err
+	}
+	if !sourcePermit.current(k, tx) {
+		return proof, productQualityHeld("source observation expired during quality proof")
 	}
 	return ProductQualityProof{Value: value, Digest: digest}, nil
 }

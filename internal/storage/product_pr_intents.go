@@ -114,8 +114,9 @@ func (k *KernelStore) setProductTargetTx(ctx context.Context, tx *sql.Tx, expect
 		return saved, errors.New("product projection differs from registered source ownership")
 	}
 	var membership struct {
-		Target      contract.Target `json:"target"`
-		CandidateID string          `json:"candidate_id"`
+		Target      contract.Target                  `json:"target"`
+		CandidateID string                           `json:"candidate_id"`
+		SplitScope  *ProductSplitChildScopeReference `json:"split_scope,omitempty"`
 	}
 	err = completionRecord(ctx, tx, "wave_work_item", p.WorkItem.ID, &membership)
 	if err == nil && membership.Target.WaveID != p.Target.WaveID {

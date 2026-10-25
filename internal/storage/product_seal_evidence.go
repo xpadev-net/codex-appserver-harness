@@ -32,7 +32,8 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
 		return value, err
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, task.Spec.WorkItemIDs[0])
+	var sourcePermit productExecutionPermit
+	held, err := k.productWorkItemExecutionPermitTx(ctx, tx, w, task.Spec.WorkItemIDs[0], &sourcePermit)
 	if err != nil {
 		return value, err
 	}
@@ -124,6 +125,9 @@ func (k *KernelStore) productSealEvidenceTx(ctx context.Context, tx *sql.Tx, tas
 			return value, ErrTaskEvidence
 		}
 		value.Verification = verificationInput
+	}
+	if !sourcePermit.current(k, tx) {
+		return value, ErrProductSealHeld
 	}
 	return value, nil
 }
