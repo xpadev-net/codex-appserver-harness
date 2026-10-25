@@ -53,7 +53,16 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 		if len(scopes.Value.Children) > 0 {
 			id = scopes.Value.Children[0].Value.CreationID
 		}
-	case "product_split_registrations", "product_split_registrations_history", "product_split_registrations_admission", "product_split_parent_scope", "product_split_parent_scope_history", "product_split_parent_scope_admission", "product_nested_split_proposal", "product_nested_split_proposal_history", "product_nested_split_proposal_admission", "product_nested_split_proposal_request", "product_nested_split_children", "product_nested_split_children_history", "product_nested_split_children_admission", "product_nested_split_child_intent", "product_nested_split_child_intent_history", "product_nested_split_child_intent_admission", "product_nested_split_allocation", "product_nested_split_allocation_history", "product_nested_split_allocation_admission", "product_nested_split_work_item_seat", "product_nested_split_child_scopes", "product_nested_split_child_scopes_history", "product_nested_split_child_scopes_admission", "product_nested_split_child_scope", "product_nested_split_child_scope_history", "product_nested_split_child_scope_admission", "product_nested_split_child_scope_source":
+	case "product_nested_split_child_scopes", "product_nested_split_child_scopes_history", "product_nested_split_child_scopes_admission", "product_nested_split_child_scope", "product_nested_split_child_scope_history", "product_nested_split_child_scope_admission", "product_nested_split_child_scope_source":
+		// The physical envelope contributes its allocation ancestor group.
+		// Its virtual scope-group row contributes the newly created scopes.
+		var envelope ProductNestedSplitChildScopes
+		err = taskEvidenceRecord(ctx, q, kind, key, &envelope)
+		ancestors := envelope.Value.ProductNestedSplitAllocationValue.Children
+		if len(ancestors) > 0 {
+			id = ancestors[0].Value.CreationID
+		}
+	case "product_split_registrations", "product_split_registrations_history", "product_split_registrations_admission", "product_split_parent_scope", "product_split_parent_scope_history", "product_split_parent_scope_admission", "product_nested_split_proposal", "product_nested_split_proposal_history", "product_nested_split_proposal_admission", "product_nested_split_proposal_request", "product_nested_split_children", "product_nested_split_children_history", "product_nested_split_children_admission", "product_nested_split_child_intent", "product_nested_split_child_intent_history", "product_nested_split_child_intent_admission", "product_nested_split_allocation", "product_nested_split_allocation_history", "product_nested_split_allocation_admission", "product_nested_split_work_item_seat":
 		var registered ProductSplitRegistrations
 		err = taskEvidenceRecord(ctx, q, kind, key, &registered)
 		if len(registered.Value.Children) > 0 {
