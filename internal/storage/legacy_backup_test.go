@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -278,5 +279,58 @@ waiting:
 	}
 	if _, err := BackupLegacyDatabase(context.Background(), source, destination); err != nil {
 		t.Fatal("fresh retry could not use cleaned destination", err)
+	}
+}
+
+func TestLegacyBackupCrashHelper(t *testing.T) {
+	source := os.Getenv("HARNESS_LEGACY_BACKUP_CRASH_SOURCE")
+	if source == "" {
+		return
+	}
+	s, err := Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(context.Background(), "crash_history", "committed", "original", "retained without checkpoint"); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately bypass SQLite's Close/checkpoint, like abrupt controller loss.
+	os.Exit(0)
+}
+
+func TestLegacyBackupReadsAbandonedWALWithoutChangingSource(t *testing.T) {
+	source, destination := kernelPath(t), kernelPath(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLegacyBackupCrashHelper$")
+	child.Env = append(os.Environ(), "HARNESS_LEGACY_BACKUP_CRASH_SOURCE="+source)
+	if raw, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("crash fixture failed: %v\n%s", err, raw)
+	}
+	beforeMain := backupFileBytes(t, source)
+	beforeWAL := backupFileBytes(t, source+"-wal")
+	if len(beforeWAL) == 0 {
+		t.Fatal("crash fixture left no WAL")
+	}
+	if _, err := BackupLegacyDatabase(ctx, source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeMain, backupFileBytes(t, source)) || !bytes.Equal(beforeWAL, backupFileBytes(t, source+"-wal")) {
+		t.Fatal("reading abandoned WAL changed source bytes")
+	}
+	if _, err := inspectDatabaseFileWith(destination, func(db *sql.DB, _ int) error {
+		var raw []byte
+		if err := db.QueryRow("SELECT payload FROM records WHERE kind='crash_history' AND id='committed'").Scan(&raw); err != nil {
+			return err
+		}
+		if string(raw) != `"retained without checkpoint"` {
+			return errors.New("abandoned WAL's committed history was lost")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
