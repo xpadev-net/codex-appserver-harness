@@ -120,7 +120,10 @@ func (k *KernelStore) continuationParentTx(ctx context.Context, q queryer, reque
 	if err := taskEvidenceRecord(ctx, q, "product_work_item_registration_version", structureID("product-work-", p.WorkItem.ID, parent.Value.RegistrationDigest), &registration); err != nil {
 		return empty, err
 	}
-	if registration.Value.Source != w.Source || registration.Value.SourceID != w.SourceID {
+	// This legacy continuation shape registers a root definition and cannot
+	// carry a child's local scope. Never silently widen a merged split child
+	// into an unscoped successor, including replay and activation checks.
+	if registration.Value.SplitScope != nil || registration.Value.Source != w.Source || registration.Value.SourceID != w.SourceID {
 		return empty, ErrProductContinuationHeld
 	}
 	var current ProductTargetSnapshot
