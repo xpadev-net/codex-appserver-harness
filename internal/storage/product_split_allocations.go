@@ -127,7 +127,9 @@ func splitAllocationIDsTx(ctx context.Context, tx *sql.Tx, waveID string) ([]str
  UNION SELECT json_extract(payload,'$.value.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.request.target.wave_id')=?
  UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.request.target.wave_id')=?
  UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind='product_split_create_retry_budget' AND work_item_id=?
- UNION SELECT json_extract(payload,'$.proposal_id') FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=?
+ UNION SELECT json_extract(payload,'$.value.proposal_id') FROM records WHERE kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(payload,'$.value.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind='product_split_preparation_creation' AND work_item_id=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
 	if err != nil {
 		return nil, err
 	}
@@ -236,15 +238,23 @@ func productWorkItemLifetimeIDsTx(ctx context.Context, tx *sql.Tx, w domain.Wave
 // creation. It grants no HTTP/model execution or parent retirement. Seats and
 // lifetime ledger entries are never released by pause, scope changes or retry.
 func (k *KernelStore) ReserveProductSplitChildren(ctx context.Context, r ProductSplitChildPlanRequest) (ProductSplitAllocation, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductSplitAllocation{}, err
+	}
+	defer tx.Rollback()
+	saved, err := k.reserveProductSplitChildrenTx(ctx, tx, r)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) reserveProductSplitChildrenTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitAllocation, error) {
 	var saved ProductSplitAllocation
 	if !r.Target.Valid() || r.ParentWorkItemID == "" || r.ProposalID == "" || !validSourceDigest(r.ProposalDigest) {
 		return saved, ErrProductSplitHeld
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return saved, err
-	}
-	defer tx.Rollback()
 	prior, err := loadProductSplitAllocation(ctx, tx, r)
 	if err == nil {
 		return prior, nil
@@ -322,7 +332,7 @@ func (k *KernelStore) ReserveProductSplitChildren(ctx context.Context, r Product
 	if _, err := tx.ExecContext(ctx, "INSERT INTO kernel_budget_ledger(wave_id,operation_key,kind,amount,unknown,payload) VALUES(?,?,'split_children',?,0,?)", w.ID, r.ProposalID, len(plan.Children), raw); err != nil {
 		return saved, err
 	}
-	return saved, tx.Commit()
+	return saved, nil
 }
 
 func (k *KernelStore) ReadProductSplitAllocation(ctx context.Context, r ProductSplitChildPlanRequest) (ProductSplitAllocation, error) {

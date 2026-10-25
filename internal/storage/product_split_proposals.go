@@ -244,6 +244,19 @@ func loadProductSplitProposal(ctx context.Context, tx *sql.Tx, r ProductSplitPro
 }
 
 func (k *KernelStore) PrepareProductSplitProposal(ctx context.Context, r ProductSplitProposalRequest) (ProductSplitProposal, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductSplitProposal{}, err
+	}
+	defer tx.Rollback()
+	saved, err := k.prepareProductSplitProposalTx(ctx, tx, r)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) prepareProductSplitProposalTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest) (ProductSplitProposal, error) {
 	var saved ProductSplitProposal
 	if !r.Target.Valid() || r.Key == "" || len(r.Key) > 256 || !utf8.ValidString(r.Key) || r.ParentWorkItemID == "" || !validSourceDigest(r.RegistrationDigest) || len(r.Proposal.Children) > maxProductWorkItems {
 		return saved, ErrProductSplitHeld
@@ -262,11 +275,6 @@ func (k *KernelStore) PrepareProductSplitProposal(ctx context.Context, r Product
 	if !reflect.DeepEqual(r, detached) {
 		return saved, ErrProductSplitHeld
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return saved, err
-	}
-	defer tx.Rollback()
 	prior, err := loadProductSplitProposal(ctx, tx, r)
 	if err == nil {
 		if !reflect.DeepEqual(prior.Value.Request, r) {
@@ -327,7 +335,7 @@ func (k *KernelStore) PrepareProductSplitProposal(ctx context.Context, r Product
 			return saved, err
 		}
 	}
-	return saved, tx.Commit()
+	return saved, nil
 }
 
 // ReadProductSplitProposal authenticates current host metadata without granting

@@ -103,3 +103,11 @@ SplitCreationDispatchWorker は全 journal 証拠から対象を列挙し、同�
 unknown は repository が allowlist から外れた後も元の送信者の停止を回復する。停止と結果不明を区別し、GET の不在による再送を行わない。stopped/observed には POST を発行しない。owner cancel 時も全 flight と実送信 group の停止を join する。通知は保存値を再読取して commit 済みの停止・封鎖、または保存済み retry 予約だけに基づく。
 
 Go/SQLite・実 subprocess と fixture gh の検査で、古い spec の封鎖から一度だけの POST・GET binding、pause/resume、allowlist 制限、allowlist 変更後の unknown 回復、commit 失敗時の通知抑制、cancel 時の物理停止と join を確認する。この dispatcher は既に採用された intent を処理するものであり、main/controller の分割判断、子 WorkItem の登録・part scope/depth/source 系譜、親 retirement/gateway は引き続き必要である。
+
+## 全子の原子的な controller 準備
+
+trusted host 用の PrepareProductSplitExecution は、現在の root proposal、全子 intent、Wave lifetime 枠、各子の初回 creation journal、完全な集合の receipt を同一 SQLite transaction で確定する。既存の個別 port も同じ transaction 内部関数を用い、再入可能でない DB 接続から public port を入れ子に呼ばない。子の owner は proposal/child から導く安定 ID とする。失敗・commit 失敗時は成功 receipt を返さない。
+
+receipt は元 request の digest と proposal/plan/allocation、全 creation の ID/digest を固定し、head/history/admission および子別の独立 witness を保存する。receipt や既知 journal の欠落を新規 intent で補修せず、残った receipt だけでも上流の再作成・枠返却・初回 POST ID の再利用を拒否する。子別 witness を送信/照合 worker の対象列挙にも残す。exact replay/reopen は同じ集合を返し、Wave pause 中は既存集合の監査だけが可能である。
+
+検査は二人目の子の journal 保存と最終 witness 保存の故障注入による全 rollback、保存後の各証拠喪失/exact 復旧、receipt だけ残る喪失、全初回 journal 喪失時の再生成拒否、複数 DB 接続の同時採用を確認する。外部送信や子 WorkItem 登録・親退役はこの port で行わない。model main からの版付き tool/実 session 認可は次段階でこの transaction へ接続する。

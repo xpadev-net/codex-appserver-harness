@@ -213,15 +213,23 @@ func loadProductSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitCh
 }
 
 func (k *KernelStore) PrepareProductSplitChildPlan(ctx context.Context, r ProductSplitChildPlanRequest) (ProductSplitChildPlan, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductSplitChildPlan{}, err
+	}
+	defer tx.Rollback()
+	saved, err := k.prepareProductSplitChildPlanTx(ctx, tx, r)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) prepareProductSplitChildPlanTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildPlan, error) {
 	var plan ProductSplitChildPlan
 	if !r.Target.Valid() || r.ParentWorkItemID == "" || r.ProposalID == "" || !validSourceDigest(r.ProposalDigest) {
 		return plan, ErrProductSplitHeld
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return plan, err
-	}
-	defer tx.Rollback()
 	prior, err := loadProductSplitChildPlan(ctx, tx, r)
 	if err == nil {
 		return prior, nil
@@ -277,9 +285,6 @@ func (k *KernelStore) PrepareProductSplitChildPlan(ctx context.Context, r Produc
 		if err := kernelRecordTx(ctx, tx, record.kind, record.id, record.owner, record.value); err != nil {
 			return plan, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return plan, err
 	}
 	return ProductSplitChildPlan{Set: set, Children: children}, nil
 }
