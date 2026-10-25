@@ -49,5 +49,8 @@ func knownProductSplitChildIssue(ctx context.Context, q queryer, repositoryID in
 	var known bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_created_resource' AND id=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.issue.repository_id')=? AND json_extract(payload,'$.value.issue.number')=?)`, key, repositoryID, number).Scan(&known)
-	return known, err
+	if err != nil || known {
+		return known, err
+	}
+	return splitChildScopeIssueKnown(ctx, q, key, repositoryID, number)
 }

@@ -44,7 +44,10 @@ func productSplitParentPreparationHeld(ctx context.Context, q queryer, w domain.
 		w.ID, workID, w.ScopeRevision, w.Policy.Revision, allowedHead, allowedHead,
 		w.ID, workID, w.ScopeRevision, w.Policy.Revision, allowedHead, allowedHead,
 		w.ID, workID, w.ScopeRevision, w.Policy.Revision, allowedHead, allowedHead).Scan(&prepared)
-	return prepared, err
+	if err != nil || prepared {
+		return prepared, err
+	}
+	return splitChildScopeParentExecutionHeld(ctx, q, w, workID, allowedHead)
 }
 
 // Split source/preflight reads must authenticate the same parent projection

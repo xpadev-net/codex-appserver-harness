@@ -130,7 +130,9 @@ func splitAllocationIDsTx(ctx context.Context, tx *sql.Tx, waveID string) ([]str
  UNION SELECT json_extract(payload,'$.proposal_id') FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=?
  UNION SELECT json_extract(payload,'$.value.proposal_id') FROM records WHERE kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(payload,'$.value.wave_id')=?
  UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind='product_split_preparation_creation' AND work_item_id=?
- UNION SELECT json_extract(payload,'$.preparation.value.proposal_id') FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.source.target.wave_id')=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
+ UNION SELECT json_extract(payload,'$.preparation.value.proposal_id') FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.source.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission') AND json_extract(payload,'$.value.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.request.proposal_id') FROM records WHERE kind='product_split_child_scope_source' AND work_item_id=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
 	if err != nil {
 		return nil, err
 	}

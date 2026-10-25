@@ -82,7 +82,10 @@ func splitCreateRetryCountTx(ctx context.Context, tx *sql.Tx, waveID string) (in
  UNION SELECT work_item_id FROM records WHERE kind='product_split_create_gate_history' AND work_item_id LIKE 'split-create-retry-%' AND json_extract(payload,'$.value.request.target.wave_id')=?
  UNION SELECT json_extract(payload,'$.creation_id') FROM records WHERE kind='product_split_created_resource' AND work_item_id=? AND json_extract(payload,'$.creation_id') LIKE 'split-create-retry-%'
  UNION SELECT operation_key FROM kernel_budget_ledger WHERE wave_id=? AND kind='split_create_retry'
- UNION SELECT run_id FROM kernel_resource_leases WHERE wave_id=? AND run_id LIKE 'split-create-retry-%' LIMIT 33`, waveID, waveID, waveID, waveID, waveID, waveID, waveID)
+ UNION SELECT run_id FROM kernel_resource_leases WHERE wave_id=? AND run_id LIKE 'split-create-retry-%'
+ UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(r.payload,'$.value.creations') c WHERE r.kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(r.payload,'$.value.request.target.wave_id')=? AND json_extract(c.value,'$.attempt')>0
+ UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(r.payload,'$.value.children') b,json_each(b.value,'$.value.creations') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission') AND json_extract(r.payload,'$.value.request.target.wave_id')=? AND json_extract(c.value,'$.attempt')>0
+ UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(r.payload,'$.creations') c WHERE r.kind='product_split_child_scope_source' AND r.work_item_id=? AND json_extract(c.value,'$.attempt')>0 LIMIT 33`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID)
 	if err != nil {
 		return 0, err
 	}
@@ -210,6 +213,9 @@ func (k *KernelStore) ReadLatestProductSplitCreate(ctx context.Context, childID 
 		return ProductSplitCreate{}, err
 	}
 	defer tx.Rollback()
+	return loadLatestProductSplitCreate(ctx, tx, childID)
+}
+func loadLatestProductSplitCreate(ctx context.Context, tx *sql.Tx, childID string) (ProductSplitCreate, error) {
 	job, err := loadSplitCreate(ctx, tx, splitCreateID(childID))
 	if err != nil {
 		return job, err

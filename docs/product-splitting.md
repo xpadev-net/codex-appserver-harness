@@ -137,3 +137,13 @@ CreateProductWave と通常の RegisterProductWorkItem は、canonical な r{rep
 storage fixture は実 process の activation/停止を行った後に trusted GET 観測を注入し、resource/head/event ごとの喪失、canonical identity の別名・repository 差替え、通常登録の拒否と別 source の受付を確認する。product の GET/Issue pool fixture は marker のない有効な root scope でも既知の子を保留し、壊れた一件が次の source を妨げないことを確認する。child の local criterion/part・depth/source の実行登録と親 retirement は引き続き後続で接続する。
 
 close 済み dependency が分割子の marker を持つ、または保存済み数値 identity で既知の分割子と分かる場合も、未管理 Issue の完了とは扱わない。IsKnownProductSplitChildIssue は禁止判定用の分類だけを返し、所有・品質・完了の許可を与えない。子の実行系譜と現在の完了 binding が接続されるまで依存を保留する。
+
+## 作成済み全子の local scope binding
+
+BindProductSplitChildScopes / ReadProductSplitChildScopes は、全子の最新 creation が trusted GET で observed になった後に、集合全体と各子の immutable binding・source claim を一つの transaction で保存/照合する。local criterion 全文、全 part ID/総数/根拠、依存先・元 WorkItem ID、depth、元の parent scope/source digest、allocation、Issue ID/number/body と creation/retry 系譜を保持する。local Scope の included は子の local ID であり、親 criterion 全体の達成へ変換しない。集合の保存は最大8MiBとする。
+
+head/history/admission と子別 source claim を相互参照し、保存済み binding は元の proposal/plan/枠・最新 observed journal・停止証拠・全未送信 retry の予算証拠を再照合する。保存途中の故障や、二人目の子と既存 root の source 衝突は集合全体を rollback する。clock が trusted GET 観測より前なら作成しない。再起動・pause・後続 direction 後の exact replay は元 epoch の監査として保持し、現在 scope の実行権限へ昇格しない。
+
+binding の独立証拠だけが残っても、元 proposal・allocation・POST journal の再生成、子枠/retry 予算の返却、新 root としての数値 Issue 再受付、元の親の実行再開を許可しない。retry の各 ID/digest/attempt/直前 ID を保存し、途中 attempt の喪失を最初の未送信 intent への fallback にしない。
+
+この binding は Task/model/WorkItem の実行登録、fresh な子 source 観測、quality、親 retirement/完了を生成しない。実行登録と local verification/coverage の接続では、この binding と現行の scope/policy/source を別途認証する。Go/SQLite と実停止 process・注入 GET fixture で全子待機、local part/depth/source/retry の保持、故障注入・各証拠喪失と exact 復旧、単一 witness での再生成拒否、source 衝突、方向修正後の履歴、別 DB 接続の競合を検査する。
