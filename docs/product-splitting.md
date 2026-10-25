@@ -123,3 +123,5 @@ Artifact ID/digest、実 session/run/call と preparation receipt を結ぶ採�
 応答の completed は準備処理の完了を意味し、子 Issue の作成成功・子の実行許可・親退役・最終受入を表さない。private workspace を含む host projection は返さず、preparation ID/digest・子数・prepared stage だけを返す。実 POST には別途 publication.split の host allowlist と送信直前 gate が必要である。実 model の P 全体受入、子の登録・part scope/depth/source 系譜と親 gateway は引き続き必要である。
 
 分割子の body に元の harness-scope が引用されても、harness-split-part fence または harness-split-child marker がある Issue は新しい root の受付対象にしない。明示 Issue 受付と Issue pool が同じ判定を使い、pool は保留した子を越えて次の独立 source を処理する。marker を除去された既知資源と子の実行 source の結付けは、子 registration 段階でも別途認証する。
+
+全子の preparation が確定すると、その親 WorkItem の通常 model dispatch・workspace 準備・sealing・runner・review/quality を保留する。同じ scope/policy 内の plan 更新でも保留を引き継ぎ、別の登録 root には広げない。receipt と子別 witness に対象親と受付 target を保存し、親 source/proposal の監査と分割送信直前 gate はこの通常実行保留と区別する。旧形式で対象親/epoch が不明な証拠を、新しい既定値で補充しない。監査の exact replay は旧 JSON/digest を保ち、実行判定は不明として保留する。

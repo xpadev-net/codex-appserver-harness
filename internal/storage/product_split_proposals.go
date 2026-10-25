@@ -179,7 +179,7 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 		}
 		value.Product = &product
 	}
-	held, err := productWorkItemExecutionHeld(ctx, tx, w, r.ParentWorkItemID)
+	held, err := productWorkItemProjectionHeld(ctx, tx, w, r.ParentWorkItemID)
 	if err != nil {
 		return value, splitEvidenceErr(err)
 	}

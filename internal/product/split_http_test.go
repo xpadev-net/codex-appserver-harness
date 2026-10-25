@@ -22,7 +22,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-func splitHTTPFixture(t *testing.T, source string) (*storage.KernelStore, storage.ProductSplitCreate, *IssueSourcePolicy, string) {
+func splitHTTPFixture(t *testing.T, source string, whole ...bool) (*storage.KernelStore, storage.ProductSplitCreate, *IssueSourcePolicy, string) {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -73,16 +73,28 @@ func splitHTTPFixture(t *testing.T, source string) (*storage.KernelStore, storag
 		t.Fatal(err)
 	}
 	r := storage.ProductSplitChildPlanRequest{Target: w.Target(), ParentWorkItemID: parentID, ProposalID: saved.ID, ProposalDigest: saved.Digest}
-	plan, err := k.PrepareProductSplitChildPlan(ctx, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := k.ReserveProductSplitChildren(ctx, r); err != nil {
-		t.Fatal(err)
-	}
-	job, err := k.PrepareProductSplitCreate(ctx, r, plan.Children[0].ID, "http-controller")
-	if err != nil {
-		t.Fatal(err)
+	var job storage.ProductSplitCreate
+	if len(whole) > 0 && whole[0] {
+		prepared, err := k.PrepareProductSplitExecution(ctx, saved.Value.Request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		job, err = k.ReadProductSplitCreate(ctx, prepared.Value.Creations[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		plan, err := k.PrepareProductSplitChildPlan(ctx, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := k.ReserveProductSplitChildren(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		job, err = k.PrepareProductSplitCreate(ctx, r, plan.Children[0].ID, "http-controller")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	bin := t.TempDir()
 	repo := []byte("{\"id\":17,\"full_name\":\"owner/repo\",\"default_branch\":\"master\"}")
@@ -554,5 +566,22 @@ func TestSplitHTTPUnsentSuccessorReusesMarkerAndSendsOnlyOnce(t *testing.T) {
 	latest, err := k.ReadLatestProductSplitCreate(ctx, initial.Value.Child.ID)
 	if err != nil || latest.ID != retry.ID || latest.State != "stopped" {
 		t.Fatal("latest did not select successor", latest, err)
+	}
+}
+
+func TestSplitHTTPWholePreparationParentHoldStillAllowsOneChildPOST(t *testing.T) {
+	for _, source := range []string{"direct", "github"} {
+		t.Run(source, func(t *testing.T) {
+			ctx := context.Background()
+			k, job, policy, bin := splitHTTPFixture(t, source, true)
+			transport := splitTestTransport(t, k, policy)
+			stopped, err := transport.Start(ctx, job.ID)
+			if err != nil || stopped.State != "stopped" || stopped.Issue != nil {
+				t.Fatal("split preparation blocked physical child transport", stopped, err)
+			}
+			if strings.Count(splitHTTPCalls(t, bin), "POST\n") != 1 {
+				t.Fatal("whole preparation duplicated child POST", splitHTTPCalls(t, bin))
+			}
+		})
 	}
 }

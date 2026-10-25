@@ -6,6 +6,8 @@ import (
 	"errors"
 	"reflect"
 	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 )
 
 type ProductSplitCreationReference struct {
@@ -13,6 +15,8 @@ type ProductSplitCreationReference struct {
 	Digest string `json:"digest"`
 }
 type ProductSplitPreparationValue struct {
+	Target           *contract.Target                `json:"target,omitempty"`
+	ParentWorkItemID string                          `json:"parent_work_item_id,omitempty"`
 	ParentHeadID     string                          `json:"parent_head_id"`
 	WaveID           string                          `json:"wave_id"`
 	RequestDigest    string                          `json:"request_digest"`
@@ -88,7 +92,7 @@ func loadProductSplitPreparationTx(ctx context.Context, tx *sql.Tx, head string)
 		if err := taskEvidenceRecord(ctx, tx, "product_split_preparation_creation", creation.ID, &witness); err != nil {
 			return saved, splitEvidenceErr(err)
 		}
-		if witness != (splitPreparationCreation{head, saved.Value.ProposalID, creation.Digest}) {
+		if !reflect.DeepEqual(witness, splitPreparationCreation{head, saved.Value.ProposalID, creation.Digest, saved.Value.Target, saved.Value.ParentWorkItemID}) {
 			return saved, errors.Join(ErrProductSplitHeld, ErrTaskEvidence)
 		}
 	}
@@ -120,7 +124,8 @@ func (k *KernelStore) prepareProductSplitExecutionTx(ctx context.Context, tx *sq
 	if err != nil {
 		return empty, err
 	}
-	value := ProductSplitPreparationValue{ParentHeadID: head, WaveID: r.Target.WaveID, RequestDigest: requestDigest, ProposalID: proposal.ID, ProposalDigest: proposal.Digest, PlanID: plan.Set.ID, PlanDigest: plan.Set.Digest, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Creations: []ProductSplitCreationReference{}, CreatedAt: k.clock()}
+	target := r.Target
+	value := ProductSplitPreparationValue{Target: &target, ParentWorkItemID: r.ParentWorkItemID, ParentHeadID: head, WaveID: r.Target.WaveID, RequestDigest: requestDigest, ProposalID: proposal.ID, ProposalDigest: proposal.Digest, PlanID: plan.Set.ID, PlanDigest: plan.Set.Digest, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Creations: []ProductSplitCreationReference{}, CreatedAt: k.clock()}
 	for _, child := range plan.Children {
 		owner := structureID("split-controller-", proposal.ID, child.ID)
 		var job ProductSplitCreate
@@ -141,6 +146,12 @@ func (k *KernelStore) prepareProductSplitExecutionTx(ctx context.Context, tx *sq
 	}
 	if exists {
 		value.CreatedAt = prior.Value.CreatedAt
+		// Preserve the old receipt wire format. Missing provenance never
+		// receives inferred defaults; execution treats it as unknown/held.
+		if prior.Value.Target == nil && prior.Value.ParentWorkItemID == "" {
+			value.Target = nil
+			value.ParentWorkItemID = ""
+		}
 		if !reflect.DeepEqual(value, prior.Value) {
 			return empty, errors.Join(ErrProductSplitHeld, ErrTaskEvidence)
 		}
@@ -164,7 +175,7 @@ func (k *KernelStore) prepareProductSplitExecutionTx(ctx context.Context, tx *sq
 		}
 	}
 	for _, creation := range value.Creations {
-		if err := kernelRecordTx(ctx, tx, "product_split_preparation_creation", creation.ID, r.Target.WaveID, splitPreparationCreation{head, proposal.ID, creation.Digest}); err != nil {
+		if err := kernelRecordTx(ctx, tx, "product_split_preparation_creation", creation.ID, r.Target.WaveID, splitPreparationCreation{head, proposal.ID, creation.Digest, value.Target, value.ParentWorkItemID}); err != nil {
 			return empty, err
 		}
 	}
@@ -172,7 +183,9 @@ func (k *KernelStore) prepareProductSplitExecutionTx(ctx context.Context, tx *sq
 }
 
 type splitPreparationCreation struct {
-	ParentHeadID string `json:"parent_head_id"`
-	ProposalID   string `json:"proposal_id"`
-	Digest       string `json:"digest"`
+	ParentHeadID     string           `json:"parent_head_id"`
+	ProposalID       string           `json:"proposal_id"`
+	Digest           string           `json:"digest"`
+	Target           *contract.Target `json:"target,omitempty"`
+	ParentWorkItemID string           `json:"parent_work_item_id,omitempty"`
 }
