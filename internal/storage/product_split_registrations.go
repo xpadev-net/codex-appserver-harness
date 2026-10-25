@@ -83,13 +83,20 @@ func deriveProductSplitRegistrations(ctx context.Context, tx *sql.Tx, scopes Pro
 }
 
 func loadProductSplitRegistrations(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitRegistrations, error) {
+	malformed, err := splitScopeUnreadableForWave(ctx, tx, r.Target.WaveID)
+	if err != nil {
+		return ProductSplitRegistrations{}, err
+	}
+	if malformed {
+		return ProductSplitRegistrations{}, ErrProductSplitHeld
+	}
 	var saved ProductSplitRegistrations
-	err := taskEvidenceRecord(ctx, tx, "product_split_registrations", r.ProposalID, &saved)
+	err = taskEvidenceRecord(ctx, tx, "product_split_registrations", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_registrations_admission' AND id=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_registrations_history' AND work_item_id=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(payload,'$.value.split_scope.request.proposal_id'),json_extract(payload,'$.split_scope.request.proposal_id'))=?)`, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_registrations_history' AND (work_item_id=? OR json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?))
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id'))=?)`, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
@@ -206,8 +213,8 @@ func (k *KernelStore) RegisterProductSplitChildren(ctx context.Context, r Produc
 		}
 		var known bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_work_item_registration','wave_work_item'))
- OR EXISTS(SELECT 1 FROM records WHERE kind='product_work_item_registration_version' AND json_extract(payload,'$.value.definition.id')=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind='product_target' AND json_extract(payload,'$.value.work_item.id')=?)`, id, id, id).Scan(&known); err != nil {
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_work_item_registration_version' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.definition.id')=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_target' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.work_item.id')=?)`, id, id, id).Scan(&known); err != nil {
 			return ProductSplitRegistrations{}, err
 		}
 		if known {
@@ -227,7 +234,7 @@ func (k *KernelStore) RegisterProductSplitChildren(ctx context.Context, r Produc
 			return ProductSplitRegistrations{}, err
 		}
 	}
-	for _, record := range []struct{ kind, id, owner string }{{"product_split_registrations", r.ProposalID, w.ID}, {"product_split_registrations_history", saved.ID, r.ProposalID}, {"product_split_registrations_admission", r.ProposalID, w.ID}} {
+	for _, record := range []struct{ kind, id, owner string }{{"product_split_registrations", r.ProposalID, w.ID}, {"product_split_registrations_history", saved.ID, w.ID}, {"product_split_registrations_admission", r.ProposalID, w.ID}} {
 		if err := kernelRecordTx(ctx, tx, record.kind, record.id, record.owner, saved); err != nil {
 			return ProductSplitRegistrations{}, err
 		}
@@ -249,9 +256,9 @@ func (k *KernelStore) ReadProductSplitRegistrations(ctx context.Context, r Produ
 
 func productSplitChildExecutionHeld(ctx context.Context, q queryer, workID string) (bool, error) {
 	var known bool
-	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(payload,'$.value.definition.id'),CASE WHEN kind='wave_work_item' THEN id END)=? AND coalesce(json_extract(payload,'$.value.split_scope'),json_extract(payload,'$.split_scope')) IS NOT NULL)
- OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(payload,'$.value.child.value.work_item_id')=?)
- OR EXISTS(SELECT 1 FROM records r,json_each(r.payload,'$.value.children') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(c.value,'$.value.child.value.work_item_id')=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scope_source' AND json_extract(payload,'$.work_item_id')=?)`, workID, workID, workID, workID).Scan(&known)
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.definition.id'),CASE WHEN kind='wave_work_item' THEN id END)=? AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope')) IS NOT NULL)
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.child.value.work_item_id')=?)
+ OR EXISTS(SELECT 1 FROM records r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.children') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.value.child.value.work_item_id')=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scope_source' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.work_item_id')=?)`, workID, workID, workID, workID).Scan(&known)
 	return known, err
 }

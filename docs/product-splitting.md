@@ -165,3 +165,15 @@ registration の split_scope 参照は元 target・proposal・集合と子の bi
 session manifest の product_split_scopes は、元 Wave 要求と並べて子の local scope/digest・親条件の whole/part 対応・depth・source・依存を示す。main は登録済みの子、Task は自分に割り当てられた子だけを受け取り、private path・HTTP body・creation proof は含めない。Task input digest に binding ID/digest を固定し、欠落は unavailable として示す。元の binding は replan で書き換えず、方向修正後の旧 scope を現行の義務に転用しない。
 
 メタデータ読取は pause/reopen 後も可能で、dispatch・source freshness・runner 成功・品質合格を与えない。子自身の最新 source、送信時 gate、親 retirement と part 集約 coverage、子の依存・多段 depth、main への非同期完了通知の接続は別途必要である。この段階でも子の実行保留を維持する。
+
+## GET worker からの全子 binding・登録
+
+split の照合 worker は stopped journal を既存の GET-only reconciler で observed にした後、全子の scope binding と登録を進める。全子が未観測なら保留し、一部の成功だけで登録しない。observed journal からも再開でき、保存済みの完全な集合は GET/POST を繰り返さず監査する。binding と登録はそれぞれ全件 transaction であり、途中の停止や登録失敗は次回の照合で再開する。Task/model の起動や親 retirement は行わない。
+
+探索は既存 creation/resource に加え、scope・登録 receipt と registration/version/membership の独立 witness を含める。scope の opaque row cursor は payload や長いキーを解釈せずに有界のページ送りを行い、各行の不正な JSON/shape は unavailable として報告する。保存済みの witness から creation ID を見つけても送信権限は得ず、元の全証拠の認証を必要とする。
+
+新規 scope/登録 history は本文と独立した所属列にも Wave ID を保存する。従来の proposal ID を所属とする history も本文を書き換えずに読める。旧 history の本文が壊れた場合は、digest/ID を照合した元 proposal の不変履歴で Wave を特定する。それも失われて所属を証明できなければ、元証拠の復旧まで P の処理を保留し、汎用 K には持ち込まない。
+
+JSON probe は不正な payload が別 Wave の SQL を壊さないように扱う。一方、同じ Wave に所有者不明の scope/登録証拠が残れば、その Wave の枠・新規採用・親実行は保留する。壊れた証拠を無視して枠を返却したり、再作成で補修したりしない。メモリ上の OnMutation は保存後の再評価ヒントであり、main への durable な split 完了購読・通知は別途接続する。
+
+実 subprocess と fixture gh で二つの POST/物理停止、trusted GET の bookend、全子登録、再起動 replay、末尾 commit 失敗と pause/resume、並行 GET/cancel join、別 Wave の不正証拠の隔離を検証する。これらは実 GitHub/model での製品受入ではない。

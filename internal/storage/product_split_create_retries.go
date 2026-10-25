@@ -76,6 +76,13 @@ func validateSplitCreateRetryTx(ctx context.Context, tx *sql.Tx, job ProductSpli
 
 // Count all independent admissions, never only surviving budget ledger rows.
 func splitCreateRetryCountTx(ctx context.Context, tx *sql.Tx, waveID string) (int, error) {
+	malformed, err := splitScopeUnreadableForWave(ctx, tx, waveID)
+	if err != nil {
+		return 0, err
+	}
+	if malformed {
+		return 0, ErrProductSplitHeld
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM records WHERE work_item_id=? AND kind IN ('product_split_create','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget') AND id LIKE 'split-create-retry-%'
  UNION SELECT id FROM records WHERE kind='product_split_create_history' AND id LIKE 'split-create-retry-%' AND json_extract(payload,'$.request.target.wave_id')=?
  UNION SELECT work_item_id FROM records WHERE kind='product_split_create_event' AND work_item_id LIKE 'split-create-retry-%' AND json_extract(payload,'$.value.value.request.target.wave_id')=?
@@ -83,10 +90,10 @@ func splitCreateRetryCountTx(ctx context.Context, tx *sql.Tx, waveID string) (in
  UNION SELECT json_extract(payload,'$.creation_id') FROM records WHERE kind='product_split_created_resource' AND work_item_id=? AND json_extract(payload,'$.creation_id') LIKE 'split-create-retry-%'
  UNION SELECT operation_key FROM kernel_budget_ledger WHERE wave_id=? AND kind='split_create_retry'
  UNION SELECT run_id FROM kernel_resource_leases WHERE wave_id=? AND run_id LIKE 'split-create-retry-%'
- UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(r.payload,'$.value.creations') c WHERE r.kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(r.payload,'$.value.request.target.wave_id')=? AND json_extract(c.value,'$.attempt')>0
- UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(r.payload,'$.value.children') b,json_each(b.value,'$.value.creations') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(r.payload,'$.value.request.target.wave_id')=? AND json_extract(c.value,'$.attempt')>0
- UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(r.payload,'$.creations') c WHERE r.kind='product_split_child_scope_source' AND r.work_item_id=? AND json_extract(c.value,'$.attempt')>0
- UNION SELECT json_extract(c.value,'$.id') FROM records r,json_each(coalesce(json_extract(r.payload,'$.value.split_scope.creations'),json_extract(r.payload,'$.split_scope.creations'))) c WHERE r.kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND r.work_item_id=? AND json_extract(c.value,'$.attempt')>0 LIMIT 33`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID)
+ UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM records r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.creations') c WHERE r.kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.request.target.wave_id')=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
+ UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM records r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.children') b,json_each(CASE WHEN json_valid(b.value) THEN b.value ELSE '{}' END,'$.value.creations') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.request.target.wave_id')=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
+ UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM records r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.creations') c WHERE r.kind='product_split_child_scope_source' AND r.work_item_id=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
+ UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM records r,json_each(coalesce(json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.split_scope.creations'),json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.split_scope.creations'))) c WHERE r.kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND r.work_item_id=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0 LIMIT 33`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID)
 	if err != nil {
 		return 0, err
 	}

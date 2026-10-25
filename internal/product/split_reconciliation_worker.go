@@ -2,6 +2,7 @@ package product
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -139,9 +140,40 @@ func (d SplitCreationReconciliationWorker) process(ctx context.Context, target s
 	}
 	// The sending supervisor owns active groups. A GET-only worker must never
 	// stop a healthy POST to manufacture its own reconciliation boundary.
+	if job.State == "observed" {
+		return d.finishRegistrations(ctx, job.Value.Request)
+	}
 	if job.State != "stopped" {
 		return false, nil
 	}
-	_, changed, err := d.Reconciler.Reconcile(ctx, target.ID)
-	return changed, err
+	observed, changed, err := d.Reconciler.Reconcile(ctx, target.ID)
+	if err != nil || observed.State != "observed" {
+		return changed, err
+	}
+	registered, err := d.finishRegistrations(ctx, observed.Value.Request)
+	return changed || registered, err
+}
+
+// Each stage is a durable whole-set transaction. An interrupted adoption can
+// resume from an observed creation without another GET or any mutation call.
+func (d SplitCreationReconciliationWorker) finishRegistrations(ctx context.Context, request storage.ProductSplitChildPlanRequest) (bool, error) {
+	_, err := d.Reconciler.Store.ReadProductSplitChildScopes(ctx, request)
+	changed := false
+	if errors.Is(err, sql.ErrNoRows) && !errors.Is(err, storage.ErrProductSplitHeld) {
+		if _, err = d.Reconciler.Store.BindProductSplitChildScopes(ctx, request); err == nil {
+			changed = true
+		}
+	}
+	if err != nil {
+		return changed, err
+	}
+	_, err = d.Reconciler.Store.ReadProductSplitRegistrations(ctx, request)
+	if err == nil {
+		return changed, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) || errors.Is(err, storage.ErrProductSplitHeld) {
+		return changed, err
+	}
+	_, err = d.Reconciler.Store.RegisterProductSplitChildren(ctx, request)
+	return changed || err == nil, err
 }
