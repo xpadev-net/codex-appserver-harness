@@ -358,3 +358,11 @@ coverage ledger は各階層の正式な全件登録を読み、直近の親の 
 集約では、子孫の全ローカル criterion と宣言した全 part が満たされた場合にだけ、その子の `delegated_complete` を直近の親へ反映する。親への反映には元の登録・scope・local criterion 集合・深さの一致が必要で、委譲途中の親自身の PR で未完了の子孫を飛ばさない。`merged` はその WorkItem 自身の正式な merge fact だけを表し、委譲完了から仮想 merge receipt を作らない。`complete` と `covered_local_criteria` は各 group のローカル集約を示す。
 
 Wave 全体の criterion へ射影するのは最上位の group だけとし、深い scope に同じ ID が現れても Wave 要件を直接満たさない。静的 verifier 監査も登録が指定する nested history namespace を使い、欠落した typed envelope を legacy history で代用しない。これは metadata と集約の接続であり、子の Task 実行・依存 base SHA・最終 source gate・継続作業の実行許可は後続の統合対象である。
+
+## 祖先の固定依存と分割済み先行作業
+
+子の依存は自身の intent だけでなく、canonical な親の登録を Root まで辿って各祖先の intent からも取得する。Task DAG が依存を省いていても、深い子が祖先の先行 sibling を追い越すことはできない。途中の登録・scope・全件証拠の欠落は依存なしへ変換せず保留する。
+
+先行 WorkItem が全件委譲済みなら、同じ transaction で認証した coverage の全ローカル obligation と実 merge fact を再集約し、すべての leaf の receipt を要求する。親自身の PR、閉じた Issue、一部の leaf、矛盾した receipt は代用できない。通常の Task 依存が特定の親 result を要求する場合、その result を leaf の品質証拠へ推測して転用せず保留する。
+
+base input は必要な全 leaf の実 receipt と repository を保存し、`split_dependencies` に委譲元 group・登録・scope の digest と leaf 集合を保持する。同じ repository のすべての merge SHA を固定 base の必要祖先に含め、別 repository の SHA を混ぜない。仮想 merge SHA は作らず、予算の追加許可や子の Task 実行許可は与えない。controlled reducer と静的接続のテストを、実サービスの分割 E2E の合格とは扱わない。
