@@ -140,6 +140,13 @@ func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int)
  OR EXISTS(SELECT 1 FROM records r,json_each(r.payload,'$.preparation.value.creations') c WHERE r.kind='product_split_tool_adoption' AND json_extract(c.value,'$.id')=?)`, id, id, id, id, id, id, id, id, id, id, id).Scan(&known); err != nil {
 			return job, err
 		}
+		if !known {
+			var witnessErr error
+			known, witnessErr = splitChildScopeCreationKnown(ctx, tx, id)
+			if witnessErr != nil {
+				return job, witnessErr
+			}
+		}
 		if known {
 			return job, ErrProductSplitHeld
 		}
@@ -650,5 +657,8 @@ func splitCreationWitnessTx(ctx context.Context, tx *sql.Tx, waveID, parentHead 
  OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND json_extract(payload,'$.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.preparation.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, parentHead, parentHead, parentHead, waveID).Scan(&known)
-	return known, err
+	if err != nil || known {
+		return known, err
+	}
+	return splitChildScopeParentKnown(ctx, tx, parentHead)
 }
