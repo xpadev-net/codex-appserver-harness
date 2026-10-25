@@ -28,7 +28,7 @@ type ProductNestedSplitAllocation struct {
 // Ledger snapshots participate only in negative witness queries. The physical
 // records remain the sole authority for positive reads and new admissions.
 func splitScopeWitnessSQL(query string) string {
-	return `WITH split_scope_witnesses AS (
+	return `WITH split_scope_witnesses AS NOT MATERIALIZED (
  SELECT rowid,kind,id,work_item_id,payload FROM main.records
  UNION ALL SELECT rowid,'product_nested_split_allocation_ledger',operation_key,wave_id,payload
  FROM kernel_budget_ledger WHERE kind='split_children'

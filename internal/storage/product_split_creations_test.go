@@ -94,7 +94,7 @@ func TestProductSplitHTTPHelper(t *testing.T) {
 	}
 }
 
-func startSplitCreationOwner(t *testing.T, k *KernelStore, job ProductSplitCreate) process.Identity {
+func startSplitCreationOwner(t *testing.T, k *KernelStore, job ProductSplitCreate, timeout ...time.Duration) process.Identity {
 	t.Helper()
 	sourceID, sourceDigest := "", ""
 	w, err := k.Wave(context.Background(), job.Value.Request.Target.WaveID)
@@ -124,7 +124,11 @@ func startSplitCreationOwner(t *testing.T, k *KernelStore, job ProductSplitCreat
 		_ = process.StopGroup(ctx, identity)
 		_ = cmd.Wait()
 	})
-	deadline := time.Now().Add(5 * time.Second)
+	wait := 5 * time.Second
+	if len(timeout) > 0 && timeout[0] > 0 && timeout[0] <= 30*time.Second {
+		wait = timeout[0]
+	}
+	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(filepath.Join(k.Root, "split-http-started.json")); err == nil {
 			saved, err := k.ReadProductSplitCreate(context.Background(), job.ID)

@@ -59,6 +59,13 @@ func nestedCreationFixture(t *testing.T) (*KernelStore, ProductSplitChildPlanReq
 	if err != nil {
 		t.Fatal(err)
 	}
+	source, err := k.ReadProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID, source.ID, source.Value.Facts); err != nil {
+		t.Fatal(err)
+	}
 	return k, r, job
 }
 
@@ -71,7 +78,7 @@ func TestProductNestedSplitCreationPinsWholeAncestryAndPhysicalOwnerBeforeGETBin
 	if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	identity := startSplitCreationOwner(t, k, job)
+	identity := startSplitCreationOwner(t, k, job, 20*time.Second)
 	active, err := k.ReadProductSplitCreate(ctx, job.ID)
 	if err != nil || active.State != "unknown" {
 		t.Fatal(err)
@@ -122,7 +129,7 @@ func TestProductNestedSplitCreationPinsWholeAncestryAndPhysicalOwnerBeforeGETBin
 	if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil {
 		t.Fatal(err)
 	}
-	secondOwner := startSplitCreationOwner(t, k, secondJob)
+	secondOwner := startSplitCreationOwner(t, k, secondJob, 20*time.Second)
 	secondStop, secondCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer secondCancel()
 	if err := process.StopGroup(secondStop, secondOwner); err != nil {
@@ -219,7 +226,7 @@ func TestProductNestedSplitCreationWitnessesRetainAncestorsAfterAllPriorEvidence
 				if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil && !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
-				identity := startSplitCreationOwner(t, k, job)
+				identity := startSplitCreationOwner(t, k, job, 20*time.Second)
 				stop, cancel := context.WithTimeout(ctx, 3*time.Second)
 				if err := process.StopGroup(stop, identity); err != nil {
 					cancel()
