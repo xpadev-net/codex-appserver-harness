@@ -25,12 +25,13 @@ type ProductWorkItemDefinition struct {
 	Criteria     []string `json:"criteria"`
 }
 type ProductWorkItemRegistration struct {
-	WaveID         string                    `json:"wave_id"`
-	ScopeRevision  int                       `json:"scope_revision"`
-	PolicyRevision int                       `json:"policy_revision"`
-	Source         string                    `json:"source"`
-	SourceID       string                    `json:"source_id"`
-	Definition     ProductWorkItemDefinition `json:"definition"`
+	SplitScope     *ProductSplitChildScopeReference `json:"split_scope,omitempty"`
+	WaveID         string                           `json:"wave_id"`
+	ScopeRevision  int                              `json:"scope_revision"`
+	PolicyRevision int                              `json:"policy_revision"`
+	Source         string                           `json:"source"`
+	SourceID       string                           `json:"source_id"`
+	Definition     ProductWorkItemDefinition        `json:"definition"`
 }
 type ProductWorkItemRegistrationSnapshot struct {
 	Value  ProductWorkItemRegistration `json:"value"`
@@ -173,6 +174,9 @@ func (k *KernelStore) registerProductWorkItemSourceTx(ctx context.Context, tx *s
 		return saved, priorErr
 	}
 	if priorErr == nil {
+		if prior.Value.SplitScope != nil {
+			return saved, ErrProductSplitHeld
+		}
 		if memberErr != nil || prior.Value.WaveID != w.ID || prior.Value.Definition.RepositoryID != definition.RepositoryID {
 			return saved, errors.New("product registration ownership conflict")
 		}

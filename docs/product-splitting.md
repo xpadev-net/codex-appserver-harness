@@ -147,3 +147,13 @@ head/history/admission と子別 source claim を相互参照し、保存済み 
 binding の独立証拠だけが残っても、元 proposal・allocation・POST journal の再生成、子枠/retry 予算の返却、新 root としての数値 Issue 再受付、元の親の実行再開を許可しない。retry の各 ID/digest/attempt/直前 ID を保存し、途中 attempt の喪失を最初の未送信 intent への fallback にしない。
 
 この binding は Task/model/WorkItem の実行登録、fresh な子 source 観測、quality、親 retirement/完了を生成しない。実行登録と local verification/coverage の接続では、この binding と現行の scope/policy/source を別途認証する。Go/SQLite と実停止 process・注入 GET fixture で全子待機、local part/depth/source/retry の保持、故障注入・各証拠喪失と exact 復旧、単一 witness での再生成拒否、source 衝突、方向修正後の履歴、別 DB 接続の競合を検査する。
+
+## 全子 WorkItem の原子的な登録
+
+trusted host の RegisterProductSplitChildren は、全子の scope binding と元親の現在の採用根拠を認証し、予約済みの WorkItem ID を同じ Wave へ一括登録する。各子の registration/version/membership と全件の head/history/admission receipt を同じ transaction で保存する。二人目の所有権衝突や最後の receipt 保存の失敗でも全件 rollback し、予算・席を再課金しない。Task の作成や親 retirement は行わない。
+
+registration の split_scope 参照は元 target・proposal・集合と子の binding ID/digest・子自身の numeric source・親 head・全 creation 履歴を保持する。Definition.Criteria は Wave の計画用に親の条件 ID を対応付けるもので、子の local criterion/part が親条件全体を満たしたという品質判定には使わない。子自身の最新 source と local quality の実行接続が揃うまでは、親と登録済みの子の実行を保留する。
+
+新規登録は現在の稼働中 P scope でのみ許可する。保存済み集合は pause/reopen/方向修正後も元版の監査として exact replay できるが、現行版へ移さない。通常の RegisterProductWorkItem による子の再登録・方向修正時の lineage 消去は拒否する。旧 registration JSON は split_scope を付加せず、元の wire/digest を維持する。
+
+全件 receipt、子 registration/version、membership のいずれかだけが残っても、上流 metadata・creation journal の新規再作成、子 issue の root 再取込み、親の再実行、split 枠・再試行予算の返却を許可しない。欠落した証拠の exact 復旧が必要であり、再試行で保存済み集合を補修しない。
