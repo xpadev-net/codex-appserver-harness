@@ -15,7 +15,7 @@ func TestProductSplitLimitsAreAdmissionSnapshotAndOldRecordsStayDisabled(t *test
 		t.Fatal(err)
 	}
 	limits, err := k.WaveOperationLimits(ctx, w.ID)
-	if err != nil || limits.SplitDepth != 2 || limits.SplitChildren != 8 {
+	if err != nil || limits.SplitDepth != 2 || limits.SplitChildren != 8 || limits.SplitCreateRetries != 1 {
 		t.Fatal("new admission lost split defaults", limits, err)
 	}
 	direction := directionRequest(w)
@@ -33,7 +33,7 @@ func TestProductSplitLimitsAreAdmissionSnapshotAndOldRecordsStayDisabled(t *test
 	}
 	// Model an actual old serialized limits record: absence means no permission.
 	legacy := limits
-	legacy.SplitDepth, legacy.SplitChildren = 0, 0
+	legacy.SplitDepth, legacy.SplitChildren, legacy.SplitCreateRetries = 0, 0, 0
 	raw, err := json.Marshal(legacy)
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +47,9 @@ func TestProductSplitLimitsAreAdmissionSnapshotAndOldRecordsStayDisabled(t *test
 	}
 	if _, ok := fields["split_children"]; ok {
 		t.Fatal("old zero encoding gained child field")
+	}
+	if _, ok := fields["split_create_retries"]; ok {
+		t.Fatal("old encoding gained retry permission")
 	}
 	if _, err := k.DB.Exec("UPDATE records SET payload=? WHERE kind='wave_operation_limits' AND id=?", raw, w.ID); err != nil {
 		t.Fatal(err)

@@ -15,22 +15,23 @@ var ErrOperationBudget = errors.New("Wave operation budget exhausted")
 // Adopted once from trusted configuration when a Wave is admitted. Profiles
 // retain their separately trusted definitions and timeout policy.
 type WaveOperationLimits struct {
-	BranchRetries    int   `json:"branch_retries,omitempty"`
-	SplitDepth       int   `json:"split_depth,omitempty"`
-	SplitChildren    int   `json:"split_children,omitempty"`
-	ValidationJobs   int   `json:"validation_jobs"`
-	RunnerRetries    int   `json:"runner_retries"`
-	CandidateReviews int   `json:"candidate_reviews"`
-	TurnSeconds      int64 `json:"turn_seconds"`
-	ReviewSeconds    int64 `json:"review_seconds"`
+	BranchRetries      int   `json:"branch_retries,omitempty"`
+	SplitDepth         int   `json:"split_depth,omitempty"`
+	SplitChildren      int   `json:"split_children,omitempty"`
+	SplitCreateRetries int   `json:"split_create_retries,omitempty"`
+	ValidationJobs     int   `json:"validation_jobs"`
+	RunnerRetries      int   `json:"runner_retries"`
+	CandidateReviews   int   `json:"candidate_reviews"`
+	TurnSeconds        int64 `json:"turn_seconds"`
+	ReviewSeconds      int64 `json:"review_seconds"`
 }
 
 func DefaultWaveOperationLimits() WaveOperationLimits {
-	return WaveOperationLimits{BranchRetries: 1, SplitDepth: 2, SplitChildren: 8, ValidationJobs: 100, RunnerRetries: 1, CandidateReviews: 2, TurnSeconds: 1800, ReviewSeconds: 3600}
+	return WaveOperationLimits{BranchRetries: 1, SplitDepth: 2, SplitChildren: 8, SplitCreateRetries: 1, ValidationJobs: 100, RunnerRetries: 1, CandidateReviews: 2, TurnSeconds: 1800, ReviewSeconds: 3600}
 }
 func (l WaveOperationLimits) Validate() error {
 	const maxSeconds = int64((1<<63 - 1) / time.Second)
-	if l.BranchRetries < 0 || l.BranchRetries > 32 || l.ValidationJobs < 1 || l.RunnerRetries < 0 || l.CandidateReviews < 1 || l.TurnSeconds < 1 || l.TurnSeconds > maxSeconds || l.ReviewSeconds < 1 || l.ReviewSeconds > maxSeconds {
+	if l.BranchRetries < 0 || l.BranchRetries > 32 || l.SplitCreateRetries < 0 || l.SplitCreateRetries > 32 || l.ValidationJobs < 1 || l.RunnerRetries < 0 || l.CandidateReviews < 1 || l.TurnSeconds < 1 || l.TurnSeconds > maxSeconds || l.ReviewSeconds < 1 || l.ReviewSeconds > maxSeconds {
 		return errors.New("invalid Wave operation limits")
 	}
 	// Zero/zero is the old persisted format, with splitting disabled. Do not
@@ -212,12 +213,13 @@ func validateKernelOperationBudgetFormat(db *sql.DB) error {
 }
 
 type WaveOperationBudget struct {
-	BranchRetries    int                 `json:"branch_retries,omitempty"`
-	WaveID           string              `json:"wave_id"`
-	Limits           WaveOperationLimits `json:"limits"`
-	ValidationJobs   int                 `json:"validation_jobs"`
-	RunnerRetries    int                 `json:"runner_retries"`
-	CandidateReviews map[string]int      `json:"candidate_reviews"`
+	SplitCreateRetries int                 `json:"split_create_retries,omitempty"`
+	BranchRetries      int                 `json:"branch_retries,omitempty"`
+	WaveID             string              `json:"wave_id"`
+	Limits             WaveOperationLimits `json:"limits"`
+	ValidationJobs     int                 `json:"validation_jobs"`
+	RunnerRetries      int                 `json:"runner_retries"`
+	CandidateReviews   map[string]int      `json:"candidate_reviews"`
 }
 
 func (k *KernelStore) WaveOperationBudget(ctx context.Context, waveID string) (WaveOperationBudget, error) {
@@ -236,6 +238,10 @@ func (k *KernelStore) WaveOperationBudget(ctx context.Context, waveID string) (W
 		return result, err
 	}
 	result.BranchRetries, err = branchRetryBudgetCountTx(ctx, tx, waveID)
+	if err != nil {
+		return result, err
+	}
+	result.SplitCreateRetries, err = splitCreateRetryCountTx(ctx, tx, waveID)
 	if err != nil {
 		return result, err
 	}

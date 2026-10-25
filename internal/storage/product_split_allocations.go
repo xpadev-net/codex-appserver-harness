@@ -125,7 +125,9 @@ func splitAllocationIDsTx(ctx context.Context, tx *sql.Tx, waveID string) ([]str
  UNION SELECT json_extract(payload,'$.request.proposal_id') FROM records WHERE kind='product_split_create_history' AND json_extract(payload,'$.request.target.wave_id')=?
  UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind IN ('product_split_create_admission','product_split_created_resource') AND work_item_id=?
  UNION SELECT json_extract(payload,'$.value.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.request.target.wave_id')=?
- UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.request.target.wave_id')=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
+ UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind='product_split_create_retry_budget' AND work_item_id=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=? LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
 	if err != nil {
 		return nil, err
 	}

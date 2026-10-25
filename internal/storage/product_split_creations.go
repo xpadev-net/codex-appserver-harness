@@ -23,6 +23,9 @@ type ProductSplitCreateValue struct {
 	Child            ProductSplitChildIntent      `json:"child"`
 	OwnerID          string                       `json:"owner_id"`
 	CreatedAt        time.Time                    `json:"created_at"`
+	RetryOf          string                       `json:"retry_of,omitempty"`
+	RetryOfDigest    string                       `json:"retry_of_digest,omitempty"`
+	Attempt          int                          `json:"attempt,omitempty"`
 }
 type ProductSplitCreateOwner struct {
 	GateDigest  string           `json:"gate_digest"`
@@ -119,12 +122,20 @@ func saveSplitCreateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, 
 }
 
 func loadSplitCreate(ctx context.Context, tx *sql.Tx, id string) (ProductSplitCreate, error) {
+	return loadSplitCreateDepth(ctx, tx, id, 0)
+}
+func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int) (ProductSplitCreate, error) {
+	if depth > 32 {
+		return ProductSplitCreate{}, ErrProductSplitHeld
+	}
 	var record splitCreateRecord
 	var job ProductSplitCreate
 	err := taskEvidenceRecord(ctx, tx, "product_split_create", id, &record)
 	if errors.Is(err, sql.ErrNoRows) {
 		var known bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_create_gate') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history') AND work_item_id=?) OR EXISTS(SELECT 1 FROM kernel_resource_leases WHERE run_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_created_resource' AND json_extract(payload,'$.creation_id')=?)", id, id, id, id).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history') AND work_item_id=?) OR EXISTS(SELECT 1 FROM kernel_resource_leases WHERE run_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_created_resource' AND json_extract(payload,'$.creation_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND operation_key=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_create_retry_budget' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))
+ OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))`, id, id, id, id, id, id, id, id, id).Scan(&known); err != nil {
 			return job, err
 		}
 		if known {
@@ -146,7 +157,7 @@ func loadSplitCreate(ctx context.Context, tx *sql.Tx, id string) (ProductSplitCr
 	if err != nil {
 		return job, err
 	}
-	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || id != splitCreateID(job.Value.Child.ID) || job.Value.CreatedAt.IsZero() || job.Sequence < 0 || job.Sequence > 3 {
+	if record.Digest != digest || job.Digest != valueDigest || job.ID != id || !validSplitCreateAttempt(job) || job.Value.CreatedAt.IsZero() || job.Sequence < 0 || job.Sequence > 3 {
 		return job, ErrProductSplitHeld
 	}
 	var original ProductSplitCreateValue
@@ -217,6 +228,9 @@ func loadSplitCreate(ctx context.Context, tx *sql.Tx, id string) (ProductSplitCr
 	}
 	if !found {
 		return job, ErrProductSplitHeld
+	}
+	if err := validateSplitCreateRetryTx(ctx, tx, job, depth); err != nil {
+		return job, err
 	}
 	if err := validateSplitCreateState(job); err != nil {
 		return job, err
@@ -386,7 +400,7 @@ func (k *KernelStore) PrepareProductSplitCreate(ctx context.Context, r ProductSp
 	if child.ID == "" {
 		return job, ErrProductSplitHeld
 	}
-	job = ProductSplitCreate{ID: splitCreateID(childID), Value: ProductSplitCreateValue{r, plan.Set.Value.ParentHeadID, allocation.ID, allocation.Digest, child, ownerID, k.clock()}, State: "prepared"}
+	job = ProductSplitCreate{ID: splitCreateID(childID), Value: ProductSplitCreateValue{Request: r, ParentHeadID: plan.Set.Value.ParentHeadID, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Child: child, OwnerID: ownerID, CreatedAt: k.clock()}, State: "prepared"}
 	job.Digest, err = contentDigest(job.Value)
 	if err != nil {
 		return job, err
@@ -619,9 +633,10 @@ func (k *KernelStore) ReadProductSplitCreate(ctx context.Context, id string) (Pr
 // allocation once existed. Missing indexes cannot replace it with a new key.
 func splitCreationWitnessTx(ctx context.Context, tx *sql.Tx, waveID, parentHead string) (bool, error) {
 	var known bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_created_resource') AND json_extract(payload,'$.parent_head_id')=?)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_created_resource','product_split_create_retry_budget') AND json_extract(payload,'$.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.parent_head_id')=?)
- OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, waveID).Scan(&known)
+ OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND json_extract(payload,'$.parent_head_id')=?)
+ OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, parentHead, waveID).Scan(&known)
 	return known, err
 }
