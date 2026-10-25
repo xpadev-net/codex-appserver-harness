@@ -31,6 +31,12 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 		var source splitChildScopeSource
 		err = taskEvidenceRecord(ctx, q, kind, key, &source)
 		id = source.CreationID
+	case "product_split_completion":
+		var completion productSplitCompletion
+		err = taskEvidenceRecord(ctx, q, kind, key, &completion)
+		if len(completion.Value.Children) > 0 {
+			id = completion.Value.Children[0].Value.CreationID
+		}
 	case "product_work_item_registration", "product_work_item_registration_version", "wave_work_item":
 		var reference *ProductSplitChildScopeReference
 		if kind == "wave_work_item" {

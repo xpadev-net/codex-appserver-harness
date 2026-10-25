@@ -34,36 +34,37 @@ type Subscription struct {
 // grant read access; artifact_read still checks the receiving Task's own grants.
 // Delivery ack, run binding, and decision application are separate facts.
 type Notification struct {
-	Sealing              *ProductSealingSummary     `json:"product_sealing,omitempty"`
-	Preparation          *ProductPreparationSummary `json:"product_preparation,omitempty"`
-	ID                   string                     `json:"id"`
-	SubscriptionID       string                     `json:"subscription_id"`
-	SessionID            string                     `json:"session_id"`
-	Target               contract.Target            `json:"target"`
-	SourceTarget         contract.Target            `json:"source_target"`
-	EventID              string                     `json:"event_id"`
-	SourceEventID        string                     `json:"source_event_id"`
-	EventBoundary        int64                      `json:"event_boundary"`
-	ObservedVia          string                     `json:"observed_via"`
-	DeliverySequence     int64                      `json:"delivery_sequence"`
-	Kind                 string                     `json:"kind"`
-	TaskID               string                     `json:"task_id"`
-	MessageID            string                     `json:"message_id,omitempty"`
-	SenderSessionID      string                     `json:"sender_session_id,omitempty"`
-	OperationID          string                     `json:"operation_id,omitempty"`
-	ArtifactID           string                     `json:"artifact_id,omitempty"`
-	OperationState       string                     `json:"operation_state,omitempty"`
-	AttentionID          string                     `json:"attention_id,omitempty"`
-	Reason               string                     `json:"reason,omitempty"`
-	Detail               string                     `json:"detail,omitempty"`
-	TaskState            contract.TaskState         `json:"task_state"`
-	WaveState            domain.WaveState           `json:"wave_state"`
-	ResultID             string                     `json:"result_id"`
-	InputDigest          string                     `json:"input_digest"`
-	State                string                     `json:"state"`
-	RunID                string                     `json:"run_id"`
-	DeliveryAcknowledged bool                       `json:"delivery_acknowledged"`
-	CreatedAt            time.Time                  `json:"created_at"`
+	Split                *ProductSplitCompletionSummary `json:"product_split,omitempty"`
+	Sealing              *ProductSealingSummary         `json:"product_sealing,omitempty"`
+	Preparation          *ProductPreparationSummary     `json:"product_preparation,omitempty"`
+	ID                   string                         `json:"id"`
+	SubscriptionID       string                         `json:"subscription_id"`
+	SessionID            string                         `json:"session_id"`
+	Target               contract.Target                `json:"target"`
+	SourceTarget         contract.Target                `json:"source_target"`
+	EventID              string                         `json:"event_id"`
+	SourceEventID        string                         `json:"source_event_id"`
+	EventBoundary        int64                          `json:"event_boundary"`
+	ObservedVia          string                         `json:"observed_via"`
+	DeliverySequence     int64                          `json:"delivery_sequence"`
+	Kind                 string                         `json:"kind"`
+	TaskID               string                         `json:"task_id"`
+	MessageID            string                         `json:"message_id,omitempty"`
+	SenderSessionID      string                         `json:"sender_session_id,omitempty"`
+	OperationID          string                         `json:"operation_id,omitempty"`
+	ArtifactID           string                         `json:"artifact_id,omitempty"`
+	OperationState       string                         `json:"operation_state,omitempty"`
+	AttentionID          string                         `json:"attention_id,omitempty"`
+	Reason               string                         `json:"reason,omitempty"`
+	Detail               string                         `json:"detail,omitempty"`
+	TaskState            contract.TaskState             `json:"task_state"`
+	WaveState            domain.WaveState               `json:"wave_state"`
+	ResultID             string                         `json:"result_id"`
+	InputDigest          string                         `json:"input_digest"`
+	State                string                         `json:"state"`
+	RunID                string                         `json:"run_id"`
+	DeliveryAcknowledged bool                           `json:"delivery_acknowledged"`
+	CreatedAt            time.Time                      `json:"created_at"`
 }
 type notificationIntent struct {
 	EventID  string          `json:"event_id"`
@@ -353,6 +354,9 @@ func (k *KernelStore) fanoutNotificationTx(ctx context.Context, tx *sql.Tx, inte
 		return err
 	}
 	if err = k.fanoutParentAttentionTx(ctx, tx, intent); err != nil {
+		return err
+	}
+	if err = k.fanoutProductSplitCompletionTx(ctx, tx, intent); err != nil {
 		return err
 	}
 	return kernelRecordTx(ctx, tx, "notification_fanout", intent.EventID, intent.Target.WaveID, intent)

@@ -177,3 +177,15 @@ split の照合 worker は stopped journal を既存の GET-only reconciler で 
 JSON probe は不正な payload が別 Wave の SQL を壊さないように扱う。一方、同じ Wave に所有者不明の scope/登録証拠が残れば、その Wave の枠・新規採用・親実行は保留する。壊れた証拠を無視して枠を返却したり、再作成で補修したりしない。メモリ上の OnMutation は保存後の再評価ヒントであり、main への durable な split 完了購読・通知は別途接続する。
 
 実 subprocess と fixture gh で二つの POST/物理停止、trusted GET の bookend、全子登録、再起動 replay、末尾 commit 失敗と pause/resume、並行 GET/cancel join、別 Wave の不正証拠の隔離を検証する。これらは実 GitHub/model での製品受入ではない。
+
+## 全子登録完了の durable 購読・通知
+
+product_v3 の product_split は準備の完了を返し、その採用と同じ transaction で全子登録の operation subscription を保存する。応答の stage=prepared は registration/実行/品質の合格を示さず、購読はその時点では通知を発生させない。main は返された subscription ID を保存済みの wait に使える。
+
+元の実 model operation・Artifact・preparation を照合し、全子 registration の commit と同じ transaction で completion receipt、product_split_registered event、notification intent、fanout と通知を保存する。通知保存に失敗すれば全子 registration も rollback し、observed journal から再開する。完了 receipt は private な全 scope/creation provenance を保持するが、main の通知は stage=registered、親/子 WorkItem ID、binding/scope digest、repository/issue 番号・depth だけを含む。品質合格、Task 起動、親 retirement ではない。
+
+通知は通常の event fanout と ReconcileNotifications で扱い、独立した model polling turn を起こさない。ACK は配送確認であり入力の消費ではなく、停止後の wake reservation は同じ ID へ exact replay する。pause、期限、終了、scope/plan/policy 変更を同じ wake gate で扱い、Task や偽装した通知は拒否する。gate cache は通知ごとに source proof を照合し、一件の欠落が同じ target の正常通知の判定を省略させない。
+
+保存済みの subscription、採用記録、registered group、completion、event/intent の証拠欠落を成功で補修しない。exact 復旧後に未消費の通知を再評価できる。従来の購読なし adoption は元応答を書き換えず、認証した元 operation に controller が登録完了時の購読を結び付ける。既知の購読が失われた場合の再作成は許可しない。completion だけが残った場合も、親再実行、子 source の root 再取込み、枠・消費済み retry の返却、元 journal の再作成を禁止する。
+
+検査は実 Go test subprocess の停止と注入した trusted GET を使用し、通知/全件 registration の原子性、main wait、reopen/ACK/wake replay、証拠欠落/exact 復旧、偽装/Task 拒否、方向修正・pause、旧応答の互換と単独 completion witness を確認する。実 model/GitHub の子実行受入は引き続き別である。

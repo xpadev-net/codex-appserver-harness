@@ -36,7 +36,7 @@ func (k *KernelStore) SplitCreationReconciliationTargets(ctx context.Context, af
  UNION SELECT 'creation:'||operation_key,operation_key,'','' FROM kernel_budget_ledger WHERE kind='split_create_retry'
  UNION SELECT 'resource:'||id,'',id,'' FROM records WHERE kind='product_split_created_resource'
  UNION SELECT 'scope:'||printf('%020d',rowid),'',id,kind FROM records WHERE kind IN
- ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_child_scope_source','product_split_registrations','product_split_registrations_history','product_split_registrations_admission')
+ ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_child_scope_source','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_completion')
  UNION SELECT 'scope:'||printf('%020d',rowid),'',id,kind FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item')
  AND CASE WHEN json_valid(payload) THEN coalesce(json_extract(payload,'$.value.split_scope'),json_extract(payload,'$.split_scope')) IS NOT NULL ELSE 1 END
  ) WHERE cursor>? ORDER BY cursor LIMIT ?`, after, limit+1)
