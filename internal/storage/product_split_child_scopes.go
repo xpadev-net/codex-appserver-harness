@@ -166,6 +166,12 @@ func splitChildScopeSourceValue(set ProductSplitChildScopes, binding ProductSpli
 }
 
 func loadProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildScopes, error) {
+	return readSplitProof(ctx, tx, "loadProductSplitChildScopes", r, func(read context.Context) (ProductSplitChildScopes, error) {
+		return loadProductSplitChildScopesUncached(read, tx, r)
+	})
+}
+
+func loadProductSplitChildScopesUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildScopes, error) {
 	var nested bool
 	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_child_scopes' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?)", r.ProposalID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})).Scan(&nested); err != nil {
 		return ProductSplitChildScopes{}, err

@@ -133,7 +133,9 @@ func saveSplitCreateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, 
 }
 
 func loadSplitCreate(ctx context.Context, tx *sql.Tx, id string) (ProductSplitCreate, error) {
-	return loadSplitCreateDepth(ctx, tx, id, 0)
+	return readSplitProof(ctx, tx, "loadSplitCreate", id, func(read context.Context) (ProductSplitCreate, error) {
+		return loadSplitCreateDepth(read, tx, id, 0)
+	})
 }
 func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int) (ProductSplitCreate, error) {
 	if depth > 32 {

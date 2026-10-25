@@ -75,6 +75,12 @@ func deriveSplitParentScope(ctx context.Context, tx *sql.Tx, binding ProductSpli
 }
 
 func loadSplitParentScope(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding) (ProductSplitParentScope, error) {
+	return readSplitProof(ctx, tx, "loadSplitParentScope", binding, func(read context.Context) (ProductSplitParentScope, error) {
+		return loadSplitParentScopeUncached(read, tx, binding)
+	})
+}
+
+func loadSplitParentScopeUncached(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding) (ProductSplitParentScope, error) {
 	var saved ProductSplitParentScope
 	id := binding.Value.Child.Value.WorkItemID
 	err := taskEvidenceRecord(ctx, tx, "product_split_parent_scope", id, &saved)

@@ -41,6 +41,12 @@ func deriveNestedSplitPlan(proposal ProductSplitProposal, registration ProductWo
 }
 
 func loadNestedSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitChildPlan, error) {
+	return readSplitProof(ctx, tx, "loadNestedSplitChildPlan", r, func(read context.Context) (ProductNestedSplitChildPlan, error) {
+		return loadNestedSplitChildPlanUncached(read, tx, r)
+	})
+}
+
+func loadNestedSplitChildPlanUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitChildPlan, error) {
 	var saved ProductNestedSplitChildPlan
 	err := taskEvidenceRecord(ctx, tx, "product_nested_split_children", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {

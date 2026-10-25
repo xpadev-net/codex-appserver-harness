@@ -140,6 +140,12 @@ func loadSplitIntentRegistrationTx(ctx context.Context, tx *sql.Tx, proposal Pro
 // Static proof load intentionally remains readable after a scope/pause change.
 // It is not a send fence, budget reservation or child registration permission.
 func loadProductSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildPlan, error) {
+	return readSplitProof(ctx, tx, "loadProductSplitChildPlan", r, func(read context.Context) (ProductSplitChildPlan, error) {
+		return loadProductSplitChildPlanUncached(read, tx, r)
+	})
+}
+
+func loadProductSplitChildPlanUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildPlan, error) {
 	var plan ProductSplitChildPlan
 	// Typed nested evidence selects its own namespace before decoding any
 	// legacy set. A stray legacy record cannot shadow an authenticated plan.

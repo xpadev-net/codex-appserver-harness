@@ -95,6 +95,12 @@ func deriveSplitRegistrationsWithAncestors(ctx context.Context, tx *sql.Tx, scop
 }
 
 func loadProductSplitRegistrations(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitRegistrations, error) {
+	return readSplitProof(ctx, tx, "loadProductSplitRegistrations", r, func(read context.Context) (ProductSplitRegistrations, error) {
+		return loadProductSplitRegistrationsUncached(read, tx, r)
+	})
+}
+
+func loadProductSplitRegistrationsUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitRegistrations, error) {
 	var nested bool
 	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_registrations' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_child_scopes' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?)", r.ProposalID, r.ProposalID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})).Scan(&nested); err != nil {
 		return ProductSplitRegistrations{}, err

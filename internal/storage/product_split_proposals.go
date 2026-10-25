@@ -244,6 +244,12 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 }
 
 func loadProductSplitProposal(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest) (ProductSplitProposal, error) {
+	return readSplitProof(ctx, tx, "loadProductSplitProposal", r, func(read context.Context) (ProductSplitProposal, error) {
+		return loadProductSplitProposalUncached(read, tx, r)
+	})
+}
+
+func loadProductSplitProposalUncached(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest) (ProductSplitProposal, error) {
 	var saved, history ProductSplitProposal
 	head := splitProposalHead(r)
 	err := taskEvidenceRecord(ctx, tx, "product_split_proposal", head, &saved)

@@ -103,6 +103,12 @@ func deriveNestedSplitAllocation(r ProductSplitChildPlanRequest, plan ProductSpl
 }
 
 func loadNestedSplitAllocation(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitAllocation, error) {
+	return readSplitProof(ctx, tx, "loadNestedSplitAllocation", r, func(read context.Context) (ProductNestedSplitAllocation, error) {
+		return loadNestedSplitAllocationUncached(read, tx, r)
+	})
+}
+
+func loadNestedSplitAllocationUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitAllocation, error) {
 	var saved ProductNestedSplitAllocation
 	err := taskEvidenceRecord(ctx, tx, "product_nested_split_allocation", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {
