@@ -170,10 +170,10 @@ func deriveSplitAncestorWitnesses(scopes ProductNestedSplitChildScopes) (Product
 	var out ProductSplitAncestorWitnesses
 	r := scopes.Value.Scopes.Value.Request
 	value := scopes.Value
-	groups, err := canonicalSplitAncestorGroups(r.Target.WaveID, []ProductSplitAncestorGroup{
+	groups, err := canonicalSplitAncestorGroups(r.Target.WaveID, append(append([]ProductSplitAncestorGroup{}, value.AncestorWitnesses...),
 		splitAncestorGroup(value.ProductSplitChildScopesValue, value.ScopeSetID, value.ScopeSetDigest, value.ParentWorkItemID, value.SourcePolicyDigest),
 		splitAncestorGroup(value.Scopes.Value, value.Scopes.ID, value.Scopes.Digest, value.ParentWorkItemID, value.SourcePolicyDigest),
-	})
+	))
 	if err != nil {
 		return out, err
 	}

@@ -16,13 +16,14 @@ import (
 // seat witness. A parent reference alone would forget those independent slots.
 type ProductSplitParentScopeValue struct {
 	ProductSplitRegistrationsValue
-	ParentWorkItemID   string    `json:"parent_work_item_id"`
-	BindingID          string    `json:"binding_id"`
-	BindingDigest      string    `json:"binding_digest"`
-	GroupID            string    `json:"group_id"`
-	GroupDigest        string    `json:"group_digest"`
-	SourcePolicyDigest string    `json:"source_policy_digest"`
-	SavedAt            time.Time `json:"saved_at"`
+	AncestorWitnesses  []ProductSplitAncestorGroup `json:"ancestor_witnesses,omitempty"`
+	ParentWorkItemID   string                      `json:"parent_work_item_id"`
+	BindingID          string                      `json:"binding_id"`
+	BindingDigest      string                      `json:"binding_digest"`
+	GroupID            string                      `json:"group_id"`
+	GroupDigest        string                      `json:"group_digest"`
+	SourcePolicyDigest string                      `json:"source_policy_digest"`
+	SavedAt            time.Time                   `json:"saved_at"`
 }
 type ProductSplitParentScope struct {
 	ID     string                       `json:"id"`
@@ -32,10 +33,6 @@ type ProductSplitParentScope struct {
 
 func deriveSplitParentScope(ctx context.Context, tx *sql.Tx, binding ProductSplitChildScopeBinding, at time.Time) (ProductSplitParentScope, error) {
 	var out ProductSplitParentScope
-	// Deeper admission needs flat ancestor witnesses on this proof first.
-	if binding.Value.Child.Value.Depth > 1 {
-		return out, ErrProductSplitHeld
-	}
 	group, err := loadProductSplitRegistrations(ctx, tx, binding.Value.Request)
 	if err != nil {
 		return out, splitEvidenceErr(err)
@@ -47,7 +44,21 @@ func deriveSplitParentScope(ctx context.Context, tx *sql.Tx, binding ProductSpli
 	if at.IsZero() || at.Before(group.Value.RegisteredAt) {
 		return out, ErrProductSplitHeld
 	}
-	out.Value = ProductSplitParentScopeValue{ProductSplitRegistrationsValue: group.Value, ParentWorkItemID: binding.Value.Child.Value.WorkItemID, BindingID: binding.ID, BindingDigest: binding.Digest, GroupID: group.ID, GroupDigest: group.Digest, SourcePolicyDigest: policy.Value.PolicyDigest, SavedAt: at}
+	var ancestors []ProductSplitAncestorGroup
+	if binding.Value.Child.Value.Depth > 1 {
+		reference, err := splitSourceReferenceTx(ctx, tx, binding)
+		if err != nil {
+			return out, err
+		}
+		if reference.AncestorSet == nil {
+			return out, ErrProductSplitHeld
+		}
+		ancestors, err = canonicalSplitAncestorGroups(binding.Value.Request.Target.WaveID, reference.AncestorSet.Value.Groups)
+		if err != nil {
+			return out, err
+		}
+	}
+	out.Value = ProductSplitParentScopeValue{AncestorWitnesses: ancestors, ProductSplitRegistrationsValue: group.Value, ParentWorkItemID: binding.Value.Child.Value.WorkItemID, BindingID: binding.ID, BindingDigest: binding.Digest, GroupID: group.ID, GroupDigest: group.Digest, SourcePolicyDigest: policy.Value.PolicyDigest, SavedAt: at}
 	out.Digest, err = contentDigest(out.Value)
 	if err != nil {
 		return out, err
