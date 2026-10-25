@@ -339,3 +339,6 @@ trusted な初期設定で分割深さを3にした Wave では、登録済み�
 Coverage は直近の親の local criterion に対する part ID・part count・basis を保持する。元 Wave の条件への対応は ParentCriterionRoots と ParentCriteria に別途保持し、local criterion の名前が元条件と同じでも whole coverage の証拠にしない。提案は全4記録を同じ transaction で保存し、pause・古い source・途中失敗では部分保存しない。
 
 この接続は提案と child plan の metadata に限る。Task/model/runner、再帰的な local coverage、main 通知、親最終受入の許可にはしない。枠・retry・operation budget を補充しない。
+
+
+方向修正後の監査読み取りは、保存時の parent proof が参照する正式な登録集合から binding を取得する。現在の Wave target を要求して過去の提案・plan・allocation・scope を読めなくしない。新規提案は現在の登録 binding と target を照合し、過去の proof を新 scope の採用許可へ転用しない。

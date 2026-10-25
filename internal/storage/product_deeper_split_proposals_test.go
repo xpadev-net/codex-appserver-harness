@@ -111,6 +111,33 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 	if err := base.DB.QueryRow("SELECT count(*) FROM kernel_tasks").Scan(&tasks); err != nil || tasks != 0 {
 		t.Fatal("metadata dispatched Tasks", tasks, err)
 	}
+	t.Run("direction_preserves_immutable_history", func(t *testing.T) {
+		k := cloneNestedScopeStore(t, base)
+		direction, err := k.RequestWaveDirection(ctx, WaveDirectionRequest{Key: "deeper-history-direction", Target: r.Target, Instruction: "new requirements", NextPolicyRevision: r.Target.PolicyRevision + 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := k.ApplyWaveDirection(ctx, direction.ID); err != nil {
+			t.Fatal(err)
+		}
+		history, err := k.ReadProductSplitProposal(ctx, r.Target, r.ParentWorkItemID)
+		if err != nil || !reflect.DeepEqual(history, p) {
+			t.Fatal("direction lost canonical deeper proposal history", err)
+		}
+		historyPlan, err := k.ReadProductSplitChildPlan(ctx, planRequest)
+		if err != nil || !reflect.DeepEqual(historyPlan, plan) {
+			t.Fatal("direction lost canonical deeper plan history", err)
+		}
+		wave, err := k.Wave(ctx, r.Target.WaveID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed := cloneSplitRequest(t, r)
+		changed.Target, changed.Key, changed.Proposal.ScopeRevision = wave.Target(), "deeper-new-scope", wave.ScopeRevision
+		if _, err := k.PrepareProductNestedSplitProposal(ctx, changed, ref); err == nil {
+			t.Fatal("historical parent proof admitted a new scope")
+		}
+	})
 	records := []struct{ kind, id string }{
 		{"product_nested_split_child_scope", r.ParentWorkItemID},
 		{"product_nested_split_registrations", previous.Value.Scopes.Value.Request.ProposalID},
