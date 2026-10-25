@@ -163,6 +163,12 @@ func (k *KernelStore) InspectProductSplitAncestorWitnesses(ctx context.Context, 
 	if err != nil {
 		return out, splitEvidenceErr(err)
 	}
+	return deriveSplitAncestorWitnesses(scopes)
+}
+
+func deriveSplitAncestorWitnesses(scopes ProductNestedSplitChildScopes) (ProductSplitAncestorWitnesses, error) {
+	var out ProductSplitAncestorWitnesses
+	r := scopes.Value.Scopes.Value.Request
 	value := scopes.Value
 	groups, err := canonicalSplitAncestorGroups(r.Target.WaveID, []ProductSplitAncestorGroup{
 		splitAncestorGroup(value.ProductSplitChildScopesValue, value.ScopeSetID, value.ScopeSetDigest, value.ParentWorkItemID, value.SourcePolicyDigest),

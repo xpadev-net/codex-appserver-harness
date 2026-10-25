@@ -155,8 +155,9 @@ func TestProductNestedSplitCreationPinsWholeAncestryAndPhysicalOwnerBeforeGETBin
 	if err != nil || len(scopes.Value.Children) != 2 {
 		t.Fatal("complete nested scope binding denied", err)
 	}
-	if _, err := k.RegisterProductSplitChildren(ctx, r); !readinessHoldError(err) {
-		t.Fatal("nested registration enabled before recursive binding", err)
+	registered, err := k.RegisterProductSplitChildren(ctx, r)
+	if err != nil || len(registered.Value.Registrations) != 2 {
+		t.Fatal("explicit nested registration denied", err)
 	}
 }
 
