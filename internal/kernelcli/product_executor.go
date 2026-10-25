@@ -66,6 +66,10 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 	if err != nil {
 		return productExecutorPipeline{}, err
 	}
+	splitRepositories, err := c.Publication.splitRepositories(c.Repositories)
+	if err != nil {
+		return productExecutorPipeline{}, err
+	}
 	var mergeConfig *ProductMergeConfig
 	if c.Publication != nil {
 		mergeConfig = c.Publication.Merge
@@ -195,6 +199,10 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 		reconciliation := product.MergeReconciliationWorker{Reconciler: product.MergeReconciler{Store: k, API: product.GitHubResourceAPI}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 		splitReconciliation := product.SplitCreationReconciliationWorker{Reconciler: product.SplitCreationReconciler{Store: k, API: product.GitHubSplitResourceAPI, MaxPages: 32}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 		workers := []func(context.Context) error{w.Run, dispatcher.Run, completion.Run, reconciliation.Run, splitReconciliation.Run}
+		if len(splitRepositories) > 0 {
+			splitDispatch := product.SplitCreationDispatchWorker{Store: k, Executable: exe, Repositories: splitRepositories, SourcePolicies: sources, Workers: c.Publication.Split.Workers, Every: every, OnMutation: wake, Report: report}
+			workers = append(workers, splitDispatch.Run)
+		}
 		if !externalObserver {
 			observer := product.Observer{Store: k, API: product.GitHubResourceAPI, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 			workers = append(workers, observer.Run)

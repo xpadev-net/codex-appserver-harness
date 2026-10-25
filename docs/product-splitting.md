@@ -93,3 +93,13 @@ ReserveProductSplitCreateUnsentRetry は、前 attempt が原子的に aborted�
 ReadLatestProductSplitCreate は最大32段の deterministic な後継を照合する。既知の後継が欠けた場合は古い aborted intent へ戻らない。元 attempt の監査記録は新しい lease generation の後も保持する。Save 時刻が封鎖より前なら保存せず、予算・lease を transaction 全体で rollback する。
 
 検査は、同じ marker/子枠での実 wrapper の単一 POST、unknown の拒否、旧 JSON の非補充、方向修正/reopen 後の保持、子をまたぐ Wave 共通上限、別接続の同時予約、遅い ledger INSERT 失敗の全 rollback、各証拠喪失と exact 復旧、budget 証拠だけが残る場合の初回再生成拒否を含む。自動 POST dispatcher と main/controller 採用、子 part scope/depth/source 系譜と親 retirement/gateway は引き続き接続する。
+
+## 明示 opt-in の自動 POST dispatcher
+
+daemon の private product-executor 設定で publication.split を指定した場合だけ、準備済み creation intent の自動送信を有効にする。例は `"split": {"workers": 1, "repository_ids": [17]}`。workers は1..8、repository_ids は既存 execution repository の正の一意 ID を1..128件とする。省略された旧 publication 設定から新しい Issue 書込みを許可しない。GET 結果の観測は既存 publication worker として継続する。
+
+SplitCreationDispatchWorker は全 journal 証拠から対象を列挙し、同じ子の全 transport attempt に一つの flight を割り当てる。新規送信には現在の allowlist、source policy、未 pause の proposal と全保存証拠を照合する。既存 private spec があれば二度目の launch をせず、未 activation の intent を封鎖するか、元の registered process group を停止する。aborted の後継は固定 Wave retry 予算内でだけ予約し、同じ marker/body/子枠を保つ。
+
+unknown は repository が allowlist から外れた後も元の送信者の停止を回復する。停止と結果不明を区別し、GET の不在による再送を行わない。stopped/observed には POST を発行しない。owner cancel 時も全 flight と実送信 group の停止を join する。通知は保存値を再読取して commit 済みの停止・封鎖、または保存済み retry 予約だけに基づく。
+
+Go/SQLite・実 subprocess と fixture gh の検査で、古い spec の封鎖から一度だけの POST・GET binding、pause/resume、allowlist 制限、allowlist 変更後の unknown 回復、commit 失敗時の通知抑制、cancel 時の物理停止と join を確認する。この dispatcher は既に採用された intent を処理するものであり、main/controller の分割判断、子 WorkItem の登録・part scope/depth/source 系譜、親 retirement/gateway は引き続き必要である。
