@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"strings"
@@ -144,5 +145,65 @@ func TestProductSplitFinalClosedSourceRequiresOwnMergeAndNeverWaivesHold(t *test
 				t.Fatal("closed Issue bypassed final proof", mode, got)
 			}
 		})
+	}
+}
+
+func TestProductNestedSplitFinalSourcesIncludeDelegatedIntermediateIssues(t *testing.T) {
+	ctx := context.Background()
+	k, r, scopes := nestedRegistrationScopeFixture(t)
+	nested, err := k.RegisterProductSplitChildren(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := k.clock()
+	k.Now = func() time.Time { return fixed }
+	bindings := append(append([]ProductSplitChildScopeBinding{}, scopes.Value.Children...), nested.Value.Children...)
+	for _, binding := range bindings {
+		id := binding.Value.Child.Value.WorkItemID
+		prior, err := k.ReadProductSplitChildSource(ctx, r.Target, id)
+		expected := ""
+		if err == nil {
+			expected = prior.ID
+		} else if err != sql.ErrNoRows {
+			t.Fatal(err)
+		}
+		if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, id, expected, splitSourceFacts(binding)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proof, err := k.ReadProductSplitFinalSources(ctx, r.Target)
+	if err != nil || proof == nil || len(proof.Value.Sources) != 4 {
+		t.Fatal("nested tree omitted a layer", proof, err)
+	}
+	seen := map[string]bool{}
+	for _, source := range proof.Value.Sources {
+		seen[source.WorkItemID] = true
+	}
+	for _, binding := range bindings {
+		if !seen[binding.Value.Child.Value.WorkItemID] {
+			t.Fatal("registered source omitted", binding.ID)
+		}
+	}
+	// The parent of the nested group has no own merge. A fresh held/closed
+	// intermediate Issue cannot disappear just because all leaves are observed.
+	parentID := r.ParentWorkItemID
+	var parent ProductSplitChildScopeBinding
+	for _, binding := range bindings {
+		if binding.Value.Child.Value.WorkItemID == parentID {
+			parent = binding
+		}
+	}
+	source, err := k.ReadProductSplitChildSource(ctx, r.Target, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts := splitSourceFacts(parent)
+	facts.Hold = true
+	facts.IssueState = "closed"
+	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, parentID, source.ID, facts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ReadProductSplitFinalSources(ctx, r.Target); !errors.Is(err, ErrProductFinalPlanHeld) {
+		t.Fatal("held intermediate Issue disappeared from final gate", err)
 	}
 }
