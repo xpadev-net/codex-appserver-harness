@@ -73,8 +73,8 @@ func TestProductSplitRegistrationsAtomicallyPreserveScopeAndLifetimeSeats(t *tes
 		t.Fatal("parent registration replaced", parentAfter, err)
 	}
 	coverage, err := k.ProductCoverage(ctx, r.Target)
-	if err != nil || len(coverage.Value.Residual) != 2 || len(coverage.Value.UnmergedWorkItems) != 3 || len(coverage.Value.Retired) != 0 || len(coverage.Value.Merged) != 0 {
-		t.Fatal("registration completed or retired parent", coverage, err)
+	if err != nil || len(coverage.Value.Residual) != 2 || len(coverage.Value.UnmergedWorkItems) != 2 || len(coverage.Value.Retired) != 1 || coverage.Value.Retired[0].WorkItemID != r.ParentWorkItemID || coverage.Value.Retired[0].SplitID != saved.ID || len(coverage.Value.Merged) != 0 {
+		t.Fatal("whole registration did not delegate without completing coverage", coverage, err)
 	}
 	var n int
 	if err := k.DB.QueryRow("SELECT count(*) FROM kernel_tasks").Scan(&n); err != nil || n != 0 {
