@@ -34,6 +34,14 @@ type splitWorkItemSeat struct {
 
 func loadProductSplitAllocation(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitAllocation, error) {
 	var saved, history ProductSplitAllocation
+	var nested bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.allocation.value.request.proposal_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_children' AND operation_key=? AND json_type(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.allocation') IS NOT NULL)`, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID}), r.ProposalID, r.ProposalID).Scan(&nested); err != nil {
+		return saved, err
+	}
+	if nested {
+		envelope, err := loadNestedSplitAllocation(ctx, tx, r)
+		return envelope.Value.Allocation, err
+	}
 	err := taskEvidenceRecord(ctx, tx, "product_split_allocation", r.ProposalID, &saved)
 	if errors.Is(err, sql.ErrNoRows) {
 		var known bool
@@ -125,22 +133,23 @@ func splitAllocationIDsTx(ctx context.Context, tx *sql.Tx, waveID string) ([]str
 	if orphan {
 		return nil, ErrProductSplitHeld
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM records WHERE work_item_id=? AND kind IN ('product_split_allocation','product_split_allocation_admission')
- UNION SELECT work_item_id FROM records WHERE kind='product_split_allocation_history' AND json_extract(payload,'$.value.request.target.wave_id')=?
- UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE work_item_id=? AND kind='product_split_work_item_seat'
+	rows, err := tx.QueryContext(ctx, splitScopeWitnessSQL(`SELECT id FROM split_scope_witnesses WHERE work_item_id=? AND kind IN ('product_split_allocation','product_split_allocation_admission')
+ UNION SELECT work_item_id FROM split_scope_witnesses WHERE kind='product_split_allocation_history' AND json_extract(payload,'$.value.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM split_scope_witnesses WHERE work_item_id=? AND kind='product_split_work_item_seat'
+ UNION SELECT json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.allocation.value.request.proposal_id') FROM split_scope_witnesses WHERE work_item_id=? AND kind IN ('product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat')
  UNION SELECT operation_key FROM kernel_budget_ledger WHERE wave_id=? AND kind='split_children'
- UNION SELECT json_extract(payload,'$.request.proposal_id') FROM records WHERE kind='product_split_create_history' AND json_extract(payload,'$.request.target.wave_id')=?
- UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind IN ('product_split_create_admission','product_split_created_resource') AND work_item_id=?
- UNION SELECT json_extract(payload,'$.value.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.request.target.wave_id')=?
- UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.request.target.wave_id')=?
- UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind='product_split_create_retry_budget' AND work_item_id=?
+ UNION SELECT json_extract(payload,'$.request.proposal_id') FROM split_scope_witnesses WHERE kind='product_split_create_history' AND json_extract(payload,'$.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM split_scope_witnesses WHERE kind IN ('product_split_create_admission','product_split_created_resource') AND work_item_id=?
+ UNION SELECT json_extract(payload,'$.value.value.request.proposal_id') FROM split_scope_witnesses WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.value.request.proposal_id') FROM split_scope_witnesses WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.request.target.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM split_scope_witnesses WHERE kind='product_split_create_retry_budget' AND work_item_id=?
  UNION SELECT json_extract(payload,'$.proposal_id') FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=?
- UNION SELECT json_extract(payload,'$.value.proposal_id') FROM records WHERE kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(payload,'$.value.wave_id')=?
- UNION SELECT json_extract(payload,'$.proposal_id') FROM records WHERE kind='product_split_preparation_creation' AND work_item_id=?
- UNION SELECT json_extract(payload,'$.preparation.value.proposal_id') FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.source.target.wave_id')=?
- UNION SELECT json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id') FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_split_completion') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.target.wave_id')=?
- UNION SELECT json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.request.proposal_id') FROM records WHERE kind='product_split_child_scope_source' AND work_item_id=?
- UNION SELECT coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id')) FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND work_item_id=? AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope')) IS NOT NULL LIMIT ?`, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
+ UNION SELECT json_extract(payload,'$.value.proposal_id') FROM split_scope_witnesses WHERE kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(payload,'$.value.wave_id')=?
+ UNION SELECT json_extract(payload,'$.proposal_id') FROM split_scope_witnesses WHERE kind='product_split_preparation_creation' AND work_item_id=?
+ UNION SELECT json_extract(payload,'$.preparation.value.proposal_id') FROM split_scope_witnesses WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.source.target.wave_id')=?
+ UNION SELECT json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id') FROM split_scope_witnesses WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_split_completion') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.target.wave_id')=?
+ UNION SELECT json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.request.proposal_id') FROM split_scope_witnesses WHERE kind='product_split_child_scope_source' AND work_item_id=?
+ UNION SELECT coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id')) FROM split_scope_witnesses WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND work_item_id=? AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope')) IS NOT NULL LIMIT ?`), waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, maxProductWorkItems+1)
 	if err != nil {
 		return nil, err
 	}
@@ -225,8 +234,15 @@ func productWorkItemLifetimeIDsTx(ctx context.Context, tx *sql.Tx, w domain.Wave
 	}
 	for _, id := range allocations {
 		var head ProductSplitAllocation
-		if err := taskEvidenceRecord(ctx, tx, "product_split_allocation", id, &head); err != nil {
+		if err := taskEvidenceRecord(ctx, tx, "product_split_allocation", id, &head); err != nil && err != sql.ErrNoRows {
 			return nil, splitEvidenceErr(err)
+		}
+		var nested ProductNestedSplitAllocation
+		nestedErr := taskEvidenceRecord(ctx, tx, "product_nested_split_allocation", id, &nested)
+		if nestedErr == nil {
+			head = nested.Value.Allocation
+		} else if nestedErr != sql.ErrNoRows {
+			return nil, splitEvidenceErr(nestedErr)
 		}
 		if head.Value.Request.Target.WaveID != w.ID || head.Value.Request.ProposalID != id {
 			return nil, ErrProductSplitHeld
@@ -288,10 +304,8 @@ func (k *KernelStore) reserveProductSplitChildrenTx(ctx context.Context, tx *sql
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest {
 		return saved, ErrProductSplitHeld
 	}
-	// Nested allocation and creation must first carry their own ancestor
-	// witnesses; adopting a metadata plan alone never reserves execution seats.
 	if proposal.Value.ParentSplitScope != nil {
-		return saved, ErrProductSplitHeld
+		return k.reserveNestedSplitChildrenTx(ctx, tx, r, w)
 	}
 	plan, err := loadProductSplitChildPlan(ctx, tx, r)
 	if err != nil {
@@ -310,7 +324,7 @@ func (k *KernelStore) reserveProductSplitChildrenTx(ctx context.Context, tx *sql
 			return saved, ErrProductSplitHeld
 		}
 		var collision bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_work_item_registration','wave_work_item','product_split_work_item_seat')) OR EXISTS(SELECT 1 FROM records WHERE kind='product_work_item_registration_version' AND json_extract(payload,'$.value.definition.id')=?)", child.Value.WorkItemID, child.Value.WorkItemID).Scan(&collision); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE id=? AND kind IN ('product_work_item_registration','wave_work_item','product_split_work_item_seat','product_nested_split_work_item_seat')) OR EXISTS(SELECT 1 FROM records WHERE kind='product_work_item_registration_version' AND json_extract(payload,'$.value.definition.id')=?)", child.Value.WorkItemID, child.Value.WorkItemID).Scan(&collision); err != nil {
 			return saved, err
 		}
 		if collision {

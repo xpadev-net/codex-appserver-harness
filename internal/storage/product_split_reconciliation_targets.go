@@ -29,17 +29,17 @@ func (k *KernelStore) SplitCreationReconciliationTargets(ctx context.Context, af
 		return page, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT cursor,id,resource,witness_kind FROM (
- SELECT 'creation:'||id AS cursor,id,'' AS resource,'' AS witness_kind FROM records WHERE kind IN ('product_split_create','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget','product_split_preparation_creation')
- UNION SELECT 'creation:'||work_item_id,work_item_id,'','' FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history')
+	rows, err := tx.QueryContext(ctx, splitScopeWitnessSQL(`SELECT cursor,id,resource,witness_kind FROM (
+ SELECT 'creation:'||id AS cursor,id,'' AS resource,'' AS witness_kind FROM split_scope_witnesses WHERE kind IN ('product_split_create','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget','product_split_preparation_creation')
+ UNION SELECT 'creation:'||work_item_id,work_item_id,'','' FROM split_scope_witnesses WHERE kind IN ('product_split_create_event','product_split_create_gate_history')
  UNION SELECT 'creation:'||run_id,run_id,'','' FROM kernel_resource_leases WHERE resource LIKE 'product-split-mutation:%'
  UNION SELECT 'creation:'||operation_key,operation_key,'','' FROM kernel_budget_ledger WHERE kind='split_create_retry'
- UNION SELECT 'resource:'||id,'',id,'' FROM records WHERE kind='product_split_created_resource'
- UNION SELECT 'scope:'||printf('%020d',rowid),'',id,kind FROM records WHERE kind IN
- ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_child_scope_source','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_split_completion')
- UNION SELECT 'scope:'||printf('%020d',rowid),'',id,kind FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item')
+ UNION SELECT 'resource:'||id,'',id,'' FROM split_scope_witnesses WHERE kind='product_split_created_resource'
+ UNION SELECT CASE WHEN kind='product_nested_split_allocation_ledger' THEN 'scope-ledger:' ELSE 'scope:' END||printf('%020d',rowid),'',id,kind FROM split_scope_witnesses WHERE kind IN
+ ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_child_scope_source','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_split_completion')
+ UNION SELECT CASE WHEN kind='product_nested_split_allocation_ledger' THEN 'scope-ledger:' ELSE 'scope:' END||printf('%020d',rowid),'',id,kind FROM split_scope_witnesses WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item')
  AND CASE WHEN json_valid(payload) THEN coalesce(json_extract(payload,'$.value.split_scope'),json_extract(payload,'$.split_scope')) IS NOT NULL ELSE 1 END
- ) WHERE cursor>? ORDER BY cursor LIMIT ?`, after, limit+1)
+ ) WHERE cursor>? ORDER BY cursor LIMIT ?`), after, limit+1)
 	if err != nil {
 		return page, err
 	}

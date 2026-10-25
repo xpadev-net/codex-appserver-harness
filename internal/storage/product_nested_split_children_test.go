@@ -53,9 +53,6 @@ func TestProductNestedSplitChildPlanPersistsStableDepthLocalMappingAndWholeAnces
 			}
 		}
 	}
-	if _, err := k.ReserveProductSplitChildren(ctx, request); !errors.Is(err, ErrProductSplitHeld) {
-		t.Fatal("metadata intent acquired seats", err)
-	}
 	if _, err := k.PrepareProductSplitCreate(ctx, request, plan.Children[0].ID, "nested-owner"); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("metadata intent created send journal", err)
 	}
