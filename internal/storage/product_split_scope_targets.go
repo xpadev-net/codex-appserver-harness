@@ -26,17 +26,23 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 		}
 
 	case "product_nested_split_scope_group":
-		var raw []byte
-		err = q.QueryRowContext(ctx, splitScopeWitnessSQL("SELECT payload FROM split_scope_witnesses WHERE kind=? AND id=?"), kind, key).Scan(&raw)
-		if err == nil {
-			var scopes ProductSplitChildScopes
-			if decodeErr := json.Unmarshal(raw, &scopes); decodeErr != nil {
-				return "", ErrTaskEvidence
-			}
-			if len(scopes.Value.Children) > 0 {
-				id = scopes.Value.Children[0].Value.CreationID
-			}
+		// This virtual row identifies its physical full envelope. Decode that
+		// envelope explicitly so ancestor and own scope shapes cannot be confused.
+		originKind, originID, ok := strings.Cut(key, ":")
+		if !ok || originID == "" || len(key) > 512 {
+			return "", ErrTaskEvidence
 		}
+		switch originKind {
+		case "product_nested_split_child_scopes", "product_nested_split_child_scopes_history", "product_nested_split_child_scopes_admission", "product_nested_split_child_scope", "product_nested_split_child_scope_history", "product_nested_split_child_scope_admission", "product_nested_split_child_scope_source":
+		default:
+			return "", ErrTaskEvidence
+		}
+		var envelope ProductNestedSplitChildScopes
+		err = taskEvidenceRecord(ctx, q, originKind, originID, &envelope)
+		if len(envelope.Value.Scopes.Value.Children) > 0 {
+			id = envelope.Value.Scopes.Value.Children[0].Value.CreationID
+		}
+
 	case "product_split_child_scope", "product_split_child_scope_history", "product_split_child_scope_admission", "product_split_child_source", "product_split_child_source_history", "product_split_child_source_policy", "product_split_child_source_policy_history":
 		var binding ProductSplitChildScopeBinding
 		err = taskEvidenceRecord(ctx, q, kind, key, &binding)
