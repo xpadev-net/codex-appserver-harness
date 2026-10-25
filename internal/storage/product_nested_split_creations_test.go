@@ -78,6 +78,16 @@ func TestProductNestedSplitCreationPinsWholeAncestryAndPhysicalOwnerBeforeGETBin
 	if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
+	readStart := time.Now()
+	if _, err := k.ReadProductSplitCreate(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	readElapsed := time.Since(readStart)
+	var witnessCount, witnessBytes int64
+	if err := k.DB.QueryRow("SELECT count(*),coalesce(sum(length(payload)),0) FROM records WHERE kind LIKE 'product_split_%' OR kind LIKE 'product_nested_split_%'").Scan(&witnessCount, &witnessBytes); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("nested creation audit: witnesses=%d payload_bytes=%d authenticated_read=%s", witnessCount, witnessBytes, readElapsed)
 	identity := startSplitCreationOwner(t, k, job, 20*time.Second)
 	active, err := k.ReadProductSplitCreate(ctx, job.ID)
 	if err != nil || active.State != "unknown" {

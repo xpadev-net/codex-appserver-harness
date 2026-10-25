@@ -226,7 +226,7 @@ InspectProductSplitProposalContext は、登録済みの子自身の local scope
 
 入力は1MiBまでで、元登録・全件 group・source/history/pin の欠落、scope/policy/source の失効、hold/closed/本文変更、期限切れ・時計巻戻り、保存済み depth cap を保留として返す。作成時刻・journal/admission ID を持たず、記録・予算・Task を変更しない。通常 root の保存形式・digest は optional field の省略により維持する。
 
-この段階では再分割の永続採用・孫 Issue の作成を許可しない。PrepareProductSplitProposal / PrepareProductSplitExecution と creation preflight は引き続き nested context を保留する。永続的な親 scope の witness、孫作成時の親 Issue source fence、再帰 registration / part coverage をまとめて接続してから解除する。読み取り専用の検査結果は model/runner・送信・品質の許可ではない。
+通常の PrepareProductSplitProposal / PrepareProductSplitExecution は nested context を保留する。再分割の永続採用と孫 Issue の作成は、後述の親 scope 証拠・祖先付き作成 journal・own source fence の下でのみ許可する。再帰 registration / part coverage と model/runner 実行は引き続き保留し、読み取り専用の検査結果を送信・品質の許可へ変換しない。
 
 ## 再分割のための親 scope 証拠
 
