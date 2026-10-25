@@ -27,17 +27,24 @@ type ProductSplitProposalRequest struct {
 	RegistrationDigest string             `json:"registration_digest"`
 	Proposal           splitting.Proposal `json:"proposal"`
 }
+type ProductSplitParentScopeReference struct {
+	ID     string `json:"id"`
+	Digest string `json:"digest"`
+}
+
 type ProductSplitProposalValue struct {
-	ParentSplitScope          *ProductSplitChildScopeReference `json:"parent_split_scope,omitempty"`
-	ParentCriterionRoots      map[string]string                `json:"parent_criterion_roots,omitempty"`
-	Request                   ProductSplitProposalRequest      `json:"request"`
-	InitialRegistrationDigest string                           `json:"initial_registration_digest"`
-	ParentScopeDigest         string                           `json:"parent_scope_digest"`
-	SourceDigest              string                           `json:"source_digest"`
-	Limits                    WaveOperationLimits              `json:"limits"`
-	Depth                     int                              `json:"depth"`
-	Product                   *ProductTargetSnapshot           `json:"product,omitempty"`
-	CreatedAt                 time.Time                        `json:"created_at"`
+	ParentScopeProof          *ProductSplitParentScopeReference `json:"parent_scope_proof,omitempty"`
+	RootSourceDigest          string                            `json:"root_source_digest,omitempty"`
+	ParentSplitScope          *ProductSplitChildScopeReference  `json:"parent_split_scope,omitempty"`
+	ParentCriterionRoots      map[string]string                 `json:"parent_criterion_roots,omitempty"`
+	Request                   ProductSplitProposalRequest       `json:"request"`
+	InitialRegistrationDigest string                            `json:"initial_registration_digest"`
+	ParentScopeDigest         string                            `json:"parent_scope_digest"`
+	SourceDigest              string                            `json:"source_digest"`
+	Limits                    WaveOperationLimits               `json:"limits"`
+	Depth                     int                               `json:"depth"`
+	Product                   *ProductTargetSnapshot            `json:"product,omitempty"`
+	CreatedAt                 time.Time                         `json:"created_at"`
 }
 type ProductSplitProposal struct {
 	ID     string                    `json:"id"`
@@ -164,6 +171,7 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 		return value, err
 	}
 	if binding != nil {
+		value.RootSourceDigest = value.SourceDigest
 		value.SourceDigest, err = contentDigest(struct{ RootSourceDigest, BindingDigest, PolicyDigest string }{value.SourceDigest, binding.Digest, parentPolicy})
 		if err != nil {
 			return value, err
@@ -240,6 +248,13 @@ func loadProductSplitProposal(ctx context.Context, tx *sql.Tx, r ProductSplitPro
 	head := splitProposalHead(r)
 	err := taskEvidenceRecord(ctx, tx, "product_split_proposal", head, &saved)
 	if errors.Is(err, sql.ErrNoRows) {
+		nested, nestedErr := loadNestedSplitProposal(ctx, tx, r)
+		if nestedErr == nil {
+			return nested.Value.Proposal, nil
+		}
+		if nestedErr != sql.ErrNoRows {
+			return saved, nestedErr
+		}
 		var known bool
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_request' AND work_item_id=? AND json_extract(payload,'$.head_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children','product_split_children_history','product_split_child_intent','product_split_child_intent_history','product_split_allocation','product_split_allocation_history') AND json_extract(payload,'$.value.parent_head_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children_admission','product_split_child_intent_admission','product_split_allocation_admission','product_split_work_item_seat') AND json_extract(payload,'$.parent_head_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_children' AND json_extract(payload,'$.value.parent_head_id')=?)", head, head, r.Target.WaveID, head, head, head, head).Scan(&known); err != nil {
 			return saved, err
@@ -343,7 +358,7 @@ func (k *KernelStore) prepareProductSplitProposalTx(ctx context.Context, tx *sql
 		return saved, err
 	}
 	var known bool
-	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_proposal_request' AND id=?)", splitProposalRequestID(r)).Scan(&known); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_proposal_request','product_nested_split_proposal_request') AND id=?)", splitProposalRequestID(r)).Scan(&known); err != nil {
 		return saved, err
 	}
 	if known {
@@ -419,6 +434,14 @@ func (k *KernelStore) readProductSplitProposalTx(ctx context.Context, tx *sql.Tx
 	current, err := k.productSplitContextTx(ctx, tx, saved.Value.Request)
 	if err != nil {
 		return saved, err
+	}
+	if saved.Value.ParentScopeProof != nil {
+		if err := bindNestedParentProof(ctx, tx, &current, *saved.Value.ParentScopeProof); err != nil {
+			return saved, err
+		}
+		if saved.Value.CreatedAt.After(k.clock()) {
+			return saved, ErrProductSplitHeld
+		}
 	}
 	current.CreatedAt = saved.Value.CreatedAt
 	if !reflect.DeepEqual(current, saved.Value) {
