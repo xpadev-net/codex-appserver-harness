@@ -133,9 +133,10 @@ func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int)
 	err := taskEvidenceRecord(ctx, tx, "product_split_create", id, &record)
 	if errors.Is(err, sql.ErrNoRows) {
 		var known bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history') AND work_item_id=?) OR EXISTS(SELECT 1 FROM kernel_resource_leases WHERE run_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_created_resource' AND json_extract(payload,'$.creation_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND operation_key=?)
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget','product_split_preparation_creation') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history') AND work_item_id=?) OR EXISTS(SELECT 1 FROM kernel_resource_leases WHERE run_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_created_resource' AND json_extract(payload,'$.creation_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND operation_key=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_create_retry_budget' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))
- OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))`, id, id, id, id, id, id, id, id, id).Scan(&known); err != nil {
+ OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))
+ OR EXISTS(SELECT 1 FROM records r, json_each(r.payload,'$.value.creations') c WHERE r.kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(c.value,'$.id')=?)`, id, id, id, id, id, id, id, id, id, id).Scan(&known); err != nil {
 			return job, err
 		}
 		if known {
@@ -361,15 +362,23 @@ func (k *KernelStore) splitCreatePreflightTx(ctx context.Context, tx *sql.Tx, r 
 // expired gate can be renewed by ObserveProductSplitCreateGate after a fresh
 // host source read; missing evidence is never recreated by a replay.
 func (k *KernelStore) PrepareProductSplitCreate(ctx context.Context, r ProductSplitChildPlanRequest, childID, ownerID string) (ProductSplitCreate, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductSplitCreate{}, err
+	}
+	defer tx.Rollback()
+	saved, err := k.prepareProductSplitCreateTx(ctx, tx, r, childID, ownerID)
+	if err != nil {
+		return saved, err
+	}
+	return saved, tx.Commit()
+}
+
+func (k *KernelStore) prepareProductSplitCreateTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, childID, ownerID string) (ProductSplitCreate, error) {
 	var job ProductSplitCreate
 	if childID == "" || strings.TrimSpace(ownerID) == "" || len(ownerID) > 256 || strings.ContainsAny(ownerID, "\x00\r\n") {
 		return job, ErrProductSplitHeld
 	}
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return job, err
-	}
-	defer tx.Rollback()
 	prior, err := loadSplitCreate(ctx, tx, splitCreateID(childID))
 	if err == nil {
 		if prior.Value.Request != r || prior.Value.OwnerID != ownerID {
@@ -419,7 +428,7 @@ func (k *KernelStore) PrepareProductSplitCreate(ctx context.Context, r ProductSp
 	if err != nil {
 		return job, err
 	}
-	return job, tx.Commit()
+	return job, nil
 }
 
 // Only the actual registered group leader can win this one-use send admission.
@@ -633,10 +642,11 @@ func (k *KernelStore) ReadProductSplitCreate(ctx context.Context, id string) (Pr
 // allocation once existed. Missing indexes cannot replace it with a new key.
 func splitCreationWitnessTx(ctx context.Context, tx *sql.Tx, waveID, parentHead string) (bool, error) {
 	var known bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_created_resource','product_split_create_retry_budget') AND json_extract(payload,'$.parent_head_id')=?)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_created_resource','product_split_create_retry_budget','product_split_preparation_creation') AND json_extract(payload,'$.parent_head_id')=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(payload,'$.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND json_extract(payload,'$.parent_head_id')=?)
- OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, parentHead, waveID).Scan(&known)
+ OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, parentHead, parentHead, waveID).Scan(&known)
 	return known, err
 }
