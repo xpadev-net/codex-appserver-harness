@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutDeeperAdmission(t *testing.T) {
+func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutExecution(t *testing.T) {
 	ctx := context.Background()
 	base, r, proof := nestedRegistrationScopeFixture(t)
 	registered, err := base.RegisterProductSplitChildren(ctx, r)
@@ -36,8 +36,19 @@ func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutDeeperAdmission
 	if _, err := base.RequireProductSplitChildSource(ctx, r.Target, id, first.Value.Facts.PolicyDigest, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := base.PrepareProductSplitParentScope(ctx, r.Target, id); !errors.Is(err, ErrProductSplitHeld) {
-		t.Fatal("deeper split admitted before ancestor proof integration", err)
+	parent, err := base.PrepareProductSplitParentScope(ctx, r.Target, id)
+	if err != nil || parent.Value.BindingID != proof.Value.Scopes.Value.Children[0].ID || !reflect.DeepEqual(parent.Value.AncestorWitnesses, first.Value.AncestorSet.Value.Groups) {
+		t.Fatal("parent proof dropped older ancestors", err)
+	}
+	for _, kind := range []string{"product_split_parent_scope", "product_split_parent_scope_history", "product_split_parent_scope_admission"} {
+		key := id
+		if kind == "product_split_parent_scope_history" {
+			key = parent.ID
+		}
+		var copy ProductSplitParentScope
+		if err := base.Record(ctx, kind, key, &copy); err != nil || !reflect.DeepEqual(copy, parent) {
+			t.Fatal("independent parent copy lost witnesses", kind, err)
+		}
 	}
 	after, err := base.WaveOperationBudget(ctx, r.Target.WaveID)
 	if err != nil || !reflect.DeepEqual(before, after) {
@@ -76,6 +87,7 @@ func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutDeeperAdmission
 	records := []struct{ kind, id string }{
 		{"product_split_child_source", id}, {"product_split_child_source_history", first.ID},
 		{"product_split_child_source_policy", id}, {"product_split_child_source_policy_history", id},
+		{"product_split_parent_scope", id}, {"product_split_parent_scope_history", parent.ID}, {"product_split_parent_scope_admission", id},
 	}
 	for _, record := range records {
 		t.Run("sole_"+record.kind, func(t *testing.T) {
@@ -150,6 +162,46 @@ func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutDeeperAdmission
 			t.Fatal("resealed policy erased ancestors", err)
 		}
 	})
+	t.Run("resealed_parent_cannot_drop_ancestors", func(t *testing.T) {
+		k := cloneNestedScopeStore(t, base)
+		changed := parent
+		if len(parent.Value.AncestorWitnesses) < 2 {
+			t.Fatal("fixture needs older ancestor groups")
+		}
+		changed.Value.AncestorWitnesses = append([]ProductSplitAncestorGroup{}, parent.Value.AncestorWitnesses[1:]...)
+		changed.Digest, err = contentDigest(changed.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed.ID = structureID("split-parent-scope-", id, changed.Digest)
+		tx, err := k.kernelTx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		for _, record := range []struct{ kind, key string }{{"product_split_parent_scope", id}, {"product_split_parent_scope_history", changed.ID}, {"product_split_parent_scope_admission", id}} {
+			if err := kernelRecordTx(ctx, tx, record.kind, record.key, r.Target.WaveID, changed); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := loadSplitParentScope(ctx, tx, proof.Value.Scopes.Value.Children[0]); !readinessHoldError(err) {
+			t.Fatal("resealed parent proof erased ancestors", err)
+		}
+	})
+	t.Run("missing_parent_head", func(t *testing.T) {
+		k := cloneNestedScopeStore(t, base)
+		if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_split_parent_scope' AND id=?", id); err != nil {
+			t.Fatal(err)
+		}
+		tx, err := k.kernelTx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if _, err := loadSplitParentScope(ctx, tx, proof.Value.Scopes.Value.Children[0]); !readinessHoldError(err) {
+			t.Fatal("missing parent proof could be reinitialized", err)
+		}
+	})
 	t.Run("missing_source_head", func(t *testing.T) {
 		k := cloneNestedScopeStore(t, base)
 		if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_split_child_source' AND id=?", id); err != nil {
@@ -163,8 +215,8 @@ func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutDeeperAdmission
 	if err := base.DB.QueryRow("SELECT count(*) FROM kernel_tasks").Scan(&tasks); err != nil || tasks != 0 {
 		t.Fatal("source observation created Tasks", tasks, err)
 	}
-	if err := base.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_split_parent_scope' AND id=?", id).Scan(&parentScopes); err != nil || parentScopes != 0 {
-		t.Fatal("failed deeper admission left a proof", parentScopes, err)
+	if err := base.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_split_parent_scope' AND id=?", id).Scan(&parentScopes); err != nil || parentScopes != 1 {
+		t.Fatal("parent proof count changed", parentScopes, err)
 	}
 }
 
