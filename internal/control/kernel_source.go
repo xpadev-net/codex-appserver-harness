@@ -91,14 +91,11 @@ func (s *KernelSource) bindingContract(ctx context.Context, b contract.SessionBi
 			return contract.StrictOutputSchema(contract.ProductVerificationTaskResultSchema()), worker.ValidateProductVerificationTaskOutput, nil
 		}
 		if storage.UsesProductReviewOutput(wave, task) {
-			registration, err := s.Store.ReadProductWorkItemRegistration(ctx, task.Spec.WorkItemIDs[0])
+			version, err := s.Store.ProductReviewOutputVersion(ctx, task.ID)
 			if err != nil {
 				return nil, nil, err
 			}
-			if registration.Value.SplitScope != nil {
-				if _, err := s.Store.ReadProductSplitChildScope(ctx, wave.Target(), task.Spec.WorkItemIDs[0]); err != nil {
-					return nil, nil, err
-				}
+			if version == 4 {
 				return contract.StrictOutputSchema(contract.ProductLocalReviewTaskResultSchema()), worker.ValidateProductLocalReviewTaskOutput, nil
 			}
 		}

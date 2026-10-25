@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"reflect"
 	"slices"
 
@@ -37,6 +38,49 @@ type ProductTaskReviewSnapshot struct {
 // execution, quality certification or publication permission.
 func UsesProductReviewOutput(w domain.Wave, t domain.Task) bool {
 	return w.Policy.Stage == "P" && w.Policy.Product && t.Spec.Kind == "review" && len(t.Spec.WorkItemIDs) == 1
+}
+
+// ProductReviewOutputVersion selects the trusted report profile from one
+// canonical metadata snapshot. It grants neither readiness nor execution.
+func (k *KernelStore) ProductReviewOutputVersion(ctx context.Context, taskID string) (int, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	task, err := loadTask(ctx, tx, taskID)
+	if err != nil {
+		return 0, err
+	}
+	w, err := loadWave(ctx, tx, task.WaveID)
+	if err != nil {
+		return 0, err
+	}
+	if !UsesProductReviewOutput(w, task) {
+		return 0, ErrProductSubjectHeld
+	}
+	registration, err := loadProductWorkItemRegistration(ctx, tx, task.Spec.WorkItemIDs[0])
+	if errors.Is(err, sql.ErrNoRows) {
+		known, readErr := productSplitChildExecutionHeld(ctx, tx, task.Spec.WorkItemIDs[0])
+		if readErr != nil {
+			return 0, readErr
+		}
+		if known {
+			return 0, ErrProductSplitHeld
+		}
+		return 1, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	binding, err := productSplitChildScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return 0, err
+	}
+	if binding != nil {
+		return 4, nil
+	}
+	return 1, nil
 }
 
 // productReviewEvidenceTx authorizes only an independent review report. A clean

@@ -316,7 +316,7 @@ func TestProductScopedExecutionPermitExpiresAtConsumerEndAndCannotCrossTransacti
 	}
 }
 
-func githubScopedExecutionFixture(t *testing.T) (*KernelStore, domain.Wave, ProductSplitRegistrations, ProductSourceFacts) {
+func githubScopedExecutionFixture(t *testing.T, configure ...func(*splitting.Proposal)) (*KernelStore, domain.Wave, ProductSplitRegistrations, ProductSourceFacts) {
 	t.Helper()
 	ctx := context.Background()
 	k, request := waveStoreFixture(t)
@@ -340,6 +340,9 @@ func githubScopedExecutionFixture(t *testing.T) (*KernelStore, domain.Wave, Prod
 	proposal := splitting.Proposal{SchemaVersion: 1, WorkItemID: root.ID, ScopeRevision: w.ScopeRevision, Outcome: "split", Children: []splitting.Child{}}
 	for _, key := range []string{"left", "right"} {
 		proposal.Children = append(proposal.Children, splitting.Child{Key: key, Title: key + " part", Requirement: "implement the " + key + " part", Criteria: []verification.Criterion{{ID: key, Requirement: key + " local behavior"}}, Coverage: []splitting.Coverage{{ParentCriterion: "AC", ChildCriterion: key, PartID: key, PartCount: 2, Basis: key + " portion of the original request"}}, DependsOn: []string{}})
+	}
+	for _, apply := range configure {
+		apply(&proposal)
 	}
 	r := ProductSplitProposalRequest{Target: w.Target(), Key: "github-scoped", ParentWorkItemID: root.ID, RegistrationDigest: registration.Digest, Proposal: proposal}
 	prepared, err := k.PrepareProductSplitExecution(ctx, r)
