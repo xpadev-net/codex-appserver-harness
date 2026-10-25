@@ -147,6 +147,38 @@ func TestLegacyKernelImportReplayUsesStableReceiptAndRetainedArchive(t *testing.
 	}
 }
 
+func TestLegacyKernelImportReplayRejectsReplacedRootType(t *testing.T) {
+	for _, mode := range []string{"file", "symlink"} {
+		t.Run(mode, func(t *testing.T) {
+			_, request := legacyKernelImportFixture(t)
+			if _, err := PrepareLegacyKernelImport(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			retained := request.DestinationRoot + ".retained"
+			if err := os.Rename(request.DestinationRoot, retained); err != nil {
+				t.Fatal(err)
+			}
+			before := backupFileBytes(t, filepath.Join(retained, "state.db"))
+			if mode == "file" {
+				if err := os.WriteFile(request.DestinationRoot, []byte("other host file"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(retained, request.DestinationRoot); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := PrepareLegacyKernelImport(context.Background(), request); err == nil {
+				t.Fatal("replaced root adopted as replay")
+			}
+			if !bytes.Equal(before, backupFileBytes(t, filepath.Join(retained, "state.db"))) {
+				t.Fatal("rejected replay changed retained database")
+			}
+			if mode == "file" && string(backupFileBytes(t, request.DestinationRoot)) != "other host file" {
+				t.Fatal("conflicting file replaced")
+			}
+		})
+	}
+}
+
 func TestLegacyKernelImportFailuresDoNotPublishPartialRootAndRetryIsSafe(t *testing.T) {
 	for _, point := range []string{"before_schema", "schema_applied", "before_root_publish"} {
 		t.Run(point, func(t *testing.T) {

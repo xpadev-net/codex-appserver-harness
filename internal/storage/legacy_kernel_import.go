@@ -75,7 +75,10 @@ func prepareLegacyKernelImport(ctx context.Context, request LegacyKernelImportRe
 	if err := privateBackupPath(filepath.Join(parent, ".import-parent-check")); err != nil {
 		return empty, err
 	}
-	if _, err := os.Lstat(request.DestinationRoot); err == nil {
+	if info, err := os.Lstat(request.DestinationRoot); err == nil {
+		if !info.IsDir() {
+			return empty, errors.New("existing migration destination must be a real directory")
+		}
 		saved, err := InspectLegacyKernelImport(ctx, request.DestinationRoot)
 		if err != nil {
 			return empty, err
