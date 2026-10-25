@@ -57,7 +57,7 @@ func splitScopeWitnessSQL(query string) string {
  WHEN 'product_work_item_registration_version' THEN json_extract(payload,'$.value.split_scope.ancestor_set')
  WHEN 'wave_work_item' THEN json_extract(payload,'$.split_scope.ancestor_set')
  ELSE json_extract(payload,'$.value.ancestor_set') END ELSE NULL END AS ancestor_set,'compact' AS slot,kind IN ('product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission') AS required
- FROM split_scope_base WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')
+ FROM main.records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')
  UNION ALL SELECT rowid,kind,id,work_item_id,
  CASE WHEN json_valid(payload) THEN CASE WHEN json_type(payload,'$.value.ancestor_witnesses') IS NOT NULL
  THEN json_object('value',json_object('groups',json_extract(payload,'$.value.ancestor_witnesses'))) ELSE NULL END ELSE NULL END,
