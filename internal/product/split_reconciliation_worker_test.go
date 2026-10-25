@@ -155,3 +155,76 @@ func TestSplitCreationGETWorkerNeverInterruptsActiveSender(t *testing.T) {
 		t.Fatal("sending supervisor could not recover owner", stopped, err)
 	}
 }
+
+func TestSplitCreationReconciliationWorkerReturnsEachConcurrentFlightID(t *testing.T) {
+	ctx := context.Background()
+	k, first, api1 := stoppedSplitGETFixture(t)
+	plan, err := k.ReadProductSplitChildPlan(ctx, first.Value.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID := ""
+	for _, child := range plan.Children {
+		if child.ID != first.Value.Child.ID {
+			otherID = child.ID
+		}
+	}
+	second, err := k.PrepareProductSplitCreate(ctx, first.Value.Request, otherID, "second-http-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err = splitTestTransport(t, k, nil).Start(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	api1.mode, api1.entered, api1.release = "barrier", entered, release
+	api2 := &splitGETFixtureAPI{job: second, mode: "barrier", number: 12, entered: entered, release: release}
+	committed := make(chan struct{}, 2)
+	worker := SplitCreationReconciliationWorker{Reconciler: SplitCreationReconciler{Store: k, MaxPages: 2, API: func(job storage.ProductSplitCreate) ResourceAPI {
+		if job.ID == first.ID {
+			return api1
+		}
+		return api2
+	}}, Workers: 2, Every: time.Second, OnMutation: func() { committed <- struct{}{} }}
+	running, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(running) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			cancel()
+			close(release)
+			<-done
+			t.Fatal("distinct flights did not reach GET concurrently")
+		}
+	}
+	close(release)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-committed:
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-done
+			t.Fatal("concurrent flight result was lost")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("completed flight remained registered")
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		saved, err := k.ReadProductSplitCreate(ctx, id)
+		if err != nil || saved.State != "observed" {
+			t.Fatal("wrong flight got binding", id, saved.State, err)
+		}
+	}
+}

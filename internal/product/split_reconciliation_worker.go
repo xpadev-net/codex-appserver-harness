@@ -87,10 +87,10 @@ func (d SplitCreationReconciliationWorker) Run(ctx context.Context) error {
 					}
 					flights[id] = true
 					cursor = target.Cursor
-					go func(target storage.SplitCreationReconciliationTarget) {
+					go func(target storage.SplitCreationReconciliationTarget, flightID string) {
 						changed, err := d.process(ctx, target)
-						results <- result{id, changed, err}
-					}(target)
+						results <- result{flightID, changed, err}
+					}(target, id)
 				}
 				if complete {
 					if page.NextAfter == "" {

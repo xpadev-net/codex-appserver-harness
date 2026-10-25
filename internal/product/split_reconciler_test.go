@@ -18,6 +18,8 @@ type splitGETFixtureAPI struct {
 	calls   []string
 	job     storage.ProductSplitCreate
 	mode    string
+	number  int
+	release <-chan struct{}
 	entered chan struct{}
 	once    sync.Once
 }
@@ -28,7 +30,11 @@ func (a *splitGETFixtureAPI) ResourceGET(ctx context.Context, path string) (json
 	count := len(a.calls)
 	a.mu.Unlock()
 	child := a.job.Value.Child.Value
-	selected := splitRemoteIssue{ID: 101, Number: 11, Title: child.Child.Title, Body: child.Body, State: "open"}
+	number := a.number
+	if number == 0 {
+		number = 11
+	}
+	selected := splitRemoteIssue{ID: int64(90 + number), Number: number, Title: child.Child.Title, Body: child.Body, State: "open"}
 	switch path {
 	case "":
 		id := child.RepositoryID
@@ -64,7 +70,7 @@ func (a *splitGETFixtureAPI) ResourceGET(ctx context.Context, path string) (json
 			return nil, errors.New("fixture page read failed")
 		}
 		return json.Marshal([]splitRemoteIssue{})
-	case "issues/11":
+	case fmt.Sprintf("issues/%d", number):
 		switch a.mode {
 		case "edited":
 			selected.Title = "changed outside controller"
@@ -72,6 +78,17 @@ func (a *splitGETFixtureAPI) ResourceGET(ctx context.Context, path string) (json
 			selected.Body = strings.ReplaceAll(selected.Body, child.Marker, "")
 		case "wrong_id":
 			selected.ID++
+		case "barrier":
+			select {
+			case a.entered <- struct{}{}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			select {
+			case <-a.release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		case "blocked":
 			a.once.Do(func() { close(a.entered) })
 			<-ctx.Done()
