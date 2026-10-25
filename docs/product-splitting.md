@@ -366,3 +366,13 @@ Wave 全体の criterion へ射影するのは最上位の group だけとし、
 先行 WorkItem が全件委譲済みなら、同じ transaction で認証した coverage の全ローカル obligation と実 merge fact を再集約し、すべての leaf の receipt を要求する。親自身の PR、閉じた Issue、一部の leaf、矛盾した receipt は代用できない。通常の Task 依存が特定の親 result を要求する場合、その result を leaf の品質証拠へ推測して転用せず保留する。
 
 base input は必要な全 leaf の実 receipt と repository を保存し、`split_dependencies` に委譲元 group・登録・scope の digest と leaf 集合を保持する。同じ repository のすべての merge SHA を固定 base の必要祖先に含め、別 repository の SHA を混ぜない。仮想 merge SHA は作らず、予算の追加許可や子の Task 実行許可は与えない。controlled reducer と静的接続のテストを、実サービスの分割 E2E の合格とは扱わない。
+
+## ツリー全体の最終 source gate
+
+最終受入では、実際に merge された leaf だけでなく、正式に登録されたすべての子と委譲した中間ノードを再取得する。最大4件の source 読み取りを並行し、エラー・キャンセル時も全 GET と保存処理を join してから戻る。各 GET の実観測時刻を保存し、全 canonical binding と source/policy history の照合後に、各 source が5秒以内であることを確認する。遅い読み取りは保留し、保存で観測時刻を更新しない。
+
+publication は引き続き open な own Issue を要求する。最終目的の source 確認だけは、同じ登録・local scope・criterion に対応する正式な own merge receipt がある leaf の closed Issue を認める。closed でも明示 hold、内容・identity・policy の変更、証拠欠落は拒否する。閉じた delegated parent は、全 leaf の完了に加えて managed close binding が必要であり、その操作が未接続の間は保留する。
+
+最終 plan の optional `split_sources_digest` は全 source の semantic ID・版・登録と scope を固定する。同一内容の GET による `CheckedAt` の更新では plan を変えず、編集後に元の内容へ戻った場合も新しい semantic version により古い plan を失効させる。plan 採用、final runner/fetch の起動前、最終検証 evidence と受入で、現在の全 source と pin を照合する。split のない旧 plan の wire/hash は維持し、pin がない旧 split plan へ実行権限を補わない。
+
+canonical な source 確認と並列 GET の controlled Go テストを実施するが、これは子 Task の実行許可や実サービスでの全体完了を表さない。closed own merge の status reducer は認証済み入力境界の確認であり、実 merge の受入証拠には数えない。既定8子の実接続性能、managed delegated close、子の継続作業と実行許可は後続の受入対象である。

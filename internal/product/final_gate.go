@@ -16,9 +16,10 @@ import (
 // KernelFinalGate checks current host verification policy, source and required
 // capabilities after merge. It does not ask a closed PR to become mergeable.
 type KernelFinalGate struct {
-	Executor Executor
-	Source   func(context.Context, storage.ProductTargetSnapshot) error
-	Policies map[int64]KernelMergePolicy
+	SplitSources func(context.Context, contract.Target) error
+	Executor     Executor
+	Source       func(context.Context, storage.ProductTargetSnapshot) error
+	Policies     map[int64]KernelMergePolicy
 }
 
 func (g KernelFinalGate) Check(ctx context.Context, target contract.Target) error {
@@ -32,6 +33,15 @@ func (g KernelFinalGate) Check(ctx context.Context, target contract.Target) erro
 	}
 	if len(coverage.Value.Merged) == 0 || len(coverage.Value.Residual)+len(coverage.Value.Pending)+len(coverage.Value.Unavailable)+len(coverage.Value.UnmergedWorkItems) != 0 {
 		return fmt.Errorf("%w: incomplete merged coverage", storage.ErrProductFinalPlanHeld)
+	}
+	scoped := map[string]bool{}
+	for _, group := range coverage.Value.Splits {
+		for _, child := range group.Children {
+			scoped[child.WorkItemID] = true
+		}
+	}
+	if len(coverage.Value.Splits) > 0 && g.SplitSources == nil {
+		return storage.ErrProductFinalPlanHeld
 	}
 	checked := map[int64]bool{}
 	for _, fact := range coverage.Value.Merged {
@@ -85,7 +95,14 @@ func (g KernelFinalGate) Check(ctx context.Context, target contract.Target) erro
 		if current.Value.Repository != p.Repository || current.Value.BaseBranch != p.BaseBranch || current.Value.WorkItem.Phase != domain.Merged || current.Value.Candidate != p.Candidate {
 			return fmt.Errorf("%w: merged projection changed", storage.ErrProductFinalPlanHeld)
 		}
-		if err := g.Source(ctx, current); err != nil {
+		if !scoped[p.WorkItem.ID] {
+			if err := g.Source(ctx, current); err != nil {
+				return err
+			}
+		}
+	}
+	if len(coverage.Value.Splits) > 0 {
+		if err := g.SplitSources(ctx, target); err != nil {
 			return err
 		}
 	}

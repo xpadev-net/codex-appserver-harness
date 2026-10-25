@@ -38,9 +38,10 @@ type ProductFinalRepository struct {
 	MergeReceipts map[string]string                `json:"merge_receipts"`
 }
 type ProductFinalPlanValue struct {
-	Target         contract.Target          `json:"target"`
-	CoverageDigest string                   `json:"coverage_digest"`
-	Repositories   []ProductFinalRepository `json:"repositories"`
+	SplitSourcesDigest string                   `json:"split_sources_digest,omitempty"`
+	Target             contract.Target          `json:"target"`
+	CoverageDigest     string                   `json:"coverage_digest"`
+	Repositories       []ProductFinalRepository `json:"repositories"`
 }
 type ProductFinalPlan struct {
 	ID        string                        `json:"id"`
@@ -80,6 +81,9 @@ func (k *KernelStore) readProductFinalPlanTx(ctx context.Context, q queryer, id 
 	}
 	expectedID, digest, err := productFinalPlanID(plan.Value)
 	if err != nil || expectedID != id || plan.ID != id || digest != plan.Digest || admission != digest || !reflect.DeepEqual(history, plan) || plan.CreatedAt.IsZero() || plan.CreatedAt.After(k.clock()) || !plan.Value.Target.Valid() || len(plan.Value.Repositories) < 1 || len(plan.Value.Repositories) > 128 || len(plan.Admission) != len(plan.Value.Repositories) {
+		return plan, ErrTaskEvidence
+	}
+	if plan.Value.SplitSourcesDigest != "" && !validSourceDigest(plan.Value.SplitSourcesDigest) {
 		return plan, ErrTaskEvidence
 	}
 	for i, repo := range plan.Value.Repositories {
@@ -186,6 +190,14 @@ func (k *KernelStore) PrepareProductFinalPlan(ctx context.Context, target contra
 	if coverage.Digest != coverageDigest || len(coverage.Value.Merged) == 0 || len(coverage.Value.Residual)+len(coverage.Value.UnmergedWorkItems)+len(coverage.Value.Pending)+len(coverage.Value.Unavailable) != 0 {
 		return plan, ErrProductFinalPlanHeld
 	}
+	sources, err := k.productSplitFinalSourcesTx(ctx, tx, w, coverage)
+	if err != nil {
+		return plan, err
+	}
+	sourceDigest := ""
+	if sources != nil {
+		sourceDigest = sources.Digest
+	}
 	byRepo := map[int64]*ProductFinalRepository{}
 	profileSets := map[int64]map[string]bool{}
 	ancestorSets := map[int64]map[string]bool{}
@@ -225,7 +237,7 @@ func (k *KernelStore) PrepareProductFinalPlan(ctx context.Context, target contra
 	if len(heads) != len(byRepo) {
 		return plan, ErrProductFinalPlanHeld
 	}
-	plan.Value = ProductFinalPlanValue{Target: target, CoverageDigest: coverageDigest, Repositories: []ProductFinalRepository{}}
+	plan.Value = ProductFinalPlanValue{Target: target, CoverageDigest: coverageDigest, SplitSourcesDigest: sourceDigest, Repositories: []ProductFinalRepository{}}
 	plan.CreatedAt, plan.Admission = k.clock().UTC(), heads
 	for i := range heads {
 		head := &heads[i]
@@ -257,6 +269,9 @@ func (k *KernelStore) PrepareProductFinalPlan(ctx context.Context, target contra
 		}
 		repo.Candidate = runner.Candidate{ID: structureID("product-final-candidate-", coverageDigest, fmt.Sprint(repo.RepositoryID)+":"+head.HeadSHA), SHA: head.HeadSHA, BaseSHA: head.HeadSHA, ScopeRevision: target.ScopeRevision, PolicyRevision: target.PolicyRevision}
 		plan.Value.Repositories = append(plan.Value.Repositories, *repo)
+	}
+	if err := k.requireProductSplitFinalSourcesTx(ctx, tx, w, coverage, sourceDigest); err != nil {
+		return plan, err
 	}
 	encoded, err = json.Marshal(plan)
 	if err != nil || len(encoded) > 1<<20 {

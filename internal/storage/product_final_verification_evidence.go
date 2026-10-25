@@ -125,6 +125,18 @@ func (k *KernelStore) productFinalVerificationEvidenceTx(ctx context.Context, tx
 		return ProductFinalVerificationEvidence{}, err
 	}
 	value.Current = plan.Value.Target == w.Target() && coverage.Digest == plan.Value.CoverageDigest && len(coverage.Value.Merged) > 0 && len(coverage.Value.Residual)+len(coverage.Value.UnmergedWorkItems)+len(coverage.Value.Pending)+len(coverage.Value.Unavailable) == 0
+	if value.Current {
+		if err := k.requireProductSplitFinalSourcesTx(ctx, tx, w, coverage, plan.Value.SplitSourcesDigest); err != nil {
+			if ctx.Err() != nil {
+				return ProductFinalVerificationEvidence{}, ctx.Err()
+			}
+			if !readinessHoldError(err) && !errors.Is(err, ErrProductFinalPlanHeld) {
+				return ProductFinalVerificationEvidence{}, err
+			}
+			value.Current = false
+			return unavailable("split_sources_changed_or_unavailable")
+		}
+	}
 	jobs := 0
 	for _, repo := range plan.Value.Repositories {
 		jobs += len(repo.Profiles)

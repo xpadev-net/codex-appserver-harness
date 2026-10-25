@@ -13,7 +13,8 @@ import (
 )
 
 func productFinalPipeline(e product.Executor, policies productMergePolicies, sources map[int64]product.IssueSourcePolicy, executable string) (product.FinalPlanner, product.FinalRunner) {
-	gate := product.KernelFinalGate{Executor: e, Source: (product.KernelSourceGate{Store: e.Store, Policies: sources, API: product.GitHubResourceAPI}).Check, Policies: policies.merge}
+	source := product.KernelSourceGate{Store: e.Store, Policies: sources, API: product.GitHubResourceAPI}
+	gate := product.KernelFinalGate{Executor: e, Source: source.Check, SplitSources: source.CheckFinalSplitSources, Policies: policies.merge}
 	planner := product.FinalPlanner{Store: e.Store, Gate: gate.Check, API: product.GitHubResourceAPI}
 	runner := product.FinalRunner{Planner: planner, Runner: e.Runner}
 	runner.ResolveRemote = func(ctx context.Context, target contract.Target, id int64) (string, error) {

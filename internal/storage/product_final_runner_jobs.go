@@ -180,6 +180,9 @@ func (k *KernelStore) finalRunnerPreflightTx(ctx context.Context, tx *sql.Tx, pl
 	if coverage.Digest != plan.Value.CoverageDigest || len(coverage.Value.Merged) == 0 || len(coverage.Value.Residual)+len(coverage.Value.UnmergedWorkItems)+len(coverage.Value.Pending)+len(coverage.Value.Unavailable) != 0 {
 		return selection, w, ErrProductRunnerHeld
 	}
+	if err := k.requireProductSplitFinalSourcesTx(ctx, tx, w, coverage, plan.Value.SplitSourcesDigest); err != nil {
+		return selection, w, err
+	}
 	if err := taskEvidenceRecord(ctx, tx, "product_final_plan_current", w.ID, &selection); err != nil {
 		return selection, w, err
 	}
