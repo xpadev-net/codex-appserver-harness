@@ -64,6 +64,16 @@ func (k *KernelStore) CreateProductWave(ctx context.Context, request ProductWave
 		return domain.Wave{}, err
 	}
 	defer tx.Rollback()
+	if request.Wave.Source == "github" {
+		if err := rejectProductSplitChildRoot(ctx, tx, request.Wave.SourceID); err != nil {
+			return domain.Wave{}, err
+		}
+	}
+	for _, definition := range request.WorkItems {
+		if err := rejectProductSplitChildRoot(ctx, tx, definition.ID); err != nil {
+			return domain.Wave{}, err
+		}
+	}
 	receiptID := structureID("product-admission-", request.Wave.Source, request.Wave.SourceID)
 	var receipt productAdmissionReceipt
 	err = taskEvidenceRecord(ctx, tx, "product_wave_admission", receiptID, &receipt)
