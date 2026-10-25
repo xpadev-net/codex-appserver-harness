@@ -16,10 +16,11 @@ type ProductBaseDependency struct {
 	BaseBranch   string              `json:"base_branch"`
 }
 type ProductBaseInputValue struct {
-	ConflictBaseSHA string                            `json:"conflict_base_sha,omitempty"`
-	Preparation     ProductTaskPreparation            `json:"preparation"`
-	Policy          ProductVerificationPolicySnapshot `json:"policy"`
-	Dependencies    []ProductBaseDependency           `json:"dependencies"`
+	SplitDependencies []ProductSplitDependencyOrigin    `json:"split_dependencies,omitempty"`
+	ConflictBaseSHA   string                            `json:"conflict_base_sha,omitempty"`
+	Preparation       ProductTaskPreparation            `json:"preparation"`
+	Policy            ProductVerificationPolicySnapshot `json:"policy"`
+	Dependencies      []ProductBaseDependency           `json:"dependencies"`
 }
 type ProductBaseInput struct {
 	Value  ProductBaseInputValue `json:"value"`
@@ -115,6 +116,19 @@ func (k *KernelStore) productBaseInputTx(ctx context.Context, tx *sql.Tx, taskID
 		coverage, err := k.productCoverageTx(ctx, tx, w)
 		if err != nil {
 			return out, err
+		}
+		ids := make([]string, 0, len(required))
+		for id := range required {
+			ids = append(ids, id)
+		}
+		leaves, origins, err := productMergeDependencyLeaves(coverage, ids)
+		if err != nil {
+			return out, err
+		}
+		out.Value.SplitDependencies = origins
+		required = map[string]bool{}
+		for _, id := range leaves {
+			required[id] = true
 		}
 		for _, fact := range coverage.Value.Merged {
 			if !required[fact.WorkItemID] {

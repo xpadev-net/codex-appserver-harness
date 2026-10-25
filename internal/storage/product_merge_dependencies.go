@@ -79,6 +79,42 @@ func (k *KernelStore) productMergeDependenciesTx(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return err
 	}
+	ids := make([]string, 0, len(required))
+	for id := range required {
+		ids = append(ids, id)
+	}
+	leaves, origins, err := productMergeDependencyLeaves(coverage, ids)
+	if err != nil {
+		return err
+	}
+	byOrigin := map[string][]string{}
+	for _, origin := range origins {
+		byOrigin[origin.WorkItemID] = origin.LeafWorkItemIDs
+	}
+	expanded := map[string]map[string]string{}
+	for _, id := range leaves {
+		expanded[id] = map[string]string{}
+	}
+	for id, results := range required {
+		contributors, delegated := byOrigin[id]
+		if delegated && len(results) > 0 {
+			// A completed parent Task's output is not a leaf quality result.
+			// Keep this explicit requirement held rather than inventing provenance.
+			return ErrProductMergeDependencyHeld
+		}
+		if !delegated {
+			contributors = []string{id}
+		}
+		for _, leaf := range contributors {
+			for result, digest := range results {
+				if prior, exists := expanded[leaf][result]; exists && prior != digest {
+					return ErrProductMergeDependencyHeld
+				}
+				expanded[leaf][result] = digest
+			}
+		}
+	}
+	required = expanded
 	for _, fact := range coverage.Value.Merged {
 		results, needed := required[fact.WorkItemID]
 		if !needed {

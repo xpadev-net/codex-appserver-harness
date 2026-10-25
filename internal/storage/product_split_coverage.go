@@ -82,7 +82,11 @@ func collectProductSplitCoverageTx(ctx context.Context, tx *sql.Tx, w domain.Wav
 			if !readinessHoldError(err) && !errors.Is(err, sql.ErrNoRows) {
 				return nil, nil, err
 			}
-			unavailable = append(unavailable, ProductCoveragePending{WorkItemID: id, RecordID: ref.Request.ProposalID, Reason: "split_registration_evidence_unavailable"})
+			parentID := ref.Request.ParentWorkItemID
+			if parentID == "" {
+				parentID = id
+			}
+			unavailable = append(unavailable, ProductCoveragePending{WorkItemID: parentID, RecordID: ref.Request.ProposalID, Reason: "split_registration_evidence_unavailable"})
 			continue
 		}
 		parent, ok := heads[group.Value.Request.ParentWorkItemID]
