@@ -268,7 +268,7 @@ SQLite の検査は枠上限・全件原子性・途中失敗 rollback・各証�
 
 private HTTP spec は親となる子自身の保存済み source policy を必要とする。Wave が direct の場合も、実 HTTP helper はその子 Issue を repository/Issue の bookend GET で再取得する。send gate は5秒以内の ready snapshot の ID/digest を固定し、activation 時にも同じ snapshot と freshness を照合する。hold、closed、本文/identity の変更、古い source、変更後に本文だけ元へ戻す ABA は以前の gate を再利用できない。GitHub 起点の Wave では元の root source 検査も維持する。
 
-one-use activation、物理 process group の停止、停止後の GET 照合、unknown 時の非再送と未 activation 時だけの有界 retry は既存契約を維持する。送信前に source が不成立なら activation/POST を行わず、安全な abort として戻る場合がある。試験は SQLite、実 subprocess/process-group と deterministic gh transport を使い、実 GitHub への孫 Issue 作成や model の split E2E とは区別する。孫の scope は次の祖先付き集合で保存する。全件登録・再帰 part coverage・Task/model 実行は後続の接続まで保留する。
+one-use activation、物理 process group の停止、停止後の GET 照合、unknown 時の非再送と未 activation 時だけの有界 retry は既存契約を維持する。送信前に source が不成立なら activation/POST を行わず、安全な abort として戻る場合がある。試験は SQLite、実 subprocess/process-group と deterministic gh transport を使い、実 GitHub への孫 Issue 作成や model の split E2E とは区別する。孫の scope は次の祖先付き集合で保存する。孫の明示登録は後述の専用形式で行い、source 観測・再帰 part coverage・Task/model 実行は後続の接続まで保留する。
 
 ## 祖先と全 sibling を保持した孫 scope の一括保存
 
@@ -278,7 +278,7 @@ one-use activation、物理 process group の停止、停止後の GET 照合、
 
 新規集合は live な current target と fresh な親 source を要求し、全子の停止・GET・local criterion/part/depth と元条件への対応を再検査する。pause/方向修正後も保存済み集合は静的な監査対象として保持するが、旧集合を新 scope へ付け替えない。各独立 index の欠落は exact 復旧を必要とし、途中保存失敗は全 rollback する。他の scope が保持する numeric source との衝突も保留する。
 
-この保存は孫 WorkItem の登録、source ready、Task/model/runner、品質または親退役の許可ではない。再帰登録・local part coverage と実行 gate は引き続き保留する。欠落・原子性の検査では、全 subprocess を停止・GET 照合した fixture DB を private なディレクトリへ SQLite VACUUM INTO で複製し、外部操作を再送せず保存状態の喪失を検査する。
+この保存は孫 WorkItem の登録、source ready、Task/model/runner、品質または親退役の許可ではない。孫の明示登録は次の専用形式に接続する。source 観測・local part coverage と実行 gate は引き続き保留する。欠落・原子性の検査では、全 subprocess を停止・GET 照合した fixture DB を private なディレクトリへ SQLite VACUUM INTO で複製し、外部操作を再送せず保存状態の喪失を検査する。
 
 ## 登録へ引き継ぐ祖先 witness の読み取り専用導出
 
@@ -286,4 +286,12 @@ InspectProductSplitAncestorWitnesses は実在する孫 scope の全証拠を認
 
 親も含む lifetime WorkItem 128枠と、全体32回までの retry witness の bound を検査する。任意の sibling を policy 初期化済みとは見なさず、固定済みの親 marker を区別する。導出結果は元の typed scope envelope の ID/digest を参照し、記録・予算・source ready・登録・Task/model を作らない。pause 中も同じ監査値を導出でき、元 scope の証拠を欠いた場合は再構成しない。
 
-この形式を後続の登録に接続し、過去の登録証拠を再帰的に複製せず、全祖先の禁止情報を引き継ぐ。現段階の port は読み取り専用であり、persisted witness や登録許可として扱わない。
+後述の明示登録がこの形式を使い、過去の登録証拠を再帰的に複製せず、全祖先の禁止情報を引き継ぐ。現段階の port は読み取り専用であり、persisted witness や登録許可として扱わない。
+
+## compact ancestor set を固定した孫 WorkItem の全件登録
+
+RegisterProductSplitChildren は、明示採用された再分割の全孫 scope と親登録・source/policy・保存済み枠を認証し、孫の登録 head/version/membership と専用 group head/history/admission を全件 transaction で保存する。2孫の場合は9記録。各 ScopeRef は実在する scope envelope と compact ancestor set に結び付き、Root の既存形式では追加 field を省略する。新規登録には live な current target と fresh な親 source が必要で、保存済み集合の監査 replay は pause 後も同じ値を返す。
+
+Definition.Criteria は元 Wave の条件への対応を保持し、local scope は孫自身の criterion と part 対応を保持する。通常の登録 port で scoped identity を上書きしたり、部分集合だけを登録したり、枠や retry 予算を補充したりしない。登録・version・membership の一つだけが残っても、compact group witness が祖先と今回の全 sibling Issue、creation chain、予約枠、親の再実行禁止を保持する。復旧 cursor は各 compact group を識別し、同じ物理 row の複数 group を区別する。
+
+この段階は WorkItem metadata の登録のみ。孫の source 観測/policy 初期化は、source reference 自身へ祖先 witness を接続するまで明示保留し、さらに深い再分割にも進めない。Task/model/runner 実行は既存の child gate で保留する。nested completion の main 購読・通知、再帰 coverage、実行許可は後続で接続する。compact witness や登録済みである事実を source ready・品質・親最終受入の代用にはしない。

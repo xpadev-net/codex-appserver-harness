@@ -12,6 +12,30 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 	var id string
 	var err error
 	switch kind {
+	case "product_split_ancestor_group":
+		var raw []byte
+		err = q.QueryRowContext(ctx, splitScopeWitnessSQL("SELECT payload FROM split_scope_witnesses WHERE kind=? AND id=?"), kind, key).Scan(&raw)
+		if err == nil {
+			var group struct {
+				Value ProductSplitAncestorGroup `json:"value"`
+			}
+			if decodeErr := json.Unmarshal(raw, &group); decodeErr != nil {
+				return "", ErrTaskEvidence
+			}
+			if len(group.Value.Children) > 0 {
+				id = group.Value.Children[0].Value.CreationID
+			}
+		}
+	case "product_nested_split_registrations", "product_nested_split_registrations_history", "product_nested_split_registrations_admission":
+		// The physical receipt retains its authenticated allocation ancestors.
+		// Its compact group rows retain the current registered sibling identities.
+		var registered ProductNestedSplitRegistrations
+		err = taskEvidenceRecord(ctx, q, kind, key, &registered)
+		ancestors := registered.Value.ProductNestedSplitChildScopesValue.ProductNestedSplitAllocationValue.Children
+		if len(ancestors) > 0 {
+			id = ancestors[0].Value.CreationID
+		}
+
 	case "product_nested_split_allocation_ledger", "product_nested_split_creation_ancestor", "product_nested_split_retry_ancestor":
 		var raw []byte
 		err = q.QueryRowContext(ctx, splitScopeWitnessSQL("SELECT payload FROM split_scope_witnesses WHERE kind=? AND id=?"), kind, key).Scan(&raw)

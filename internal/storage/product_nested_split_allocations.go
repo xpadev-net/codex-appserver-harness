@@ -50,6 +50,14 @@ func splitScopeWitnessSQL(query string) string {
  UNION ALL SELECT rowid,'product_nested_split_scope_group',kind||':'||id,work_item_id,
  json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.scopes')
  FROM main.records WHERE kind IN ('product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source')
+ UNION ALL SELECT r.rowid,'product_split_ancestor_group',json_array(r.kind,r.id,cast(a.key AS text)),r.work_item_id,
+ json_object('value',json(CASE WHEN json_valid(a.value) THEN a.value ELSE '{}' END))
+ FROM main.records r,json_each(CASE WHEN json_valid(r.payload) THEN CASE r.kind
+ WHEN 'product_work_item_registration' THEN json_extract(r.payload,'$.value.split_scope.ancestor_set.value.groups')
+ WHEN 'product_work_item_registration_version' THEN json_extract(r.payload,'$.value.split_scope.ancestor_set.value.groups')
+ WHEN 'wave_work_item' THEN json_extract(r.payload,'$.split_scope.ancestor_set.value.groups')
+ ELSE json_extract(r.payload,'$.value.ancestor_set.value.groups') END ELSE '[]' END) a
+ WHERE r.kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission')
  ) ` + query
 }
 

@@ -42,7 +42,7 @@ func loadNestedSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplitC
 	err = taskEvidenceRecord(ctx, tx, "product_nested_split_child_scopes", r.ProposalID, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.scopes.value.request.proposal_id')=?)`, r.ProposalID).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.scopes.value.request.proposal_id')=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_ancestor_group' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)`), r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {

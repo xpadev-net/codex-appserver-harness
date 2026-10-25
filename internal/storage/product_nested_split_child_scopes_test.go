@@ -114,8 +114,9 @@ func TestProductNestedSplitScopesKeepWholeAncestorAndOwnGroupAcrossProofLoss(t *
 			t.Fatal("local scope flattened", binding)
 		}
 	}
-	if _, err := base.RegisterProductSplitChildren(ctx, r); !readinessHoldError(err) {
-		t.Fatal("binding enabled nested registration", err)
+	var registered int
+	if err := base.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_work_item_registration' AND json_extract(payload,'$.value.split_scope.request.proposal_id')=?", r.ProposalID).Scan(&registered); err != nil || registered != 0 {
+		t.Fatal("scope binding registered children implicitly", registered, err)
 	}
 	after, err := base.WaveOperationBudget(ctx, r.Target.WaveID)
 	if err != nil || !reflect.DeepEqual(before, after) {
