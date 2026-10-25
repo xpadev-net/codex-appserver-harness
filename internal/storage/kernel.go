@@ -53,8 +53,18 @@ func openKernel(path string, create bool) (*KernelStore, error) {
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return nil, errors.New("kernel DB must be a regular file")
 	}
+	// The retained v1 archive is a negative migration witness even if the
+	// prepared database or its receipt records have been lost.
+	if _, err := os.Lstat(filepath.Join(root, "legacy-source.db")); err == nil {
+		return nil, ErrLegacyMigrationPending
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
 	inspected, err := inspectDatabaseFileWith(path, func(db *sql.DB, version int) error {
 		if version == KernelSchemaVersion {
+			if err := validateLegacyKernelRuntimeAdmission(db, path); err != nil {
+				return err
+			}
 			if err := validateKernelSchema(db); err != nil {
 				return err
 			}
@@ -116,6 +126,9 @@ func openKernel(path string, create bool) (*KernelStore, error) {
 			return nil, err
 		}
 	} else {
+		if err = validateLegacyKernelRuntimeAdmission(db, path); err != nil {
+			return nil, err
+		}
 		if err = validateKernelSchema(db); err != nil {
 			return nil, err
 		}
@@ -270,6 +283,11 @@ CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);
 INSERT INTO schema_migrations VALUES(2);
 PRAGMA user_version=2;
 CREATE TABLE records(kind TEXT NOT NULL,id TEXT NOT NULL,work_item_id TEXT NOT NULL,payload BLOB NOT NULL,PRIMARY KEY(kind,id));
+` + kernelCoreSchema
+
+// Shared by fresh initialization and the explicit, offline v1 import step.
+// The import retains the original records/schema history and legacy tables.
+const kernelCoreSchema = `
 CREATE TABLE kernel_waves(id TEXT PRIMARY KEY,source TEXT NOT NULL,source_id TEXT NOT NULL,input_digest TEXT NOT NULL,payload BLOB NOT NULL,UNIQUE(source,source_id));
 CREATE TABLE kernel_plans(wave_id TEXT NOT NULL,revision INTEGER NOT NULL,adoption_key TEXT NOT NULL,digest TEXT NOT NULL,payload BLOB NOT NULL,PRIMARY KEY(wave_id,revision),UNIQUE(wave_id,adoption_key));
 CREATE TABLE kernel_phases(id TEXT PRIMARY KEY,wave_id TEXT NOT NULL,local_id TEXT NOT NULL,created_revision INTEGER NOT NULL,payload BLOB NOT NULL,UNIQUE(wave_id,local_id));
