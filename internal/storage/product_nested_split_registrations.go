@@ -63,28 +63,12 @@ func loadNestedSplitRegistrations(ctx context.Context, tx *sql.Tx, r ProductSpli
 			return saved, ErrProductSplitHeld
 		}
 	}
-	scopes, err := loadNestedSplitChildScopes(ctx, tx, r)
-	if err != nil {
-		return saved, splitEvidenceErr(err)
-	}
-	if saved.Value.ScopeEnvelopeID != scopes.ID || saved.Value.ScopeEnvelopeDigest != scopes.Digest || !reflect.DeepEqual(saved.Value.ProductNestedSplitChildScopesValue, scopes.Value) {
+	if len(saved.Value.RegistrationSet.Value.Registrations) < 2 || len(saved.Value.RegistrationSet.Value.Registrations) > maxProductWorkItems {
 		return saved, ErrProductSplitHeld
 	}
-	ancestors, err := deriveSplitAncestorWitnesses(scopes)
-	if err != nil {
-		return saved, err
-	}
-	if !reflect.DeepEqual(ancestors, saved.Value.AncestorSet) {
-		return saved, ErrProductSplitHeld
-	}
-	registrations, err := deriveSplitRegistrationsWithAncestors(ctx, tx, scopes.Value.Scopes, saved.Value.RegistrationSet.Value.RegisteredAt, &scopes, &ancestors)
-	if err != nil {
-		return saved, err
-	}
-	if !reflect.DeepEqual(registrations, saved.Value.RegistrationSet) {
-		return saved, ErrProductSplitHeld
-	}
-	for _, registration := range registrations.Value.Registrations {
+	// Independent registration copies are required before the costly upstream
+	// history walk; their agreement does not replace that authority check.
+	for _, registration := range saved.Value.RegistrationSet.Value.Registrations {
 		id := registration.Value.Definition.ID
 		for _, record := range []struct{ kind, id string }{{"product_work_item_registration", id}, {"product_work_item_registration_version", structureID("product-work-", id, registration.Digest)}} {
 			var witness ProductWorkItemRegistrationSnapshot
@@ -107,6 +91,28 @@ func loadNestedSplitRegistrations(ctx context.Context, tx *sql.Tx, r ProductSpli
 			return saved, ErrProductSplitHeld
 		}
 	}
+	scopes, err := loadNestedSplitChildScopes(ctx, tx, r)
+	if err != nil {
+		return saved, splitEvidenceErr(err)
+	}
+	if saved.Value.ScopeEnvelopeID != scopes.ID || saved.Value.ScopeEnvelopeDigest != scopes.Digest || !reflect.DeepEqual(saved.Value.ProductNestedSplitChildScopesValue, scopes.Value) {
+		return saved, ErrProductSplitHeld
+	}
+	ancestors, err := deriveSplitAncestorWitnesses(scopes)
+	if err != nil {
+		return saved, err
+	}
+	if !reflect.DeepEqual(ancestors, saved.Value.AncestorSet) {
+		return saved, ErrProductSplitHeld
+	}
+	registrations, err := deriveSplitRegistrationsWithAncestors(ctx, tx, scopes.Value.Scopes, saved.Value.RegistrationSet.Value.RegisteredAt, &scopes, &ancestors)
+	if err != nil {
+		return saved, err
+	}
+	if !reflect.DeepEqual(registrations, saved.Value.RegistrationSet) {
+		return saved, ErrProductSplitHeld
+	}
+
 	return saved, nil
 }
 
