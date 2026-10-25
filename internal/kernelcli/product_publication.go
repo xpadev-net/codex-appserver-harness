@@ -20,6 +20,7 @@ import (
 // alone never starts GitHub writes. Merge needs another explicit host opt-in;
 // these settings do not enable model readiness.
 type ProductPublicationConfig struct {
+	Split          *ProductSplitDispatchConfig `json:"split,omitempty"`
 	Merge          *ProductMergeConfig         `json:"merge,omitempty"`
 	Workers        int                         `json:"workers"`
 	ReviewRoutes   []ProductReviewRouteConfig  `json:"review_routes"`
