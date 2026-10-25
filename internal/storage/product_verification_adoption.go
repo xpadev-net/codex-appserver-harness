@@ -89,7 +89,10 @@ func (k *KernelStore) adoptProductVerificationPlanTx(ctx context.Context, tx *sq
 	if err != nil {
 		return saved, err
 	}
-	scope := productVerificationScope(w, registration)
+	scope, err := productVerificationScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return saved, err
+	}
 	digest, err := contentDigest(scope)
 	if err != nil {
 		return saved, err

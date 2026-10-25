@@ -723,6 +723,13 @@ func (k *KernelStore) taskInputWithWorkspaceTx(ctx context.Context, tx *sql.Tx, 
 				return "", fmt.Errorf("%w: product source scope is unavailable", ErrTaskEvidence)
 			}
 			references["work_item_source:"+id] = registration.Digest
+			splitScope, err := productSplitChildScopeTx(ctx, tx, wave, registration)
+			if err != nil {
+				return "", err
+			}
+			if splitScope != nil {
+				references["product_split_scope:"+splitScope.ID] = splitScope.Digest
+			}
 		}
 	}
 	for _, dependency := range spec.DependsOn {

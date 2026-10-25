@@ -26,7 +26,7 @@ type ProductVerificationCheckProof struct {
 	Checks             string `json:"checks"`
 }
 
-func productVerificationScope(w domain.Wave, registration ProductWorkItemRegistrationSnapshot) verification.Scope {
+func productRootVerificationScope(w domain.Wave, registration ProductWorkItemRegistrationSnapshot) verification.Scope {
 	scope := verification.Scope{Revision: w.ScopeRevision, OriginalRequest: w.OriginalRequest, Included: append([]string{}, registration.Value.Definition.Criteria...), PreviouslyMerged: []string{}, Remaining: []string{}}
 	for _, criterion := range w.Criteria {
 		scope.Criteria = append(scope.Criteria, verification.Criterion{ID: criterion.ID, Requirement: criterion.Requirement})
@@ -72,7 +72,10 @@ func (k *KernelStore) productVerificationSealInputTx(ctx context.Context, tx *sq
 	if err != nil {
 		return nil, err
 	}
-	scope := productVerificationScope(w, registration)
+	scope, err := productVerificationScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return nil, err
+	}
 	plan, err := verification.DecodePlan(raw, subject.Value.WorkItemID, subject.Value.Candidate, scope, p.Value.Verification)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid verification plan: %v", ErrProductChangeReference, err)

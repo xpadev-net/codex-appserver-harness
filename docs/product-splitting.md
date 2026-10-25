@@ -157,3 +157,11 @@ registration の split_scope 参照は元 target・proposal・集合と子の bi
 新規登録は現在の稼働中 P scope でのみ許可する。保存済み集合は pause/reopen/方向修正後も元版の監査として exact replay できるが、現行版へ移さない。通常の RegisterProductWorkItem による子の再登録・方向修正時の lineage 消去は拒否する。旧 registration JSON は split_scope を付加せず、元の wire/digest を維持する。
 
 全件 receipt、子 registration/version、membership のいずれかだけが残っても、上流 metadata・creation journal の新規再作成、子 issue の root 再取込み、親の再実行、split 枠・再試行予算の返却を許可しない。欠落した証拠の exact 復旧が必要であり、再試行で保存済み集合を補修しない。
+
+## 子の local verification scope と入力
+
+登録済みの子は、認証済みの binding にある local request・criterion ID・全 included criteria を検証計画の scope とする。計画読取、seal の候補固定、plan 再採用、runner の scope digest 照合で同じ transaction 内の認証関数を用いる。root の従来の scope は維持する。子の参照や上流証拠が失われた場合、親条件 ID に fallback しない。
+
+session manifest の product_split_scopes は、元 Wave 要求と並べて子の local scope/digest・親条件の whole/part 対応・depth・source・依存を示す。main は登録済みの子、Task は自分に割り当てられた子だけを受け取り、private path・HTTP body・creation proof は含めない。Task input digest に binding ID/digest を固定し、欠落は unavailable として示す。元の binding は replan で書き換えず、方向修正後の旧 scope を現行の義務に転用しない。
+
+メタデータ読取は pause/reopen 後も可能で、dispatch・source freshness・runner 成功・品質合格を与えない。子自身の最新 source、送信時 gate、親 retirement と part 集約 coverage、子の依存・多段 depth、main への非同期完了通知の接続は別途必要である。この段階でも子の実行保留を維持する。
