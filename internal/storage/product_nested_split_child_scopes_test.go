@@ -39,7 +39,9 @@ func nestedObservedScopesFixture(t *testing.T) (*KernelStore, ProductSplitChildP
 		if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		identity := startSplitCreationOwner(t, k, job, 20*time.Second)
+		// Race instrumentation validates both admitted attempts before activation.
+		// This fixture uses a fixed source clock; only its physical wait grows.
+		identity := startSplitCreationOwner(t, k, job, time.Minute)
 		stop, cancel := context.WithTimeout(ctx, 3*time.Second)
 		if err := process.StopGroup(stop, identity); err != nil {
 			cancel()
