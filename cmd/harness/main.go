@@ -27,6 +27,11 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "_split-http" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		return product.ServeSplitHTTP(ctx, os.Args[2])
+	}
 	if len(os.Args) == 3 && os.Args[1] == "_merge-http" {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()

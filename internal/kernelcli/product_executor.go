@@ -93,6 +93,7 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 	database := filepath.Join(k.Root, databaseName)
 	hidden := []string{database, database + "-wal", database + "-shm", filepath.Join(k.Root, ipc.SocketName), filepath.Join(home, ".config", "gh"), filepath.Join(home, ".git-credentials"), filepath.Join(controllerHome, "auth.json")}
 	hidden = append(hidden, product.MergeHTTPProtectedPaths(k.Root)...)
+	hidden = append(hidden, product.SplitHTTPProtectedPaths(k.Root)...)
 	for _, p := range []string{runtime.WorkerCodexHome, runtime.SessionAuthFile, os.Getenv("GH_CONFIG_DIR")} {
 		if p != "" {
 			absolute, err := filepath.Abs(p)
