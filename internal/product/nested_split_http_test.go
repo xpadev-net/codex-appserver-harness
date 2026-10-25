@@ -71,7 +71,7 @@ func nestedSplitHTTPFixture(t *testing.T) (*storage.KernelStore, storage.Product
 }
 
 func TestNestedSplitHTTPDirectWaveRequiresFreshOwnParentAndOnlyOnePOST(t *testing.T) {
-	for _, mode := range []string{"success", "missing_policy", "wrong_policy", "closed", "hold", "edited", "identity"} {
+	for _, mode := range []string{"success", "worker", "missing_policy", "wrong_policy", "closed", "hold", "edited", "identity"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			k, job, policy, api, bin := nestedSplitHTTPFixture(t)
@@ -106,9 +106,23 @@ func TestNestedSplitHTTPDirectWaveRequiresFreshOwnParentAndOnlyOnePOST(t *testin
 				t.Fatal(err)
 			}
 			transport := splitTestTransport(t, k, selected)
-			stopped, err := transport.Start(ctx, job.ID)
+			var stopped storage.ProductSplitCreate
+			if mode == "worker" {
+				worker := splitDispatchFixture(t, k)
+				if changed, err := worker.process(ctx, job.ID); changed || err == nil {
+					t.Fatal("worker admitted missing own policy", changed, err)
+				}
+				worker.SourcePolicies = map[int64]IssueSourcePolicy{17: policy}
+				changed, dispatchErr := worker.process(ctx, job.ID)
+				if !changed || dispatchErr != nil {
+					t.Fatal("worker failed nested direct dispatch", changed, dispatchErr)
+				}
+				stopped, err = k.ReadProductSplitCreate(ctx, job.ID)
+			} else {
+				stopped, err = transport.Start(ctx, job.ID)
+			}
 			after := strings.Count(splitHTTPCalls(t, bin), "POST")
-			if mode != "success" {
+			if mode != "success" && mode != "worker" {
 				if after != before || err == nil && (stopped.State != "aborted" || stopped.HTTP != nil) {
 					t.Fatal("unsafe own source sent Issue", mode, err, after-before)
 				}

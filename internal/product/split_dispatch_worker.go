@@ -51,7 +51,7 @@ func (d SplitCreationDispatchWorker) process(ctx context.Context, id string) (bo
 	if err != nil {
 		return false, err
 	}
-	if w.Source == "github" {
+	if w.Source == "github" || latest.Value.Ancestry != nil {
 		policy, ok := d.SourcePolicies[child.RepositoryID]
 		if !ok {
 			return false, storage.ErrProductSplitHeld
