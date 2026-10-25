@@ -279,3 +279,11 @@ one-use activation、物理 process group の停止、停止後の GET 照合、
 新規集合は live な current target と fresh な親 source を要求し、全子の停止・GET・local criterion/part/depth と元条件への対応を再検査する。pause/方向修正後も保存済み集合は静的な監査対象として保持するが、旧集合を新 scope へ付け替えない。各独立 index の欠落は exact 復旧を必要とし、途中保存失敗は全 rollback する。他の scope が保持する numeric source との衝突も保留する。
 
 この保存は孫 WorkItem の登録、source ready、Task/model/runner、品質または親退役の許可ではない。再帰登録・local part coverage と実行 gate は引き続き保留する。欠落・原子性の検査では、全 subprocess を停止・GET 照合した fixture DB を private なディレクトリへ SQLite VACUUM INTO で複製し、外部操作を再送せず保存状態の喪失を検査する。
+
+## 登録へ引き継ぐ祖先 witness の読み取り専用導出
+
+InspectProductSplitAncestorWitnesses は実在する孫 scope の全証拠を認証してから、祖先と今回の sibling 集合の必要な負の証拠を導出する host port。要求本文・candidate・workspace・登録 snapshot を含めず、numeric Issue identity、WorkItem identity、scope 集合の参照、creation/retry chain と、実際に固定済みの親 source policy の識別情報を保持する。集合と子の順序を正規化して重複を除き、identity・policy pin・creation chain が矛盾する場合は保留する。
+
+親も含む lifetime WorkItem 128枠と、全体32回までの retry witness の bound を検査する。任意の sibling を policy 初期化済みとは見なさず、固定済みの親 marker を区別する。導出結果は元の typed scope envelope の ID/digest を参照し、記録・予算・source ready・登録・Task/model を作らない。pause 中も同じ監査値を導出でき、元 scope の証拠を欠いた場合は再構成しない。
+
+この形式を後続の登録に接続し、過去の登録証拠を再帰的に複製せず、全祖先の禁止情報を引き継ぐ。現段階の port は読み取り専用であり、persisted witness や登録許可として扱わない。
