@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -146,5 +147,71 @@ func TestSplitProofReadCycleAndCancellationAreHeldWithoutPoisoningNextRead(t *te
 	_, err = readSplitProof(cancelled, tx, "test-cancel", "same", func(read context.Context) (proof, error) { cancel(); return proof{Value: "valid"}, nil })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled read returned a proof", err)
+	}
+}
+
+func TestSplitProofReadCapacityStillRunsTheLoader(t *testing.T) {
+	ctx := context.Background()
+	k, _ := waveStoreFixture(t)
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	type proof struct {
+		Value string `json:"value"`
+	}
+	for _, limit := range []string{"entries", "bytes"} {
+		t.Run(limit, func(t *testing.T) {
+			memo := &splitProofReadMemo{tx: tx, active: map[splitProofReadKey]bool{}, saved: map[splitProofReadKey][]byte{}}
+			if limit == "entries" {
+				for i := 0; i < maxSplitProofReadEntries; i++ {
+					memo.saved[splitProofReadKey{kind: "occupied", digest: strconv.Itoa(i)}] = nil
+				}
+			} else {
+				memo.bytes = maxSplitProofReadBytes
+			}
+			read := context.WithValue(ctx, splitProofReadContextKey{}, memo)
+			entries, bytes, calls := len(memo.saved), memo.bytes, 0
+			for i := 0; i < 2; i++ {
+				got, err := readSplitProof(read, tx, "capacity", "same", func(context.Context) (proof, error) { calls++; return proof{Value: "valid"}, nil })
+				if err != nil || got.Value != "valid" {
+					t.Fatal("capacity rejected a valid proof", got, err)
+				}
+			}
+			if calls != 2 || len(memo.saved) != entries || memo.bytes != bytes {
+				t.Fatal("capacity failed to bypass additional caching", calls, len(memo.saved), memo.bytes)
+			}
+		})
+	}
+}
+
+func TestSplitProofReadActiveWalkBoundaries(t *testing.T) {
+	ctx := context.Background()
+	k, _ := waveStoreFixture(t)
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	type proof struct {
+		Value string `json:"value"`
+	}
+	memo := &splitProofReadMemo{tx: tx, active: map[splitProofReadKey]bool{}, saved: map[splitProofReadKey][]byte{}}
+	for i := 0; i < maxSplitProofReadEntries; i++ {
+		memo.active[splitProofReadKey{kind: "active", digest: strconv.Itoa(i)}] = true
+	}
+	read := context.WithValue(ctx, splitProofReadContextKey{}, memo)
+	_, err = readSplitProof(read, tx, "limit", "same", func(context.Context) (proof, error) {
+		t.Fatal("excessive walk executed its loader")
+		return proof{}, nil
+	})
+	if !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("active limit ignored", err)
+	}
+	delete(memo.active, splitProofReadKey{kind: "active", digest: "0"})
+	got, err := readSplitProof(read, tx, "limit", "same", func(context.Context) (proof, error) { return proof{Value: "valid"}, nil })
+	if err != nil || got.Value != "valid" || len(memo.active) != maxSplitProofReadEntries-1 {
+		t.Fatal("last permitted walk failed or leaked active state", got, err)
 	}
 }

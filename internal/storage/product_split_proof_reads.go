@@ -24,13 +24,15 @@ type splitProofReadMemo struct {
 // private child context never escapes to the calling port. A subsequent load
 // after a write, even in the same transaction, starts a new proof walk. Only
 // nested loaders share results, and every hit decodes an independent copy.
+// Only persisted proof value types that round-trip through JSON belong here.
 func readSplitProof[T any](ctx context.Context, tx *sql.Tx, kind string, input any, load func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
 	memo, _ := ctx.Value(splitProofReadContextKey{}).(*splitProofReadMemo)
-	if memo == nil || memo.tx != tx {
+	owner := memo == nil || memo.tx != tx
+	if owner {
 		memo = &splitProofReadMemo{tx: tx, active: map[splitProofReadKey]bool{}, saved: map[splitProofReadKey][]byte{}}
 		ctx = context.WithValue(ctx, splitProofReadContextKey{}, memo)
 	}
@@ -63,7 +65,7 @@ func readSplitProof[T any](ctx context.Context, tx *sql.Tx, kind string, input a
 	}
 	// Capacity limits only disable additional caching. They never turn a valid
 	// proof into permission to omit validation or reject an otherwise valid read.
-	if len(memo.saved) < maxSplitProofReadEntries {
+	if !owner && len(memo.saved) < maxSplitProofReadEntries {
 		raw, err := json.Marshal(value)
 		if err != nil {
 			return zero, err
