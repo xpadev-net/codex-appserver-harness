@@ -57,3 +57,15 @@ FinishProductSplitCreateHTTP は保存された process group の実停止を ho
 outbox の head/history/admission/event/gate/資源 binding、および孤立した mutation lease は、上流 proposal・子集合・allocation と lifetime 枠の喪失時にも独立した禁止の証拠になる。
 
 この単位は送信 journal と認可/停止/GET 結果の trusted storage port であり、HTTP adapter/worker はまだ呼び出さない。実プロセスの group 登録・一度だけの権限・遅延封鎖・停止前照合拒否・再起動・喪失/復旧・transaction rollback を Go/SQLite subprocess fixture で検査する。fixture は HTTP を送らず、source GET の証拠も host fixture と区別する。実 HTTP wrapper/検索・再照合、子の登録/part scope、depth 系譜、親退役と gateway は引き続き必要である。
+
+## native HTTP wrapper と supervisor
+
+internal product の SplitHTTPTransport と内部 _split-http を接続した。private な spec は registered creation ID/digest/owner と host の source policy だけを持ち、canonical な同一 user の private directory と O_EXCL/NOFOLLOW の単一 link file に保存する。model の command/URL/資格情報は受け取らず、split-http directory は製品 worker/runner の hidden path に加える。
+
+wrapper は固定 repository の GET と、Github source なら既存 IssueSourceObserver の repository/Issue bookend GET・policy pin を照合する。同じ source 内容で元 snapshot が dedupe されても fresh GET 後に専用 gate を記録する。本文の JSON 符号化を終えてから一度だけ activation を取得し、その group に属する gh api POST で保存済み title/body/marker をそのまま送る。再送や自動 retry はしない。
+
+supervisor は wrapper を group leader として起動し、結果ファイルを確認しても group 全体を停止するまで leader を reap しない。キャンセル時の cleanup は別の有界時間で join する。再起動後は未 activation を原子的に封鎖するか、保存した元 process group を停止する。欠落・不正・成功の各 response はいずれも GET 前の authoritative Issue binding にしない。停止済み replay は結果ファイルや PID を再利用しない。
+
+Go subprocess と fixture gh による検査は、実際の argv/stdin・source GET 順序・本文同一性・単一 POST、unknown response、キャンセル時の native descendant 停止、controller reopen と結果喪失、遅延 wrapper の拒否、pause/resume、closed/policy mismatch、public/symlink/未知 field の spec 拒否を確認する。実 GitHub への POST や model/正式 Cloud 承認の受入ではない。
+
+この段階は transport の接続であり、自動 marker 検索/GET 再照合 worker、controller/main の分割採用からの自動起動、子 WorkItem の part scope/depth/source binding、親退役/gateway は残る。未 activation の封鎖後に再開する場合の有界な新 transport attempt も別途照合する。unknown を GET の不在だけで再 POST する許可は追加しない。

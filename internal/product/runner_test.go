@@ -16,6 +16,12 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == "_split-http" {
+		if err := ServeSplitHTTP(context.Background(), os.Args[2]); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if len(os.Args) == 3 && os.Args[1] == "_merge-http" {
 		err := ServeMergeHTTP(context.Background(), os.Args[2])
 		if err != nil {
