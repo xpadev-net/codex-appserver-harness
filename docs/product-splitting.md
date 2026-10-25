@@ -242,4 +242,12 @@ PrepareProductNestedSplitProposal は、host が保存済み ParentScope の ID/
 
 root と再分割の operation key は Wave 内で共有し、同じ key の別用途への再利用、固定済み head の本文変更、欠落証拠の自動再作成を拒否する。既存の proposal reader は元 scope を検査して専用 envelope を返し、reopen/pause の exact replay と方向修正後の失効を区別する。root の保存形式は維持する。
 
-通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの永続 child intent、割当・作成 journal、Issue 送信も引き続き保留する。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
+通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの intent は後述の全祖先 envelope でのみ保存し、割当・作成 journal、Issue 送信は引き続き保留する。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
+
+## 全祖先証拠を保持した再分割の child plan / intent
+
+明示採用済みの再分割 proposal に対する PrepareProductSplitChildPlan は、proposal envelope と保存済み親証拠を再検査し、孫の集合・各 intent を全件 transaction で保存する。集合 head/history/admission と、各 intent の head/history/admission はいずれも元の全 sibling group と完全な plan を保持する。独立した一つの記録だけが残っても、祖先の source 所有権・creation chain・枠/retry の負の証拠を失わない。
+
+local coverage、元 Wave の ParentCriteria、保存済み depth + 1、安定した intent/WorkItem ID を維持する。既知の集合・index・proposal・親証拠が欠けた場合は再生成せず、exact 復旧を必要とする。新規 intent は live な current target と fresh な own source を必要とし、reopen/pause の exact replay は新規保存や時刻/ID の変更をしない。旧 scope の plan は履歴として読めるが、新しい要求へ付け替えない。
+
+この metadata 保存では実行枠や追加予算を消費せず、Task・作成 journal・Issue を生成しない。孫の割当と送信は、各段階へ祖先証拠を引き継ぐ処理と own source fence を接続するまで保留する。通常 root の既存形式は変更しない。
