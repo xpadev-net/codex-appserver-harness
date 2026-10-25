@@ -57,3 +57,22 @@ func TestProductToolProfileRejectsUnknownOrImplicitOptInBeforeReservation(t *tes
 		}
 	}
 }
+
+func TestProductToolV3UsesCommonDriverAndRestrictsSplitToParent(t *testing.T) {
+	for _, kind := range []string{"task", "orchestrator"} {
+		d, store, rpc := newSessionDriverFixture(kind)
+		d.ProductTools, d.ProductToolProfile = true, "product_v3"
+		profiles := &recordingToolProfiles{sessionStoreFixture: store}
+		d.Store = profiles
+		if _, err := d.Prepare(context.Background(), "session"); err != nil {
+			t.Fatal(err)
+		}
+		names := map[string]bool{}
+		for _, tool := range rpc.preparedTools {
+			names[tool.Name] = true
+		}
+		if profiles.profile != "product_v3" || !names["pr_publish"] || names["product_split"] != (kind == "orchestrator") {
+			t.Fatal(kind, profiles.profile, names)
+		}
+	}
+}

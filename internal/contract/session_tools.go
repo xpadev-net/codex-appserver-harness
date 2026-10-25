@@ -470,6 +470,8 @@ type ToolDefinition struct {
 
 func toolArgument(name string) any {
 	switch name {
+	case "product_split":
+		return &SplitProductRequest{}
 	case "pr_publish":
 		return &PublishPRRequest{}
 	case "pr_review_request":
@@ -496,7 +498,7 @@ func toolArgument(name string) any {
 	return nil
 }
 func parentOnly(name string) bool {
-	return name == "wave_create" || name == "wave_plan"
+	return name == "wave_create" || name == "wave_plan" || name == "product_split"
 }
 func KernelTools(kind string) []ToolDefinition {
 	if kind != "orchestrator" && kind != "task" {
@@ -595,6 +597,11 @@ func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolRep
 	}
 	var target Target
 	switch a := command.(type) {
+	case *SplitProductRequest:
+		target = a.Target
+		if a.SchemaVersion != 1 || !inline(a.ProposalArtifactID) || len(a.ProposalArtifactID) > 128 {
+			return reject("invalid product split proposal reference")
+		}
 	case *PublishPRRequest:
 		target = a.Target
 		if a.SchemaVersion != 1 || !validProductCandidate(a.Candidate) {

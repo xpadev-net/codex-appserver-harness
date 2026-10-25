@@ -136,7 +136,8 @@ func loadSplitCreateDepth(ctx context.Context, tx *sql.Tx, id string, depth int)
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget','product_split_preparation_creation') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history') AND work_item_id=?) OR EXISTS(SELECT 1 FROM kernel_resource_leases WHERE run_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_created_resource' AND json_extract(payload,'$.creation_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND operation_key=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_create_retry_budget' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))
  OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND (json_extract(payload,'$.previous_id')=? OR json_extract(payload,'$.initial_creation_id')=?))
- OR EXISTS(SELECT 1 FROM records r, json_each(r.payload,'$.value.creations') c WHERE r.kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(c.value,'$.id')=?)`, id, id, id, id, id, id, id, id, id, id).Scan(&known); err != nil {
+ OR EXISTS(SELECT 1 FROM records r, json_each(r.payload,'$.value.creations') c WHERE r.kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission') AND json_extract(c.value,'$.id')=?)
+ OR EXISTS(SELECT 1 FROM records r,json_each(r.payload,'$.preparation.value.creations') c WHERE r.kind='product_split_tool_adoption' AND json_extract(c.value,'$.id')=?)`, id, id, id, id, id, id, id, id, id, id, id).Scan(&known); err != nil {
 			return job, err
 		}
 		if known {
@@ -647,6 +648,7 @@ func splitCreationWitnessTx(ctx context.Context, tx *sql.Tx, waveID, parentHead 
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create','product_split_create_event') AND json_extract(payload,'$.value.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_create_gate','product_split_create_gate_history') AND json_extract(payload,'$.value.parent_head_id')=?)
  OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_create_retry' AND json_extract(payload,'$.parent_head_id')=?)
- OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, parentHead, parentHead, waveID).Scan(&known)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.preparation.value.parent_head_id')=?)
+ OR EXISTS(SELECT 1 FROM kernel_resource_leases l WHERE l.wave_id=? AND l.resource LIKE 'product-split-mutation:%' AND NOT EXISTS(SELECT 1 FROM records r WHERE r.kind='product_split_create' AND r.id=l.run_id))`, parentHead, parentHead, parentHead, parentHead, parentHead, parentHead, waveID).Scan(&known)
 	return known, err
 }

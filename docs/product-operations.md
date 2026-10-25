@@ -847,7 +847,7 @@ controllerは実際の正常完了・停止済みmain runとsnapshot/budget/turn
 
 ### 稼働中runtimeに結び付いた製品Taskのreadiness
 
-`wave run`のcommon runtimeを`product_tools: true` / `product_tool_profile: product_v2`で明示し、private product executorを設定した場合、executorの稼働中だけ製品Taskのmodel dispatchを有効にする。設定読込だけでは有効にしない。local executor単独や既存product_v1設定は自動でmodel turnを許可しない。repository ID/name、base branch、固定初回SHA、検証policy、runnerとmodelをhost側で固定する。
+`wave run`のcommon runtimeを`product_tools: true` / `product_tool_profile: product_v2`（または新規profileの`product_v3`）で明示し、private product executorを設定した場合、executorの稼働中だけ製品Taskのmodel dispatchを有効にする。設定読込だけでは有効にしない。local executor単独や既存product_v1設定は自動でmodel turnを許可しない。repository ID/name、base branch、固定初回SHA、検証policy、runnerとmodelをhost側で固定する。
 
 common isolated runtimeの構築時に実設定のdigestとprivate authority path集合を同じStore instanceへ結び付ける。capability report、HTTP authority、別設定先のGitHub認証等も実際の起動probeの保護対象に含め、model workspace内のauthority fileは設定を拒否する。構築後のpath集合やruntimeの差替えは拒否し、新controllerで構成し直す。root/runtimeの登録だけではmodel readinessにならず、同じruntime digest/model/profileに対するexecutorのlive bindingを必要とする。DB再openやrestartではこのhost bindingを復元しない。解除後の古いcallbackが新ownerを解除することもない。
 
@@ -858,3 +858,8 @@ schedulerの選択時とturn予約時に、current Task/Phase・登録WorkItem�
 localなモデル作業のreadyと、PR公開/review依頼/merge/製品Wave受入は別のgateである。Cloud/CI/rulesのunknownをverifiedへ変えず、その能力を必要とする操作とPの受入を保留する。worker終了時は全処理のjoin後にbindingを解除し、新しいturnを許可しない。
 
 fixtureで登録前/稼働中/解除後/reopen、設定とsubjectの改変/欠損、初回選択後の解除、turn予約の原子性、実Gitによるdaemon準備とmodel run非生成、追加authority pathを含む実probe呼出しを確認する。launcher stubはOS隔離やnative P受入の証拠には数えず、各起動の本物のprobeを必須のまま維持する。
+
+
+### main の分割採用 profile
+
+product_v3 は product_v2 の共通 tool と external context を保ち、parent だけに product_split を追加する。既存 thread への schema の上書きはしない。[分割の明示採用・Artifact・送信 gate](product-splitting.md#main-の明示採用-toolproduct_v3)を参照する。v3 でも製品 Task の model dispatch は稼働中の一致する runtime、隔離/auth probe、workspace・policy の readiness と既存予算を必要とする。

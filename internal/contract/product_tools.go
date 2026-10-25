@@ -27,17 +27,17 @@ func ProductTools(kind string) []ToolDefinition {
 	return ProductToolsForProfile(kind, "product_v1")
 }
 
-// V2 adds external context slices. Keep V1 schemas unchanged for existing
-// native threads, whose dynamic tool schema persists across resume.
+// V2 adds external context; V3 adds parent-only split adoption. Earlier
+// schemas stay unchanged because native threads retain them across resume.
 func ProductToolsForProfile(kind, profile string) []ToolDefinition {
-	if profile != "product_v1" && profile != "product_v2" {
+	if profile != "product_v1" && profile != "product_v2" && profile != "product_v3" {
 		return nil
 	}
 	tools := KernelTools(kind)
 	if tools == nil {
 		return nil
 	}
-	if profile == "product_v2" {
+	if profile == "product_v2" || profile == "product_v3" {
 		for i := range tools {
 			if tools[i].Name != "context_read" {
 				continue
@@ -49,6 +49,9 @@ func ProductToolsForProfile(kind, profile string) []ToolDefinition {
 	}
 	for _, name := range []string{"pr_publish", "pr_review_request"} {
 		tools = append(tools, ToolDefinition{Type: "function", Name: name, Description: "Request a controller-owned P operation for the exact registered candidate. Acceptance saves operation and automatic resource-subscription intents before external I/O. Accepted is not published, approved, merged, or complete; wait on the returned subscription.", InputSchema: Schema(toolArgument(name))})
+	}
+	if profile == "product_v3" && kind == "orchestrator" {
+		tools = append(tools, ToolDefinition{Type: "function", Name: "product_split", Description: "Explicit parent decision to adopt a split_proposal JSON Artifact for a current product WorkItem. The controller validates lossless coverage and atomically reserves the complete child set and Issue creation intents. Completed means preparation only: Issue creation, child execution, parent retirement and acceptance remain separate. Tasks must request this decision via a message to the parent; messages alone never adopt a split.", InputSchema: Schema(toolArgument("product_split"))})
 	}
 	return tools
 }

@@ -34,6 +34,8 @@ type kernelToolOperation struct {
 
 func kernelToolTarget(command any) (string, contract.Target) {
 	switch a := command.(type) {
+	case *contract.SplitProductRequest:
+		return "product_split", a.Target
 	case *contract.PublishPRRequest:
 		return "pr_publish", a.Target
 	case *contract.RequestPRReviewRequest:
@@ -207,6 +209,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 		}
 		target = wave.Target()
 	}
+	if split, ok := command.(*contract.SplitProductRequest); ok {
+		if err := requireProductSplitSessionTx(ctx, tx, b, *split); err != nil {
+			return reply, err
+		}
+	}
 	productOperation := call.Name == "pr_publish" || call.Name == "pr_review_request"
 	var oldRaw, oldReply []byte
 	var oldName, oldDigest, oldThread, state string
@@ -222,6 +229,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 		if err = json.Unmarshal(oldReply, &reply); err != nil {
 			return reply, err
 		}
+		if split, ok := command.(*contract.SplitProductRequest); ok {
+			if err := verifyProductSplitReplayTx(ctx, tx, prior, *split, reply); err != nil {
+				return reply, err
+			}
+		}
 		if productOperation && state == "unknown" {
 			reply.State = "unknown"
 		}
@@ -233,6 +245,11 @@ func (k *KernelStore) Apply(ctx context.Context, call contract.ToolInvocation, c
 	op := kernelToolOperation{ID: structureID("kernel-operation-", b.ID, call.ThreadID+":"+call.TurnID+":"+call.CallID), SessionID: b.ID, RunID: call.RunID, ThreadID: b.ThreadID, TurnID: call.TurnID, CallID: call.CallID, Name: call.Name, ArgumentDigest: digest, Target: target, SnapshotID: snapshotID, CreatedAt: k.clock()}
 	reply = contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}}
 	switch r := command.(type) {
+	case *contract.SplitProductRequest:
+		reply, err = k.acceptProductSplitTx(ctx, tx, op, b, *r)
+		if err != nil {
+			return reply, err
+		}
 	case *contract.PublishPRRequest:
 		reply, err = k.acceptPRIntentTx(ctx, tx, op, b, r.Candidate)
 		if err != nil {

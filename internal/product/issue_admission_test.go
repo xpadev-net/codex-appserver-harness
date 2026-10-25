@@ -262,3 +262,14 @@ func TestIssueAdmissionDependencySyntaxAndCancellationFailClosed(t *testing.T) {
 	}
 	assertNoIssueAdmission(t, a)
 }
+
+func TestIssueAdmissionRejectsGeneratedSplitChildrenEvenWithEmbeddedRootScope(t *testing.T) {
+	for _, marker := range []string{string([]byte{96, 96, 96}) + "harness-split-part", "<!-- harness-split-child:fixture -->"} {
+		a, api := issueAdmissionFixture(t)
+		api.issue.Body += "\n" + marker + "\n"
+		if _, err := a.Admit(context.Background(), 42); err == nil {
+			t.Fatal("split child became an independent Wave")
+		}
+		assertNoIssueAdmission(t, a)
+	}
+}

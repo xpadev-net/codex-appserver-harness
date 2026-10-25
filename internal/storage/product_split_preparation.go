@@ -55,7 +55,7 @@ func loadProductSplitPreparationTx(ctx context.Context, tx *sql.Tx, head string)
 	err := taskEvidenceRecord(ctx, tx, "product_split_preparation", head, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_preparation_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_preparation_history','product_split_preparation_creation') AND (work_item_id=? OR json_extract(payload,'$.parent_head_id')=?))", head, head, head).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_preparation_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_preparation_history','product_split_preparation_creation') AND (work_item_id=? OR json_extract(payload,'$.parent_head_id')=?)) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.preparation.value.parent_head_id')=?)", head, head, head, head).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {

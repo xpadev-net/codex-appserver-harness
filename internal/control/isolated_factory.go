@@ -58,7 +58,7 @@ const isolatedPath = "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin
 // root and freezes launcher arguments. Per-session path/version/isolation checks
 // remain inside Open, after the managed launch reservation.
 func NewIsolatedRuntime(store *storage.KernelStore, config IsolatedConfig) (Runtime, error) {
-	if config.ProductToolProfile != "" && (!config.ProductTools || config.ProductToolProfile != "product_v1" && config.ProductToolProfile != "product_v2") {
+	if config.ProductToolProfile != "" && (!config.ProductTools || config.ProductToolProfile != "product_v1" && config.ProductToolProfile != "product_v2" && config.ProductToolProfile != "product_v3") {
 		return Runtime{}, errors.New("known product tool profile and explicit product opt-in required")
 	}
 	if store == nil {

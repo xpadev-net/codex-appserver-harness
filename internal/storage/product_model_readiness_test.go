@@ -11,7 +11,7 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
-func productModelFixture(t *testing.T) (*KernelStore, domain.Wave, domain.Task, ProductModelRuntime) {
+func productModelFixture(t *testing.T, profiles ...string) (*KernelStore, domain.Wave, domain.Task, ProductModelRuntime) {
 	t.Helper()
 	ctx := context.Background()
 	k, w, task, request := productWorkspaceFixture(t)
@@ -37,7 +37,11 @@ func productModelFixture(t *testing.T) (*KernelStore, domain.Wave, domain.Task, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := ProductModelRuntime{Model: b.Model, ToolProfile: "product_v2", RuntimeDigest: strings.Repeat("a", 64), Repositories: []ProductModelRepository{{Name: "owner/repo", BaseBranch: "master", InitialSHA: request.BaseSHA, Policy: policy, Runner: ProductRunnerRuntime{Root: filepath.Join(k.Root, "runners"), LauncherContract: "argv_passthrough_v1", Launcher: []string{"/bin/true"}}}}}
+	profile := "product_v2"
+	if len(profiles) > 0 {
+		profile = profiles[0]
+	}
+	config := ProductModelRuntime{Model: b.Model, ToolProfile: profile, RuntimeDigest: strings.Repeat("a", 64), Repositories: []ProductModelRepository{{Name: "owner/repo", BaseBranch: "master", InitialSHA: request.BaseSHA, Policy: policy, Runner: ProductRunnerRuntime{Root: filepath.Join(k.Root, "runners"), LauncherContract: "argv_passthrough_v1", Launcher: []string{"/bin/true"}}}}}
 	if err := k.RegisterIsolatedRuntime(config.RuntimeDigest, config.Model, config.ToolProfile); err != nil {
 		t.Fatal(err)
 	}
@@ -339,5 +343,23 @@ func TestProductModelReadinessPinsVerificationAndReviewSubjects(t *testing.T) {
 				t.Fatal("lost subject still dispatched", kind, ready)
 			}
 		})
+	}
+}
+
+func TestProductModelV3ReadinessStillRequiresLiveRuntime(t *testing.T) {
+	k, w, task, config := productModelFixture(t, "product_v3")
+	if set := productModelReady(t, k, w); len(set.Tasks) != 0 {
+		t.Fatal("v3 metadata activated model", set)
+	}
+	release, err := k.BindProductModelRuntime(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set := productModelReady(t, k, w); len(set.Tasks) != 1 || set.Tasks[0].Task.ID != task.ID {
+		t.Fatal("v3 configured task not ready", set)
+	}
+	release()
+	if set := productModelReady(t, k, w); len(set.Tasks) != 0 {
+		t.Fatal("v3 revoke retained model authority", set)
 	}
 }
