@@ -229,7 +229,7 @@ func TestProductNestedSplitCreationParentSourceGateRejectsStaleHoldAndABA(t *tes
 			if _, err := tx.Exec("DELETE FROM records WHERE kind=? AND id=?", record.kind, record.id); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := k.nestedSplitCreationSourceTx(ctx, tx, job); !readinessHoldError(err) {
+			if _, _, err := k.nestedSplitCreationSourceTx(ctx, tx, job); !readinessHoldError(err) {
 				t.Fatal("authenticated snapshot replaced a missing current copy", err)
 			}
 		})

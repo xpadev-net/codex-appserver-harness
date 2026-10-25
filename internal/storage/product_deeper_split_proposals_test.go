@@ -47,7 +47,7 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 		t.Fatal(err)
 	}
 	head := splitProposalHead(r)
-	for _, mode := range []string{"pause", "stale", "late_failure"} {
+	for _, mode := range []string{"pause", "stale", "late_failure", "ancestor_hold", "ancestor_closed", "ancestor_stale"} {
 		t.Run(mode, func(t *testing.T) {
 			k := cloneNestedScopeStore(t, base)
 			switch mode {
@@ -58,6 +58,39 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 			case "stale":
 				now := k.clock()
 				k.Now = func() time.Time { return now.Add(2 * time.Minute) }
+			case "ancestor_hold", "ancestor_closed", "ancestor_stale":
+				ancestorID := previous.Value.Scopes.Value.Request.ParentWorkItemID
+				ancestor, err := k.ReadProductSplitChildScope(ctx, r.Target, ancestorID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prior, err := k.ReadProductSplitChildSource(ctx, r.Target, ancestorID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				facts := splitSourceFacts(ancestor)
+				if mode == "ancestor_hold" {
+					facts.Hold = true
+				} else if mode == "ancestor_closed" {
+					facts.IssueState = "closed"
+				}
+				if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, ancestorID, prior.ID, facts); err != nil {
+					t.Fatal(err)
+				}
+				own, err := k.ReadProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "ancestor_stale" {
+					now := k.clock()
+					k.Now = func() time.Time { return now.Add(2 * time.Minute) }
+					if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID, own.ID, own.Value.Facts); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := k.RequireProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID, own.Value.Facts.PolicyDigest, time.Minute); err != nil {
+					t.Fatal("fixture own source was not ready", err)
+				}
 			case "late_failure":
 				if _, err := k.DB.Exec("CREATE TRIGGER fail_deeper_proposal BEFORE INSERT ON records WHEN NEW.kind='product_nested_split_proposal_request' BEGIN SELECT RAISE(ABORT,'late deeper proposal failure'); END"); err != nil {
 					t.Fatal(err)
@@ -71,6 +104,9 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 				t.Fatal("partial deeper proposal", n, err)
 			}
 		})
+	}
+	if t.Failed() {
+		return
 	}
 	saved, err := base.PrepareProductNestedSplitProposal(ctx, r, ref)
 	if err != nil {

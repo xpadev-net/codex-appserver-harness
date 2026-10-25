@@ -58,6 +58,14 @@ func TestProductDeeperSplitCreationScopesRegistrationsAndSourcesRetainEveryLayer
 		if job.Value.Ancestry == nil || job.Value.Child.Value.Depth != 3 || !reflect.DeepEqual(job.Value.Ancestry.Value.AncestorWitnesses, parent.Value.AncestorWitnesses) {
 			t.Fatal("great creation lost older ancestry")
 		}
+		if i == 0 {
+			t.Run("ancestor_source_gate", func(t *testing.T) {
+				checkDeeperSplitAncestorSourceGate(t, cloneNestedScopeStore(t, k), job, previous.Value.Children[1])
+			})
+			if t.Failed() {
+				return
+			}
+		}
 		if err := os.Remove(filepath.Join(k.Root, "split-http-started.json")); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
@@ -173,6 +181,160 @@ func TestProductDeeperSplitCreationScopesRegistrationsAndSourcesRetainEveryLayer
 				}
 				if !recovered {
 					t.Fatal("one ancestry layer disappeared from recovery", record.kind)
+				}
+			}
+		})
+	}
+}
+
+// This uses the same actual depth-three allocation as the physical creation
+// regression. Only source GET observations are changed; ancestry stays intact.
+func checkDeeperSplitAncestorSourceGate(t *testing.T, k *KernelStore, job ProductSplitCreate, ancestor ProductSplitChildScopeBinding) {
+	t.Helper()
+	ctx := context.Background()
+	target := job.Value.Request.Target
+	ancestorID := ancestor.Value.Child.Value.WorkItemID
+	source, err := k.ReadProductSplitChildSource(ctx, target, ancestorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observeGate := func() (ProductSplitCreateGate, error) {
+		return k.ObserveProductSplitCreateGate(ctx, job.ID, job.Value.OwnerID, job.Digest, "", "")
+	}
+	readGate := func(send bool) error {
+		tx, err := k.kernelTx(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if send {
+			_, err = k.splitCreateSendGateTx(ctx, tx, job)
+		} else {
+			_, err = loadSplitCreateGate(ctx, tx, job)
+		}
+		return err
+	}
+	gate, err := observeGate()
+	if err != nil || len(gate.AncestorSources) != 1 || gate.AncestorSources[0].WorkItemID != ancestorID || gate.AncestorSources[0].SourceID != source.ID {
+		t.Fatal("ancestor source not captured", err)
+	}
+	if err := readGate(true); err != nil {
+		t.Fatal("ready lineage denied", err)
+	}
+	for _, mode := range []string{"hold", "closed", "unavailable", "policy_changed"} {
+		t.Run(mode, func(t *testing.T) {
+			facts := source.Value.Facts
+			switch mode {
+			case "hold":
+				facts.Hold = true
+			case "closed":
+				facts.IssueState = "closed"
+			case "unavailable":
+				facts.Available = false
+				facts.IssueState = ""
+				facts.RequestDigest = ""
+				facts.UpdatedAt = time.Time{}
+				facts.Failure = "read_failed"
+			case "policy_changed":
+				facts.PolicyDigest = strings.Repeat("b", 64)
+			}
+			held, err := k.ObserveProductSplitChildSource(ctx, target, ancestorID, source.ID, facts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := readGate(false); err != nil {
+				t.Fatal("live ancestor change invalidated immutable gate history", err)
+			}
+			if err := readGate(true); !errors.Is(err, ErrProductSplitHeld) {
+				t.Fatal("unready ancestor passed send", err)
+			}
+			if _, err := observeGate(); !errors.Is(err, ErrProductSplitHeld) {
+				t.Fatal("unready ancestor renewed gate", err)
+			}
+			ready, err := k.ObserveProductSplitChildSource(ctx, target, ancestorID, held.Snapshot.ID, source.Value.Facts)
+			if err != nil || ready.Snapshot.ID == source.ID || ready.Snapshot.Digest != source.Digest {
+				t.Fatal("ancestor ABA fixture failed", err)
+			}
+			if err := readGate(true); !errors.Is(err, ErrProductSplitHeld) {
+				t.Fatal("ancestor ABA reused old gate", err)
+			}
+			refreshed, err := observeGate()
+			if err != nil || len(refreshed.AncestorSources) != 1 || refreshed.AncestorSources[0].SourceID != ready.Snapshot.ID {
+				t.Fatal("fresh ancestor gate denied", err)
+			}
+			if err := readGate(true); err != nil {
+				t.Fatal(err)
+			}
+			source = ready.Snapshot
+		})
+		if t.Failed() {
+			return
+		}
+	}
+	now := k.clock()
+	k.Now = func() time.Time { return now.Add(6 * time.Second) }
+	own, err := k.ReadProductSplitChildSource(ctx, target, job.Value.Request.ParentWorkItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ObserveProductSplitChildSource(ctx, target, job.Value.Request.ParentWorkItemID, own.ID, own.Value.Facts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := observeGate(); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("fresh own source renewed stale ancestor", err)
+	}
+	fresh, err := k.ObserveProductSplitChildSource(ctx, target, ancestorID, source.ID, source.Value.Facts)
+	if err != nil || fresh.Snapshot.ID != source.ID {
+		t.Fatal("benign ancestor refresh changed semantic identity", err)
+	}
+	if _, err := observeGate(); err != nil {
+		t.Fatal("refreshed lineage denied", err)
+	}
+	t.Run("missing_ancestor_gate_reference", func(t *testing.T) {
+		tx, err := k.kernelTx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		saved, err := loadSplitCreateGate(ctx, tx, job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved.Value.AncestorSources = nil
+		saved.Digest, err = contentDigest(saved.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := kernelRecordTx(ctx, tx, "product_split_create_gate", job.ID, target.WaveID, saved); err != nil {
+			t.Fatal(err)
+		}
+		if err := kernelRecordTx(ctx, tx, "product_split_create_gate_history", saved.Digest, job.ID, saved); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadSplitCreateGate(ctx, tx, job); !errors.Is(err, ErrProductSplitHeld) {
+			t.Fatal("missing ancestor reference was silently inferred", err)
+		}
+	})
+	for _, kind := range []string{"product_split_child_source", "product_split_child_source_history", "product_split_child_source_policy_history"} {
+		t.Run("lost_"+kind, func(t *testing.T) {
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			id := ancestorID
+			if kind == "product_split_child_source_history" {
+				id = source.ID
+			}
+			if _, err := tx.Exec("DELETE FROM records WHERE kind=? AND id=?", kind, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := k.nestedSplitCreationSourceTx(ctx, tx, job); !readinessHoldError(err) {
+				t.Fatal("missing ancestor evidence passed live check", err)
+			}
+			if kind != "product_split_child_source" {
+				if _, err := loadSplitCreateGate(ctx, tx, job); !readinessHoldError(err) {
+					t.Fatal("missing ancestor history passed historical check", err)
 				}
 			}
 		})
