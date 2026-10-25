@@ -147,6 +147,18 @@ func (k *KernelStore) PrepareProductSplitParentScope(ctx context.Context, target
 		return empty, err
 	}
 	defer tx.Rollback()
+	saved, err := k.prepareProductSplitParentScopeTx(ctx, tx, target, parentID)
+	if err != nil {
+		return empty, err
+	}
+	if err := tx.Commit(); err != nil {
+		return empty, err
+	}
+	return saved, nil
+}
+
+func (k *KernelStore) prepareProductSplitParentScopeTx(ctx context.Context, tx *sql.Tx, target contract.Target, parentID string) (ProductSplitParentScope, error) {
+	var empty ProductSplitParentScope
 	binding, err := splitChildSourceBindingTx(ctx, tx, target, parentID)
 	if err != nil {
 		return empty, err
@@ -184,9 +196,6 @@ func (k *KernelStore) PrepareProductSplitParentScope(ctx context.Context, target
 		if err := kernelRecordTx(ctx, tx, record.kind, record.id, target.WaveID, saved); err != nil {
 			return empty, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return empty, err
 	}
 	return saved, nil
 }

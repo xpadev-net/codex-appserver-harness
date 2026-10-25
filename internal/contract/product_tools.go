@@ -27,17 +27,18 @@ func ProductTools(kind string) []ToolDefinition {
 	return ProductToolsForProfile(kind, "product_v1")
 }
 
-// V2 adds external context; V3 adds parent-only split adoption. Earlier
+// V2 adds external context; V3 adds parent-only split adoption; V4 adds
+// explicit nested parent scope preparation. Earlier
 // schemas stay unchanged because native threads retain them across resume.
 func ProductToolsForProfile(kind, profile string) []ToolDefinition {
-	if profile != "product_v1" && profile != "product_v2" && profile != "product_v3" {
+	if profile != "product_v1" && profile != "product_v2" && profile != "product_v3" && profile != "product_v4" {
 		return nil
 	}
 	tools := KernelTools(kind)
 	if tools == nil {
 		return nil
 	}
-	if profile == "product_v2" || profile == "product_v3" {
+	if profile == "product_v2" || profile == "product_v3" || profile == "product_v4" {
 		for i := range tools {
 			if tools[i].Name != "context_read" {
 				continue
@@ -50,8 +51,11 @@ func ProductToolsForProfile(kind, profile string) []ToolDefinition {
 	for _, name := range []string{"pr_publish", "pr_review_request"} {
 		tools = append(tools, ToolDefinition{Type: "function", Name: name, Description: "Request a controller-owned P operation for the exact registered candidate. Acceptance saves operation and automatic resource-subscription intents before external I/O. Accepted is not published, approved, merged, or complete; wait on the returned subscription.", InputSchema: Schema(toolArgument(name))})
 	}
-	if profile == "product_v3" && kind == "orchestrator" {
+	if (profile == "product_v3" || profile == "product_v4") && kind == "orchestrator" {
 		tools = append(tools, ToolDefinition{Type: "function", Name: "product_split", Description: "Explicit parent decision to adopt a split_proposal JSON Artifact for a current product WorkItem. The controller validates lossless coverage and atomically reserves the complete child set and Issue creation intents. Completed means preparation only: Issue creation, child execution, parent retirement and acceptance remain separate. Tasks must request this decision via a message to the parent; messages alone never adopt a split.", InputSchema: Schema(toolArgument("product_split"))})
+	}
+	if profile == "product_v4" && kind == "orchestrator" {
+		tools = append(tools, ToolDefinition{Type: "function", Name: "product_split_parent_scope", Description: "Prepare an explicit parent scope reference for re-splitting one registered child WorkItem. Returns only that child's complete local scope, coverage and dependencies, with an immutable reference. Metadata only: no split adoption, new child, source refresh, execution or quality grant. Tasks must message the parent to request structural changes.", InputSchema: Schema(toolArgument("product_split_parent_scope"))})
 	}
 	return tools
 }

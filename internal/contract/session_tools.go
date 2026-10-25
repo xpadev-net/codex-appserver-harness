@@ -496,6 +496,8 @@ type ToolDefinition struct {
 
 func toolArgument(name string) any {
 	switch name {
+	case "product_split_parent_scope":
+		return &SplitProductParentScopeRequest{}
 	case "product_split":
 		return &SplitProductRequest{}
 	case "pr_publish":
@@ -524,7 +526,7 @@ func toolArgument(name string) any {
 	return nil
 }
 func parentOnly(name string) bool {
-	return name == "wave_create" || name == "wave_plan" || name == "product_split"
+	return name == "wave_create" || name == "wave_plan" || name == "product_split" || name == "product_split_parent_scope"
 }
 func KernelTools(kind string) []ToolDefinition {
 	if kind != "orchestrator" && kind != "task" {
@@ -643,6 +645,11 @@ func (g KernelGateway) Handle(ctx context.Context, call ToolInvocation) (ToolRep
 	}
 	var target Target
 	switch a := command.(type) {
+	case *SplitProductParentScopeRequest:
+		target = a.Target
+		if a.SchemaVersion != 1 || !inline(a.ParentWorkItemID) || len(a.ParentWorkItemID) > 128 {
+			return reject("invalid product split parent reference")
+		}
 	case *SplitProductRequest:
 		target = a.Target
 		if a.SchemaVersion != 1 || !inline(a.ProposalArtifactID) || len(a.ProposalArtifactID) > 128 {
