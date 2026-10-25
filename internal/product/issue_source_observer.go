@@ -65,7 +65,7 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	}
 	expected := ""
 	if priorErr == nil {
-		expected = prior.Digest
+		expected = prior.ID
 	}
 	facts := storage.ProductSourceFacts{RepositoryID: o.Policy.RepositoryID, IssueNumber: number, PolicyDigest: o.Policy.Digest(), Failure: "read_failed"}
 	var readErr error
@@ -116,9 +116,14 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	if parent.Err() != nil {
 		return storage.ProductSourceUpdate{}, false, parent.Err()
 	}
+	clock := time.Now
+	if o.Store.Now != nil {
+		clock = o.Store.Now
+	}
+	readAt := clock().UTC().Round(0)
 	saveCtx, stop := context.WithTimeout(parent, time.Second)
 	defer stop()
-	update, saveErr := o.Store.ObserveProductSource(saveCtx, w.Target(), expected, facts)
+	update, saveErr := o.Store.ObserveProductSourceAt(saveCtx, w.Target(), expected, facts, readAt)
 	// ErrTaskEvidence can accompany a committed state_invalid prohibition (or
 	// its read-only retry). SQL/CAS/deadline failures return no acknowledgement.
 	acknowledged := saveErr == nil || (errors.Is(saveErr, storage.ErrTaskEvidence) && update.Hold != nil && update.Hold.Reason == "state_invalid")

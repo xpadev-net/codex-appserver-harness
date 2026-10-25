@@ -380,3 +380,7 @@ canonical な source 確認と並列 GET の controlled Go テストを実施す
 ## 旧 continuation port の scope 制約
 
 `RegisterProductContinuation` の既存の own-merge 起点形式は Root definition を登録するため、split child の local scope を保持できない。元の正式な登録 version に `split_scope` がある親は、登録・再送・live activation の共通チェックで保留する。古い leaf の merge を Root の作業へ暗黙拡大しない。Root の own-merge continuation は維持し、子の scope を保持する別形式と、own merge を持たない delegated root の tree-origin continuation は独立した受入対象とする。
+
+Root Issue の定期観測では、`ObserveProductSourceAt` に読み取り前の snapshot ID と、外部取得を完了した時刻を渡す。取得中の状態変更と同じ内容への復帰も ID で検出する。`product_source_read` とその照合用コピーは現在の Target・source・snapshot ID/digest・policy・実取得時刻を結び付け、source の内容と同じ transaction で更新する。同じ内容の再取得は semantic snapshot/history、通知、model run を増やさず、保存の遅れを新しい GET 時刻として扱わない。従来の digest による観測や metadata の参照では実取得時刻を更新しない。
+
+`ReadProductSourceRead` は照合済み metadata の参照であり、実行許可ではない。呼出側は現在の source 状態、Wave/WorkItem の優先操作と全証明の確認後の経過時間を別途検査する。失敗した取得の記録を ready と見なさず、欠落・不一致・古い snapshot から取得時刻を推定しない。この取得時刻の追加だけでは、子 WorkItem の一律保留、quality gate、Cloud 承認、親最終受入を解除しない。

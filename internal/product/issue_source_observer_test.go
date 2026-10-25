@@ -44,6 +44,40 @@ func scanSource(t *testing.T, o IssueSourceObserver) IssueSourceScan {
 	}
 	return result
 }
+
+func TestIssueSourceObserverQuietGETRefreshesReadTimeWithoutSemanticMutation(t *testing.T) {
+	o, api, w := sourceObserverFixture(t)
+	ctx := context.Background()
+	scanSource(t, o)
+	api.issueReads = 0
+	before, err := o.Store.ReadProductSourceObservation(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	o.Store.Now = func() time.Time { return now }
+	completed := now.Add(time.Second)
+	api.onFinal = func(a *issueAdmissionAPI) { now = completed }
+	woke := 0
+	o.OnMutation = func() { woke++ }
+	result := scanSource(t, o)
+	saved, err := o.Store.ReadProductSourceRead(ctx, w.Target())
+	if err != nil || !saved.Value.ReadAt.Equal(completed) || len(result.Changed) != 0 || woke != 0 {
+		t.Fatal("actual quiet GET was not retained", result, saved, woke, err)
+	}
+	after, err := o.Store.ReadProductSourceObservation(ctx, w.ID)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("quiet GET changed semantic snapshot", err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := o.Store.ReadProductSourceRead(ctx, w.Target()); err != nil {
+		t.Fatal(err)
+	}
+	again, err := o.Store.ReadProductSourceRead(ctx, w.Target())
+	if err != nil || !reflect.DeepEqual(saved, again) {
+		t.Fatal("metadata read renewed GET", err)
+	}
+}
 func TestIssueSourceObserverPersistsHoldAndRecoveryWithoutModelTurn(t *testing.T) {
 	o, api, w := sourceObserverFixture(t)
 	ctx := context.Background()
