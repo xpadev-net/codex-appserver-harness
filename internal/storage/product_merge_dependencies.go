@@ -15,13 +15,27 @@ var ErrProductMergeDependencyHeld = fmt.Errorf("%w: product successor requires a
 // different product WorkItem as a merged-change dependency. Local verification,
 // review and fix within the same WorkItem still consume the fixed candidate
 // before merge. A Task's normal completion never substitutes for a merge.
+// Split siblings additionally retain their authenticated intent dependencies
+// for every product role, even when the Task DAG omits those dependencies.
 func (k *KernelStore) productMergeDependenciesTx(ctx context.Context, tx *sql.Tx, w domain.Wave, task domain.Task) error {
-	if !UsesProductChangeOutput(w, task) {
+	if !UsesProductChangeOutput(w, task) && !usesProductSubject(w, task.Spec) {
 		return nil
 	}
 	own := task.Spec.WorkItemIDs
 	required := map[string]map[string]string{}
+	splitDependencies, err := productSplitDependencyIDsTx(ctx, tx, w, own)
+	if err != nil {
+		return err
+	}
+	for _, id := range splitDependencies {
+		required[id] = map[string]string{}
+	}
 	for _, dependency := range task.Spec.DependsOn {
+		// Reviews and verification may consume a predecessor candidate before its
+		// PR merges. Immutable dependencies between split siblings still apply.
+		if !UsesProductChangeOutput(w, task) {
+			break
+		}
 		prior, err := loadTask(ctx, tx, structureID("task-", w.ID, dependency.TaskID))
 		if err != nil {
 			return err

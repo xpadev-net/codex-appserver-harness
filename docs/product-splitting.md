@@ -211,3 +211,11 @@ ProductCoverage は current scope/policy/source の全子登録、scope/history/
 各子の descriptor は local criterion と親条件の whole/part、part ID/count/basis、local scope/binding digest を保持する。子の merge fact では親条件の Criteria を空にし、独立して seal された verifier plan がその子の local scope 全体と一致することを監査し、停止済み runner の保存証拠から検証結果を再計算して quality の verifier digest・対象候補・合格状態との一致を確認した LocalCriteria / SplitScopeDigest を記録する。現行の実行 gate は従来どおり preflight を行い、履歴監査を新規実行の許可に使わない。同じ親条件に対応する各 part ID の集合・宣言個数と全 part の current merge fact が揃って初めて親条件の merge coverage を満たす。一つの part、親条件 ID だけの claim、別 scope/registration の fact、過去 epoch の分割を充足に転用しない。
 
 これは merge coverage と受入候補の管理であり、親の最終検証・正式承認・外部 Issue 完了を代用しない。子の実行保留は維持しており、実 model/GitHub を通す分割 E2E は依存・多段 depth 等の接続後に確認する。
+
+## 保存済みの子間依存と base 入力
+
+実装/fix・検証・レビューの merge dependency gate は、Task DAG の指定に加えて、全登録証拠を認証した split intent の DependsOnWorkItemIDs を必須条件にする。モデルが Task の DependsOn を省略しても消せない。先行子の current scope/policy/source の merge coverage と実 receipt/readiness 証拠が必要であり、Task 完了や子 Issue の closed は代用しない。先行依存のない子に、別の子の依存を転用しない。
+
+writer の ProductBaseInput も同じ保存済み依存を含める。依存が未充足なら入力を作らず、成立時は既存の RequiredAncestors が同じ repository の先行 merge SHA を要求する。通常の同一 WorkItem 内の実装→検証→レビューは、候補の利用に先立つ自分自身の PR merge を要求しない。
+
+子の実行保留は引き続き維持する。この段階の子間依存の試験は全件登録・scope・source facts の fixture と gate の検査であり、既存の独立 WorkItem の merge→base→準備の回帰と区別する。子の実 merge 後の進行は分割 E2E で確認する。
