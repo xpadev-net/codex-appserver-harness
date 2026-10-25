@@ -63,14 +63,25 @@ func productSplitNotificationSourceTx(ctx context.Context, tx *sql.Tx, registere
 	if json.Unmarshal(payload, &op) != nil || json.Unmarshal(result, &reply) != nil {
 		return empty, false, errors.Join(ErrProductSplitHeld, ErrTaskEvidence)
 	}
-	if op.ID != id || name != "product_split" || op.Name != name || op.ArgumentDigest != argument || op.SessionID != session || op.ThreadID != thread || op.Target != r.Target || state != "completed" || reply.State != "completed" || reply.OperationID != id {
+	if op.ID != id || (name != "product_split" && name != "product_split_nested") || op.Name != name || op.ArgumentDigest != argument || op.SessionID != session || op.ThreadID != thread || op.Target != r.Target || state != "completed" || reply.State != "completed" || reply.OperationID != id {
 		return empty, false, ErrProductSplitHeld
 	}
 	var adoption ProductSplitToolAdoption
 	if err := taskEvidenceRecord(ctx, tx, "product_split_tool_adoption", id, &adoption); err != nil {
 		return empty, false, splitEvidenceErr(err)
 	}
-	request := contract.SplitProductRequest{SchemaVersion: 1, Target: op.Target, ProposalArtifactID: adoption.ArtifactID}
+	var request any
+	if name == "product_split_nested" {
+		if adoption.ParentScopeProof == nil {
+			return empty, false, ErrProductSplitHeld
+		}
+		request = contract.NestedSplitProductRequest{SchemaVersion: 1, Target: op.Target, ProposalArtifactID: adoption.ArtifactID, ParentScopeID: adoption.ParentScopeProof.ID, ParentScopeDigest: adoption.ParentScopeProof.Digest}
+	} else {
+		if adoption.ParentScopeProof != nil {
+			return empty, false, ErrProductSplitHeld
+		}
+		request = contract.SplitProductRequest{SchemaVersion: 1, Target: op.Target, ProposalArtifactID: adoption.ArtifactID}
+	}
 	digest, err := contentDigest(request)
 	if err != nil {
 		return empty, false, err
@@ -78,7 +89,13 @@ func productSplitNotificationSourceTx(ctx context.Context, tx *sql.Tx, registere
 	if op.ArgumentDigest != digest || adoption.Source != op || adoption.Preparation.Value.ProposalID != r.ProposalID || adoption.Preparation.Value.ProposalDigest != r.ProposalDigest || adoption.ParentHeadID != registered.Value.ParentHeadID {
 		return empty, false, ErrProductSplitHeld
 	}
-	if err := verifyProductSplitReplayTx(ctx, tx, op, request, reply); err != nil {
+	switch actual := request.(type) {
+	case contract.NestedSplitProductRequest:
+		err = verifyProductNestedSplitReplayTx(ctx, tx, op, actual, reply)
+	case contract.SplitProductRequest:
+		err = verifyProductSplitReplayTx(ctx, tx, op, actual, reply)
+	}
+	if err != nil {
 		return empty, false, splitEvidenceErr(err)
 	}
 	var content struct {

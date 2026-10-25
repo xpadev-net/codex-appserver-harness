@@ -163,6 +163,22 @@ func loadNestedSplitProposalUncached(ctx context.Context, tx *sql.Tx, r ProductS
 // reference. It creates no intents, seats, Issues, Tasks or send permission.
 // The ordinary root port remains unable to adopt a nested preview implicitly.
 func (k *KernelStore) PrepareProductNestedSplitProposal(ctx context.Context, r ProductSplitProposalRequest, parent ProductSplitParentScopeReference) (ProductNestedSplitProposal, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductNestedSplitProposal{}, err
+	}
+	defer tx.Rollback()
+	saved, err := k.prepareProductNestedSplitProposalTx(ctx, tx, r, parent)
+	if err != nil {
+		return ProductNestedSplitProposal{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ProductNestedSplitProposal{}, err
+	}
+	return saved, nil
+}
+
+func (k *KernelStore) prepareProductNestedSplitProposalTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest, parent ProductSplitParentScopeReference) (ProductNestedSplitProposal, error) {
 	var empty ProductNestedSplitProposal
 	if !r.Target.Valid() || r.Key == "" || len(r.Key) > 256 || !utf8.ValidString(r.Key) || r.ParentWorkItemID == "" || !validSourceDigest(r.RegistrationDigest) || len(r.Proposal.Children) > maxProductWorkItems || parent.ID == "" || !validSourceDigest(parent.Digest) {
 		return empty, ErrProductSplitHeld
@@ -176,11 +192,6 @@ func (k *KernelStore) PrepareProductNestedSplitProposal(ctx context.Context, r P
 		return empty, err
 	}
 	r = request
-	tx, err := k.kernelTx(ctx)
-	if err != nil {
-		return empty, err
-	}
-	defer tx.Rollback()
 	prior, err := loadNestedSplitProposal(ctx, tx, r)
 	if err == nil {
 		if !reflect.DeepEqual(prior.Value.Proposal.Value.Request, r) || prior.Value.ParentProof != parent {
@@ -254,9 +265,6 @@ func (k *KernelStore) PrepareProductNestedSplitProposal(ctx context.Context, r P
 		if err := kernelRecordTx(ctx, tx, record.kind, record.id, r.Target.WaveID, saved); err != nil {
 			return empty, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return empty, err
 	}
 	return saved, nil
 }

@@ -227,6 +227,9 @@ func (k *KernelStore) RegisterProductSplitChildren(ctx context.Context, r Produc
 		if err != nil {
 			return ProductSplitRegistrations{}, err
 		}
+		if err := k.queueProductSplitCompletionTx(ctx, tx, saved); err != nil {
+			return ProductSplitRegistrations{}, err
+		}
 		return saved, tx.Commit()
 	}
 	if _, err := k.productSplitContextTx(ctx, tx, proposal.Value.Request); err != nil {
