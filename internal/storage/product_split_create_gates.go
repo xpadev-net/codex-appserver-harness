@@ -8,17 +8,18 @@ import (
 )
 
 type ProductSplitCreateGate struct {
-	AncestorSources    []ProductSplitAncestorSourceReference `json:"ancestor_sources,omitempty"`
-	Ancestry           *ProductNestedSplitAllocation         `json:"ancestry,omitempty"`
-	ParentSourceID     string                                `json:"parent_source_id,omitempty"`
-	ParentSourceDigest string                                `json:"parent_source_digest,omitempty"`
-	CreationID         string                                `json:"creation_id"`
-	CreationDigest     string                                `json:"creation_digest"`
-	Request            ProductSplitChildPlanRequest          `json:"request"`
-	ParentHeadID       string                                `json:"parent_head_id"`
-	SourceID           string                                `json:"source_id"`
-	SourceDigest       string                                `json:"source_digest"`
-	ObservedAt         time.Time                             `json:"observed_at"`
+	AncestorSourcesVersion int                                   `json:"ancestor_sources_version,omitempty"`
+	AncestorSources        []ProductSplitAncestorSourceReference `json:"ancestor_sources,omitempty"`
+	Ancestry               *ProductNestedSplitAllocation         `json:"ancestry,omitempty"`
+	ParentSourceID         string                                `json:"parent_source_id,omitempty"`
+	ParentSourceDigest     string                                `json:"parent_source_digest,omitempty"`
+	CreationID             string                                `json:"creation_id"`
+	CreationDigest         string                                `json:"creation_digest"`
+	Request                ProductSplitChildPlanRequest          `json:"request"`
+	ParentHeadID           string                                `json:"parent_head_id"`
+	SourceID               string                                `json:"source_id"`
+	SourceDigest           string                                `json:"source_digest"`
+	ObservedAt             time.Time                             `json:"observed_at"`
 }
 type splitCreateGateRecord struct {
 	Value  ProductSplitCreateGate `json:"value"`
@@ -116,6 +117,9 @@ func (k *KernelStore) ObserveProductSplitCreateGate(ctx context.Context, id, own
 		}
 		value.ParentSourceID, value.ParentSourceDigest = source.ID, source.Digest
 		value.AncestorSources = ancestors
+		if len(ancestors) != 0 {
+			value.AncestorSourcesVersion = 1
+		}
 	}
 	checksum, err := contentDigest(value)
 	if err != nil {

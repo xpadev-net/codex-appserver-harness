@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -78,6 +79,14 @@ func TestProductDeeperSplitCreationScopesRegistrationsAndSourcesRetainEveryLayer
 		cancel()
 		if _, err := k.FinishProductSplitCreateHTTP(ctx, job.ID, job.Value.OwnerID, job.Digest, strings.Repeat("a", 64), "great-stop"); err != nil {
 			t.Fatal(err)
+		}
+		if i == 0 {
+			t.Run("legacy_activated_gate_recovery", func(t *testing.T) {
+				checkLegacyDeeperSplitGateRecovery(t, cloneNestedScopeStore(t, k), job.ID)
+			})
+			if t.Failed() {
+				return
+			}
 		}
 		if _, err := k.RecordProductSplitCreatedIssue(ctx, job.ID, ProductSplitCreatedIssue{RepositoryID: 17, ID: int64(701 + i), Number: 71 + i, Title: child.Value.Child.Title, Body: child.Value.Body, State: "open", ObservedAt: k.clock()}); err != nil {
 			t.Fatal(err)
@@ -338,5 +347,91 @@ func checkDeeperSplitAncestorSourceGate(t *testing.T, k *KernelStore, job Produc
 				}
 			}
 		})
+	}
+}
+
+// Convert only the gate/journal wire representation of an actual physically
+// activated and stopped request to the base revision's format. All allocation,
+// physical identity, stop, ancestry, and source histories remain unchanged.
+func checkLegacyDeeperSplitGateRecovery(t *testing.T, k *KernelStore, id string) {
+	t.Helper()
+	ctx := context.Background()
+	job, err := k.ReadProductSplitCreate(ctx, id)
+	if err != nil || job.State != "stopped" || job.HTTP == nil {
+		t.Fatal("actual stopped fixture invalid", err)
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	gate, err := loadSplitCreateGate(ctx, tx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate.Value.AncestorSources = nil
+	gate.Value.AncestorSourcesVersion = 0
+	gate.Digest, err = contentDigest(gate.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(gate.Value)
+	if err != nil || strings.Contains(string(raw), "ancestor_sources") {
+		t.Fatal("fixture is not the base gate format", err)
+	}
+	if err := kernelRecordTx(ctx, tx, "product_split_create_gate", id, job.Value.Request.Target.WaveID, gate); err != nil {
+		t.Fatal(err)
+	}
+	if err := kernelRecordTx(ctx, tx, "product_split_create_gate_history", gate.Digest, id, gate); err != nil {
+		t.Fatal(err)
+	}
+	previous := ""
+	for seq := 0; seq <= job.Sequence; seq++ {
+		var event splitCreateRecord
+		if err := taskEvidenceRecord(ctx, tx, "product_split_create_event", splitCreateEventID(id, seq), &event); err != nil {
+			t.Fatal(err)
+		}
+		event.Value.PreviousDigest = previous
+		if event.Value.HTTP != nil {
+			event.Value.HTTP.GateDigest = gate.Digest
+		}
+		event.Digest, err = contentDigest(event.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous = event.Digest
+		if err := kernelRecordTx(ctx, tx, "product_split_create_event", splitCreateEventID(id, seq), id, event); err != nil {
+			t.Fatal(err)
+		}
+		if seq == job.Sequence {
+			if err := kernelRecordTx(ctx, tx, "product_split_create", id, job.Value.Request.Target.WaveID, event); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := k.ReadProductSplitCreate(ctx, id)
+	if err != nil || restored.State != "stopped" || restored.HTTP.Process != job.HTTP.Process || !reflect.DeepEqual(restored.Stop, job.Stop) {
+		t.Fatal("legacy activated history unreadable", err)
+	}
+	tx, err = k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.splitCreateSendGateTx(ctx, tx, restored); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("legacy receipt became a new send grant", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	child := restored.Value.Child.Value
+	if _, err := k.RecordProductSplitCreatedIssue(ctx, id, ProductSplitCreatedIssue{RepositoryID: child.RepositoryID, ID: 9701, Number: 971, Title: child.Child.Title, Body: child.Body, State: "open", ObservedAt: k.clock()}); err != nil {
+		t.Fatal("legacy stopped request could not reconcile Issue observation", err)
+	}
+	observed, err := k.ReadProductSplitCreate(ctx, id)
+	if err != nil || observed.State != "observed" || observed.Issue == nil || observed.Issue.ID != 9701 {
+		t.Fatal("legacy reconciled observation unreadable", err)
 	}
 }

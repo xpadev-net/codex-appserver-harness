@@ -117,7 +117,7 @@ func (k *KernelStore) nestedSplitCreationSourceTx(ctx context.Context, tx *sql.T
 // the live Issue later changes. Freshness is checked only on new activation.
 func validateNestedSplitCreationGateSource(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, gate ProductSplitCreateGate) error {
 	if job.Value.Ancestry == nil {
-		if len(gate.AncestorSources) != 0 {
+		if len(gate.AncestorSources) != 0 || gate.AncestorSourcesVersion != 0 {
 			return ErrProductSplitHeld
 		}
 		return nil
@@ -125,6 +125,21 @@ func validateNestedSplitCreationGateSource(ctx context.Context, tx *sql.Tx, job 
 	for _, binding := range job.Value.Ancestry.Value.Children {
 		if binding.Value.Child.Value.WorkItemID != job.Value.Request.ParentWorkItemID {
 			continue
+		}
+		// Pre-lineage gates can explain an already activated physical request,
+		// but can never grant a new activation or acquire inferred witnesses.
+		if binding.Value.Child.Value.Depth > 1 && gate.AncestorSourcesVersion == 0 && len(gate.AncestorSources) == 0 && job.HTTP != nil {
+			digest, err := contentDigest(gate)
+			if err != nil {
+				return err
+			}
+			if job.HTTP.GateDigest != digest {
+				return ErrProductSplitHeld
+			}
+			return validateSplitCreationHistoricalSource(ctx, tx, binding, gate.ParentSourceID, gate.ParentSourceDigest, job.Value.Ancestry.Value.SourcePolicyDigest, gate.ObservedAt)
+		}
+		if binding.Value.Child.Value.Depth > 1 && gate.AncestorSourcesVersion != 1 || binding.Value.Child.Value.Depth == 1 && gate.AncestorSourcesVersion != 0 {
+			return ErrProductSplitHeld
 		}
 		lineage, err := splitSourceLineageTx(ctx, tx, binding)
 		if err != nil {
