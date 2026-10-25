@@ -12,20 +12,21 @@ import (
 )
 
 type ProductTaskReviewValue struct {
-	TaskID          string                `json:"task_id"`
-	RunID           string                `json:"run_id"`
-	ResultID        string                `json:"result_id"`
-	Target          contract.Target       `json:"target"`
-	InputDigest     string                `json:"input_digest"`
-	OutputDigest    string                `json:"output_digest"`
-	SnapshotID      string                `json:"snapshot_id"`
-	SnapshotDigest  string                `json:"snapshot_digest"`
-	SubjectID       string                `json:"subject_id"`
-	SubjectDigest   string                `json:"subject_digest"`
-	WorkspaceID     string                `json:"workspace_id"`
-	WorkspaceDigest string                `json:"workspace_digest"`
-	Candidate       runner.Candidate      `json:"candidate"`
-	Review          contract.ReviewResult `json:"review"`
+	LocalReview     *contract.ProductLocalReview `json:"local_review,omitempty"`
+	TaskID          string                       `json:"task_id"`
+	RunID           string                       `json:"run_id"`
+	ResultID        string                       `json:"result_id"`
+	Target          contract.Target              `json:"target"`
+	InputDigest     string                       `json:"input_digest"`
+	OutputDigest    string                       `json:"output_digest"`
+	SnapshotID      string                       `json:"snapshot_id"`
+	SnapshotDigest  string                       `json:"snapshot_digest"`
+	SubjectID       string                       `json:"subject_id"`
+	SubjectDigest   string                       `json:"subject_digest"`
+	WorkspaceID     string                       `json:"workspace_id"`
+	WorkspaceDigest string                       `json:"workspace_digest"`
+	Candidate       runner.Candidate             `json:"candidate"`
+	Review          contract.ReviewResult        `json:"review"`
 }
 type ProductTaskReviewSnapshot struct {
 	Value  ProductTaskReviewValue `json:"value"`
@@ -42,7 +43,7 @@ func UsesProductReviewOutput(w domain.Wave, t domain.Task) bool {
 // verdict is not machine verification, publication permission or Cloud approval.
 func (k *KernelStore) productReviewEvidenceTx(ctx context.Context, tx *sql.Tx, w domain.Wave, b contract.SessionBinding, task domain.Task, runID string, result contract.TaskResult) (ProductTaskReviewSnapshot, error) {
 	var saved ProductTaskReviewSnapshot
-	if !UsesProductReviewOutput(w, task) || result.SchemaVersion != 1 || result.Outcome != "result" || result.Review == nil || len(result.WorkItemRefs) != 0 || len(result.ProductChanges) != 0 || task.Paused || w.Target() != task.Target() || w.DispatchPaused() || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) || b.Kind != "task" || b.TaskID != task.ID || b.Target != task.Target() || b.ParentSessionID != w.OrchestratorSessionID || b.Closed || b.Sandbox != "read-only" {
+	if !UsesProductReviewOutput(w, task) || (result.SchemaVersion != 1 && result.SchemaVersion != 4) || result.Outcome != "result" || result.Review == nil || len(result.WorkItemRefs) != 0 || len(result.ProductChanges) != 0 || task.Paused || w.Target() != task.Target() || w.DispatchPaused() || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) || b.Kind != "task" || b.TaskID != task.ID || b.Target != task.Target() || b.ParentSessionID != w.OrchestratorSessionID || b.Closed || b.Sandbox != "read-only" {
 		return saved, ErrProductSubjectHeld
 	}
 	if err := currentObservedTaskTx(ctx, tx, w, task); err != nil {
@@ -55,6 +56,17 @@ func (k *KernelStore) productReviewEvidenceTx(ctx context.Context, tx *sql.Tx, w
 	}
 	if held {
 		return saved, ErrProductSubjectHeld
+	}
+	registration, err := loadProductWorkItemRegistration(ctx, tx, task.Spec.WorkItemIDs[0])
+	if err != nil {
+		return saved, err
+	}
+	binding, err := productSplitChildScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return saved, err
+	}
+	if !productLocalReviewMatches(binding, result.SchemaVersion, result.ProductLocalReview) {
+		return saved, ErrProductChangeReference
 	}
 	subject, err := k.fixedProductSubjectInputTx(ctx, tx, w, task.Spec)
 	if err != nil {
@@ -119,7 +131,7 @@ func (k *KernelStore) productReviewEvidenceTx(ctx context.Context, tx *sql.Tx, w
 	if manifest.ProductSubject == nil || !reflect.DeepEqual(*manifest.ProductSubject, *subject) || manifest.ProductWorkspace != nil || manifest.ProductVerificationPolicy != nil {
 		return saved, ErrTaskEvidence
 	}
-	value := ProductTaskReviewValue{TaskID: task.ID, RunID: runID, ResultID: structureID("result-", task.ID, runID), Target: task.Target(), InputDigest: input, OutputDigest: bytesDigest([]byte(run.Final)), SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, SubjectID: subject.ID, SubjectDigest: subject.Digest, WorkspaceID: ready.ID, WorkspaceDigest: ready.Digest, Candidate: subject.Value.Candidate, Review: *result.Review}
+	value := ProductTaskReviewValue{LocalReview: result.ProductLocalReview, TaskID: task.ID, RunID: runID, ResultID: structureID("result-", task.ID, runID), Target: task.Target(), InputDigest: input, OutputDigest: bytesDigest([]byte(run.Final)), SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, SubjectID: subject.ID, SubjectDigest: subject.Digest, WorkspaceID: ready.ID, WorkspaceDigest: ready.Digest, Candidate: subject.Value.Candidate, Review: *result.Review}
 	digest, err := contentDigest(value)
 	if err == nil && !sourcePermit.current(k, tx) {
 		return saved, ErrProductSubjectHeld
@@ -170,7 +182,11 @@ func (k *KernelStore) productTaskReviewTx(ctx context.Context, q queryer, id str
 	if err := contract.DecodeStrict([]byte(run.Final), &final); err != nil {
 		return saved, err
 	}
-	if result.Validate() != nil || result.SchemaVersion != 1 || result.TaskID != v.TaskID || result.Target != v.Target || result.Outcome != "result" || result.Review == nil || !reflect.DeepEqual(*result.Review, v.Review) || !reflect.DeepEqual(final, result) || bytesDigest([]byte(run.Final)) != v.OutputDigest || run.ID != v.RunID || run.State != "completed" || run.TurnID == "" || !run.BaselineKnown || slices.Contains(run.BaselineTurnIDs, run.TurnID) {
+	expectedSchema := 1
+	if v.LocalReview != nil {
+		expectedSchema = 4
+	}
+	if result.Validate() != nil || result.SchemaVersion != expectedSchema || !reflect.DeepEqual(result.ProductLocalReview, v.LocalReview) || result.TaskID != v.TaskID || result.Target != v.Target || result.Outcome != "result" || result.Review == nil || !reflect.DeepEqual(*result.Review, v.Review) || !reflect.DeepEqual(final, result) || bytesDigest([]byte(run.Final)) != v.OutputDigest || run.ID != v.RunID || run.State != "completed" || run.TurnID == "" || !run.BaselineKnown || slices.Contains(run.BaselineTurnIDs, run.TurnID) {
 		return saved, ErrTaskEvidence
 	}
 	var owner, thread, state string
@@ -186,4 +202,25 @@ func (k *KernelStore) productTaskReviewTx(ctx context.Context, q queryer, id str
 
 func (k *KernelStore) ReadProductTaskReview(ctx context.Context, resultID string) (ProductTaskReviewSnapshot, error) {
 	return k.productTaskReviewTx(ctx, k.DB, resultID)
+}
+
+// Local criterion IDs have meaning only under this exact immutable scope.
+func productLocalReviewMatches(binding *ProductSplitChildScopeBinding, version int, local *contract.ProductLocalReview) bool {
+	if binding == nil {
+		return version == 1 && local == nil
+	}
+	if version != 4 || local == nil || local.ScopeDigest != binding.Value.ScopeDigest || len(local.Criteria) != len(binding.Value.Scope.Included) {
+		return false
+	}
+	known := map[string]bool{}
+	for _, id := range binding.Value.Scope.Included {
+		known[id] = true
+	}
+	for _, criterion := range local.Criteria {
+		if !known[criterion.CriterionID] {
+			return false
+		}
+		delete(known, criterion.CriterionID)
+	}
+	return len(known) == 0
 }

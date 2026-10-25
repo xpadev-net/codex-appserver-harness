@@ -17,6 +17,7 @@ import (
 var ErrProductQualityHeld = errors.New("product quality lacks current complete independent evidence")
 
 type ProductQualityValue struct {
+	ScopeDigest        string              `json:"scope_digest,omitempty"`
 	Target             contract.Target     `json:"target"`
 	WorkItemID         string              `json:"work_item_id"`
 	ProductDigest      string              `json:"product_digest"`
@@ -98,6 +99,15 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 		return proof, ErrTaskEvidence
 	}
 	value := ProductQualityValue{Target: target, WorkItemID: workID, ProductDigest: product.Digest, RegistrationDigest: registration.Digest, PlanDigest: planDigest, Candidate: product.Value.Candidate, Results: map[string]string{}, Artifacts: map[string]string{}, Verifications: map[string]string{}, Reviews: map[string]string{}, Criteria: map[string][]string{}}
+	binding, err := productSplitChildScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return proof, err
+	}
+	requiredCriteria := registration.Value.Definition.Criteria
+	if binding != nil {
+		value.ScopeDigest = binding.Value.ScopeDigest
+		requiredCriteria = binding.Value.Scope.Included
+	}
 	inputs := map[string]TaskResultInput{}
 	tasks := map[string]domain.Task{}
 	producerSessions := map[string]bool{}
@@ -220,17 +230,30 @@ func (k *KernelStore) productQualityTx(ctx context.Context, tx *sql.Tx, target c
 		}
 		seenSessions[task.SessionID], seenThreads[run.ThreadID] = true, true
 		value.Reviews[task.ResultID] = review.Digest
-		for _, criterion := range task.Spec.Criteria {
-			if !slices.Contains(registration.Value.Definition.Criteria, criterion) {
-				continue
+		if binding != nil {
+			if !productLocalReviewMatches(binding, input.Result.SchemaVersion, review.Value.LocalReview) {
+				return proof, productQualityHeld("review must evaluate the exact complete local scope")
 			}
-			if !claimedCriterion(input.Result, criterion, "") {
-				return proof, productQualityHeld("reviewer has not evaluated its assigned original criterion")
+			for _, criterion := range review.Value.LocalReview.Criteria {
+				if criterion.Status != "claimed" || len(criterion.EvidenceIDs) == 0 {
+					return proof, productQualityHeld("every included local criterion needs independent evaluation")
+				}
+				value.Criteria[criterion.CriterionID] = append(value.Criteria[criterion.CriterionID], task.ID)
 			}
-			value.Criteria[criterion] = append(value.Criteria[criterion], task.ID)
+		} else {
+			for _, criterion := range task.Spec.Criteria {
+				if !slices.Contains(registration.Value.Definition.Criteria, criterion) {
+					continue
+				}
+				if !claimedCriterion(input.Result, criterion, "") {
+					return proof, productQualityHeld("reviewer has not evaluated its assigned original criterion")
+				}
+				value.Criteria[criterion] = append(value.Criteria[criterion], task.ID)
+			}
 		}
+
 	}
-	for _, criterion := range registration.Value.Definition.Criteria {
+	for _, criterion := range requiredCriteria {
 		if len(value.Criteria[criterion]) == 0 {
 			return proof, productQualityHeld("every included original criterion needs independent evaluation")
 		}

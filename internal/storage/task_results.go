@@ -152,6 +152,9 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 	if validationErr == nil && result.SchemaVersion == 3 && !UsesProductVerificationOutput(wave, task) {
 		validationErr = errors.New("TaskResult schema 3 requires a trusted P verification assignment")
 	}
+	if validationErr == nil && result.SchemaVersion == 4 && !UsesProductReviewOutput(wave, task) {
+		validationErr = errors.New("TaskResult schema 4 requires a trusted scoped P review assignment")
+	}
 	if validationErr == nil && task.Spec.Kind == "review" && result.Outcome == "result" && result.Review == nil {
 		validationErr = errors.New("review Task requires a structured review verdict")
 	}
