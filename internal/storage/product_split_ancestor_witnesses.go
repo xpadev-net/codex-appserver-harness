@@ -61,6 +61,7 @@ func canonicalSplitAncestorGroups(waveID string, groups []ProductSplitAncestorGr
 	work := map[string]string{}
 	seats := map[string]bool{}
 	issues := map[string]string{}
+	issueIDs := map[string]string{}
 	retries := map[string]bool{}
 	creationOwners := map[string]string{}
 	for _, group := range groups {
@@ -105,7 +106,11 @@ func canonicalSplitAncestorGroups(waveID string, groups []ProductSplitAncestorGr
 			if prior, ok := issues[issueKey]; ok && prior != id {
 				return nil, ErrProductSplitHeld
 			}
-			work[id], issues[issueKey] = signature, id
+			issueIDKey := fmt.Sprintf("%d:%d", v.Issue.RepositoryID, v.Issue.ID)
+			if prior, ok := issueIDs[issueIDKey]; ok && prior != id {
+				return nil, ErrProductSplitHeld
+			}
+			work[id], issues[issueKey], issueIDs[issueIDKey] = signature, id, id
 		}
 		if group.ParentWorkItemID != "" && group.ParentWorkItemID != r.ParentWorkItemID && !own[group.ParentWorkItemID] {
 			return nil, ErrProductSplitHeld

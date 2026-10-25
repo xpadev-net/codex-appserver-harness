@@ -64,7 +64,7 @@ func TestSplitAncestorWitnessesCanonicalizeWithoutRecursiveOrPrivateData(t *test
 
 func TestSplitAncestorWitnessesRejectConflictsAndBrokenCreationChains(t *testing.T) {
 	original := ancestorGroupFixture(t)
-	for _, mode := range []string{"wrong_wave", "wrong_head", "lost_pin", "duplicate_child", "aliased_issue", "broken_chain", "foreign_marker", "shared_creation", "changed_pin", "changed_child", "parent_seat_overflow", "retry_overflow"} {
+	for _, mode := range []string{"wrong_wave", "wrong_head", "lost_pin", "duplicate_child", "aliased_issue", "aliased_issue_id", "cross_group_issue_id", "broken_chain", "foreign_marker", "shared_creation", "changed_pin", "changed_child", "parent_seat_overflow", "retry_overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			group := cloneAncestorGroup(t, original)
 			groups := []ProductSplitAncestorGroup{group}
@@ -79,6 +79,22 @@ func TestSplitAncestorWitnessesRejectConflictsAndBrokenCreationChains(t *testing
 				group.Children[1] = group.Children[0]
 			case "aliased_issue":
 				group.Children[1].Value.Issue = group.Children[0].Value.Issue
+			case "aliased_issue_id":
+				group.Children[1].Value.Issue.ID = group.Children[0].Value.Issue.ID
+			case "cross_group_issue_id":
+				other := cloneAncestorGroup(t, group)
+				other.ScopeSetID = "other-scope"
+				for i := range other.Children {
+					v := &other.Children[i].Value
+					v.Child.ID = fmt.Sprintf("other-intent-%d", i)
+					v.Child.Value.WorkItemID = fmt.Sprintf("other-work-%d", i)
+					v.Issue.Number += 20
+					id := fmt.Sprintf("split-create-other-%d", i)
+					v.InitialCreationID, v.CreationID = id, id
+					v.Creations = []ProductSplitChildCreationReference{{ID: id, Digest: strings.Repeat("d", 64)}}
+				}
+				other.ParentWorkItemID = other.Children[0].Value.Child.Value.WorkItemID
+				groups = append(groups, other)
 			case "broken_chain":
 				group.Children[0].Value.Creations[0].Attempt = 1
 			case "foreign_marker":
