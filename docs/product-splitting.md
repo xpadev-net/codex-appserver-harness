@@ -341,4 +341,4 @@ Coverage は直近の親の local criterion に対する part ID・part count・
 この接続は提案と child plan の metadata に限る。Task/model/runner、再帰的な local coverage、main 通知、親最終受入の許可にはしない。枠・retry・operation budget を補充しない。
 
 
-方向修正後の監査読み取りは、保存時の parent proof が参照する正式な登録集合から binding を取得する。現在の Wave target を要求して過去の提案・plan・allocation・scope を読めなくしない。新規提案は現在の登録 binding と target を照合し、過去の proof を新 scope の採用許可へ転用しない。
+方向修正後の監査用 loader と plan 等の履歴読み取りは、保存時の parent proof が参照する正式な登録集合から binding を取得する。現在の Wave target を要求して過去の提案・plan・allocation・scope を読めなくしない。現在の提案状態を確認する port と新規提案は現在の登録 binding と target を照合し、過去の proof を新 scope の採用許可へ転用しない。

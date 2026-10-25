@@ -120,9 +120,17 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 		if _, err := k.ApplyWaveDirection(ctx, direction.ID); err != nil {
 			t.Fatal(err)
 		}
-		history, err := k.ReadProductSplitProposal(ctx, r.Target, r.ParentWorkItemID)
-		if err != nil || !reflect.DeepEqual(history, p) {
-			t.Fatal("direction lost canonical deeper proposal history", err)
+		if _, err := k.ReadProductSplitProposal(ctx, r.Target, r.ParentWorkItemID); !readinessHoldError(err) {
+			t.Fatal("current proposal port accepted an old target", err)
+		}
+		tx, err := k.kernelTx(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history, historyErr := loadProductSplitProposal(ctx, tx, r)
+		tx.Rollback()
+		if historyErr != nil || !reflect.DeepEqual(history, p) {
+			t.Fatal("direction lost canonical deeper proposal history", historyErr)
 		}
 		historyPlan, err := k.ReadProductSplitChildPlan(ctx, planRequest)
 		if err != nil || !reflect.DeepEqual(historyPlan, plan) {
