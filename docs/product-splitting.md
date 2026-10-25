@@ -189,3 +189,13 @@ product_v3 の product_split は準備の完了を返し、その採用と同じ
 保存済みの subscription、採用記録、registered group、completion、event/intent の証拠欠落を成功で補修しない。exact 復旧後に未消費の通知を再評価できる。従来の購読なし adoption は元応答を書き換えず、認証した元 operation に controller が登録完了時の購読を結び付ける。既知の購読が失われた場合の再作成は許可しない。completion だけが残った場合も、親再実行、子 source の root 再取込み、枠・消費済み retry の返却、元 journal の再作成を禁止する。
 
 検査は実 Go test subprocess の停止と注入した trusted GET を使用し、通知/全件 registration の原子性、main wait、reopen/ACK/wake replay、証拠欠落/exact 復旧、偽装/Task 拒否、方向修正・pause、旧応答の互換と単独 completion witness を確認する。実 model/GitHub の子実行受入は引き続き別である。
+
+## 子 issue 自身の source facts の保存
+
+trusted host の ObserveProductSplitChildSource は、登録済みの local binding と current scope/policy を認証して、子ごとの issue identity、元 title/body の request digest、open/closed、hold、可用性、host policy digest を保存する。生成した子には ready label を要求せず、ready/取得不能/identity・本文変更/closed/hold/policy 変更を区別する。これらは元要求や policy を採用する操作ではなく、子の source ready も品質合格・実行・送信権限ではない。Wave.SourceHold は変更しない。
+
+各子の host policy は初回に不変 pin と独立 history を同じ transaction で保存し、別 digest の観測で上書きしない。source head と version history も原子的に保存する。既知の head/history/pin 欠落を観測で補修せず、exact 復旧を必要とする。観測・policy の各レコードには compact な original binding/creation/source 参照を保持し、その記録だけ残る場合も再作成・親再実行・枠/消費済み retry の返却を禁止する。
+
+CAS は semantic digest ではなく版を含む snapshot ID を使い、同じ facts に戻った後の遅延 callback による上書きも拒否する。facts が同じ GET 確認では ID/版/history を増やさず CheckedAt だけ更新する。意味のある変更は最大1024版まで元 history を保存し、上限を超えて reset/切捨てしない。鮮度チェックは caller が固定した policy と最大5分の有界期限、時計巻戻りを確認し、source-only の結果を返す。
+
+この段階は host port と証拠保存の接続で、実 GET observer・daemon・send gate は後続である。子の実行保留は維持し、part 集約 coverage・親 retirement・依存・多段 depth と併せて接続する。

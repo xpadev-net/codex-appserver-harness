@@ -11,7 +11,7 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 	var id string
 	var err error
 	switch kind {
-	case "product_split_child_scope", "product_split_child_scope_history", "product_split_child_scope_admission":
+	case "product_split_child_scope", "product_split_child_scope_history", "product_split_child_scope_admission", "product_split_child_source", "product_split_child_source_history", "product_split_child_source_policy", "product_split_child_source_policy_history":
 		var binding ProductSplitChildScopeBinding
 		err = taskEvidenceRecord(ctx, q, kind, key, &binding)
 		id = binding.Value.CreationID
