@@ -203,3 +203,11 @@ SplitChildSourceObserver は private な repository/policy と登録済み local
 publication の source loop は repository ごとに root と子を確認する。子の一覧は opaque な row cursor で有界に走査し、同じ子の scope/history/admission を1 scan 内で重複確認しない。失敗行の後も独立した子へ進み、cursor を保存して再起動後に再開する。OnMutation は意味のある facts の commit 後だけ通知し、鮮度更新だけでは発生しない。
 
 KernelSourceGate は親 Wave が direct でも子 issue 自身を公開直前に再取得し、ready と固定 policy・有界鮮度を確認する。GitHub 由来の親では引き続き親 source も確認する。source 確認だけで子の実行保留を解除せず、part 集約 coverage・親 retirement・依存・多段 depth の接続を後続で行う。
+
+## 分割後の親の退役と part の coverage
+
+ProductCoverage は current scope/policy/source の全子登録、scope/history/admission、creation/配賦の証拠と親 registration を照合し、全件が揃った分割だけを splits に示す。親は split ID/digest と全子 WorkItem ID を付けて retired に移し、子が未 merge の間は元条件を residual として維持する。親の registration・projection・要求・Wave 予算は書き換えない。登録証拠の欠落時は退役を成立させず、exact 復旧を必要とする。
+
+各子の descriptor は local criterion と親条件の whole/part、part ID/count/basis、local scope/binding digest を保持する。子の merge fact では親条件の Criteria を空にし、独立して seal された verifier plan がその子の local scope 全体と一致することを監査した LocalCriteria / SplitScopeDigest を記録する。同じ親条件に対応する全 part の current merge fact が揃って初めて親条件の merge coverage を満たす。一つの part、親条件 ID だけの claim、別 scope/registration の fact、過去 epoch の分割を充足に転用しない。
+
+これは merge coverage と受入候補の管理であり、親の最終検証・正式承認・外部 Issue 完了を代用しない。子の実行保留は維持しており、実 model/GitHub を通す分割 E2E は依存・多段 depth 等の接続後に確認する。

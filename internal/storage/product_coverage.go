@@ -17,6 +17,8 @@ var ErrProductCoverageHeld = errors.New("product merge coverage requires complet
 const maxProductCoverageMerges = 1024
 
 type ProductCoverageFact struct {
+	SplitScopeDigest   string          `json:"split_scope_digest,omitempty"`
+	LocalCriteria      []string        `json:"local_criteria,omitempty"`
 	MergeID            string          `json:"merge_id"`
 	ReceiptDigest      string          `json:"receipt_digest"`
 	Target             contract.Target `json:"target"`
@@ -34,16 +36,20 @@ type ProductCoveragePending struct {
 	Reason     string `json:"reason"`
 }
 
-// Retirement removes only an authenticated older contributor from current
-// obligations. Its merge remains historical and supplies no current coverage.
+// Retirement removes an authenticated older contributor or a fully delegated
+// split parent from current obligations. Delegation supplies no merge coverage.
 type ProductCoverageRetirement struct {
-	WorkItemID         string `json:"work_item_id"`
-	RegistrationDigest string `json:"registration_digest"`
-	CurrentWorkItemID  string `json:"current_work_item_id"`
-	ContinuationID     string `json:"continuation_id"`
-	ContinuationDigest string `json:"continuation_digest"`
+	SplitID            string   `json:"split_id,omitempty"`
+	SplitDigest        string   `json:"split_digest,omitempty"`
+	ChildWorkItemIDs   []string `json:"child_work_item_ids,omitempty"`
+	WorkItemID         string   `json:"work_item_id"`
+	RegistrationDigest string   `json:"registration_digest"`
+	CurrentWorkItemID  string   `json:"current_work_item_id"`
+	ContinuationID     string   `json:"continuation_id"`
+	ContinuationDigest string   `json:"continuation_digest"`
 }
 type ProductCoverageValue struct {
+	Splits            []ProductSplitCoverage      `json:"splits,omitempty"`
 	Retired           []ProductCoverageRetirement `json:"retired,omitempty"`
 	Target            contract.Target             `json:"target"`
 	Source            string                      `json:"source"`
@@ -164,9 +170,25 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 			}
 		}
 	}
+	var splitUnavailable []ProductCoveragePending
+	ledger.Value.Splits, splitUnavailable, err = productSplitCoverageTx(ctx, tx, w, heads)
+	if err != nil {
+		return ledger, err
+	}
+	ledger.Value.Unavailable = append(ledger.Value.Unavailable, splitUnavailable...)
+	if len(ledger.Value.Unavailable) > 0 {
+		unknownRegistration = true
+	}
+	for _, group := range ledger.Value.Splits {
+		children := make([]string, 0, len(group.Children))
+		for _, child := range group.Children {
+			children = append(children, child.WorkItemID)
+		}
+		retirements[group.ParentWorkItemID] = ProductCoverageRetirement{WorkItemID: group.ParentWorkItemID, RegistrationDigest: group.ParentRegistrationDigest, SplitID: group.ID, SplitDigest: group.Digest, ChildWorkItemIDs: children}
+	}
 	for _, id := range workIDs {
 		r, present := heads[id]
-		if retired, ok := retirements[id]; ok && present && !productRegistrationScope(r, w) && r.Digest == retired.RegistrationDigest {
+		if retired, ok := retirements[id]; ok && present && (retired.SplitID != "" || !productRegistrationScope(r, w)) && r.Digest == retired.RegistrationDigest {
 			ledger.Value.Retired = append(ledger.Value.Retired, retired)
 			retiredWork[id] = true
 			continue
@@ -193,6 +215,7 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 	}
 	known := map[string]bool{}
 	covered := map[string]bool{}
+	currentFacts := map[string]ProductCoverageFact{}
 	for _, c := range w.Criteria {
 		known[c.ID] = true
 	}
@@ -237,6 +260,9 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{MergeID: id, WorkItemID: p.WorkItem.ID, Reason: "registration_version_unavailable"})
 			continue
 		}
+		if registration.Value.SplitScope != nil {
+			fact.Criteria = []string{}
+		}
 		if p.Target.ScopeRevision != w.ScopeRevision || p.Target.PolicyRevision != w.Policy.Revision || registration.Value.Source != w.Source || registration.Value.SourceID != w.SourceID {
 			ledger.Value.Historical = append(ledger.Value.Historical, fact)
 			continue
@@ -271,11 +297,26 @@ func (k *KernelStore) productCoverageTx(ctx context.Context, tx *sql.Tx, w domai
 			ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{MergeID: id, Reason: "criterion_scope_mismatch"})
 			continue
 		}
-		for _, criterion := range fact.Criteria {
-			covered[criterion] = true
+		if registration.Value.SplitScope != nil {
+			fact.SplitScopeDigest, fact.LocalCriteria, err = splitMergedLocalScope(ctx, tx, registration, job)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ledger, ctx.Err()
+				}
+				ledger.Value.Unavailable = append(ledger.Value.Unavailable, ProductCoveragePending{MergeID: id, WorkItemID: p.WorkItem.ID, Reason: "split_local_verification_unavailable"})
+				continue
+			}
+		} else {
+			for _, criterion := range fact.Criteria {
+				covered[criterion] = true
+			}
 		}
+		currentFacts[p.WorkItem.ID] = fact
 		ledger.Value.Merged = append(ledger.Value.Merged, fact)
 		mergedWork[p.WorkItem.ID] = true
+	}
+	for criterion := range aggregateProductSplitCoverage(ledger.Value.Splits, currentFacts) {
+		covered[criterion] = true
 	}
 	blockedCriteria := map[string]bool{}
 	for _, id := range workIDs {
