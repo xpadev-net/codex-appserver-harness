@@ -516,3 +516,43 @@ func TestSplitHTTPOversizedNativeResponseStaysUnknownWithoutRetry(t *testing.T) 
 		t.Fatal("oversize response repeated native POST")
 	}
 }
+
+func TestSplitHTTPUnsentSuccessorReusesMarkerAndSendsOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	k, initial, policy, bin := splitHTTPFixture(t, "direct")
+	transport := splitTestTransport(t, k, policy)
+	failed := transport
+	failed.Executable = filepath.Join(bin, "missing-native-launcher")
+	old, err := failed.Start(ctx, initial.ID)
+	if err == nil || old.State != "aborted" || old.HTTP != nil || splitHTTPCalls(t, bin) != "" {
+		t.Fatal("launch failure was not sealed unsent", old, err)
+	}
+	retry, err := k.ReserveProductSplitCreateUnsentRetry(ctx, old.ID, "resumed-controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(retry.Value.Child, initial.Value.Child) || retry.Value.Attempt != 1 {
+		t.Fatal("successor changed child identity")
+	}
+	stopped, err := transport.Start(ctx, retry.ID)
+	if err != nil || stopped.State != "stopped" || stopped.Issue != nil {
+		t.Fatal("safe successor did not stop", stopped, err)
+	}
+	calls := splitHTTPCalls(t, bin)
+	if strings.Count(calls, "POST\n") != 1 {
+		t.Fatal("successor duplicated POST", calls)
+	}
+	if _, err := transport.Start(ctx, initial.ID); !errors.Is(err, storage.ErrProductSplitHeld) {
+		t.Fatal("old sealed intent restarted", err)
+	}
+	if _, err := transport.Start(ctx, retry.ID); !errors.Is(err, storage.ErrProductSplitHeld) {
+		t.Fatal("unknown successor resent", err)
+	}
+	if splitHTTPCalls(t, bin) != calls {
+		t.Fatal("replay sent another request")
+	}
+	latest, err := k.ReadLatestProductSplitCreate(ctx, initial.Value.Child.ID)
+	if err != nil || latest.ID != retry.ID || latest.State != "stopped" {
+		t.Fatal("latest did not select successor", latest, err)
+	}
+}

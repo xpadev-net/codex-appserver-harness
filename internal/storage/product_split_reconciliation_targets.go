@@ -30,9 +30,10 @@ func (k *KernelStore) SplitCreationReconciliationTargets(ctx context.Context, af
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, `SELECT cursor,id,resource FROM (
- SELECT 'creation:'||id AS cursor,id,'' AS resource FROM records WHERE kind IN ('product_split_create','product_split_create_history','product_split_create_admission','product_split_create_gate')
+ SELECT 'creation:'||id AS cursor,id,'' AS resource FROM records WHERE kind IN ('product_split_create','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_retry_budget')
  UNION SELECT 'creation:'||work_item_id,work_item_id,'' FROM records WHERE kind IN ('product_split_create_event','product_split_create_gate_history')
  UNION SELECT 'creation:'||run_id,run_id,'' FROM kernel_resource_leases WHERE resource LIKE 'product-split-mutation:%'
+ UNION SELECT 'creation:'||operation_key,operation_key,'' FROM kernel_budget_ledger WHERE kind='split_create_retry'
  UNION SELECT 'resource:'||id,'',id FROM records WHERE kind='product_split_created_resource'
  ) WHERE cursor>? ORDER BY cursor LIMIT ?`, after, limit+1)
 	if err != nil {

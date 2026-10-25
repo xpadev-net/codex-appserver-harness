@@ -81,3 +81,15 @@ publication を明示的に有効にした daemon pipeline に、GET 専用の S
 open の一件で固定済み title/body/marker と一致した場合だけ、trusted RecordProductSplitCreatedIssue へ確定し、commit 後に IPC hint を送る。元 Wave が cancel/旧 scope になった後も、送信済みの外部結果は元 epoch の履歴として追跡する。親の状態や予算を変えず、子 WorkItem/Task・quality・親退役は許可しない。検索の不在や失敗による POST 再送もない。
 
 Go/SQLite と GET fixture の検査は、完全 pagination と bookend、重複・null・打切り・失敗・編集・PR・closed の拒否、cancel 後の追跡、壊れた対象による starvation 防止、commit 前の hint 不在、GET cancel/join、稼働中の実送信 group を停止しないことを確認する。main/controller の分割採用、POST dispatch の自動配置、有界な未送信 successor、子 part scope/depth/source 系譜、親 retirement/gateway は残る。
+
+## 未 activation の封鎖済み attempt の有界 retry
+
+新規 Wave の固定 WaveOperationLimits に split_create_retries を追加し、既定1・範囲0..32とする。Wave 全体で共有する lifetime の追加 transport attempt 数であり、子ごとの WorkItem 枠や runner/branch retry を流用しない。旧保存 JSON の省略値0は無効で、reopen・再送・方向修正から新しい既定値を補充しない。WaveOperationBudget は使用数と固定上限を表示する。
+
+ReserveProductSplitCreateUnsentRetry は、前 attempt が原子的に aborted、HTTP owner なし、未 activation の封鎖証拠がある場合だけ、現在の proposal/control/source と残予算を照合して後継を保存する。unknown/activated/stopped/observed、あるいは GET の不在では retry できない。同じ child/WorkItem/marker/body/allocation/depth を保ち、別 transport ID・owner・lease generation を持つ。新しい source GET/gate と一度だけの activation は後継にも必要である。
+
+後継は直前の aborted snapshot digest と系譜を結び付け、history/admission/event・独立 retry budget 記録・lifetime ledger を一つの transaction で保存する。全証拠の union から使用数を数え、head/ledger の喪失や再起動で予算を返却しない。retry budget には最初の creation ID も残すため、元の index をすべて失っても初回 POST の作り直しを拒否する。上流 proposal/子集合/子枠を失った場合も同じ禁止を維持する。
+
+ReadLatestProductSplitCreate は最大32段の deterministic な後継を照合する。既知の後継が欠けた場合は古い aborted intent へ戻らない。元 attempt の監査記録は新しい lease generation の後も保持する。Save 時刻が封鎖より前なら保存せず、予算・lease を transaction 全体で rollback する。
+
+検査は、同じ marker/子枠での実 wrapper の単一 POST、unknown の拒否、旧 JSON の非補充、方向修正/reopen 後の保持、子をまたぐ Wave 共通上限、別接続の同時予約、遅い ledger INSERT 失敗の全 rollback、各証拠喪失と exact 復旧、budget 証拠だけが残る場合の初回再生成拒否を含む。自動 POST dispatcher と main/controller 採用、子 part scope/depth/source 系譜と親 retirement/gateway は引き続き接続する。
