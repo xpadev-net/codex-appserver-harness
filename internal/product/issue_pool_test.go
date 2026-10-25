@@ -568,3 +568,22 @@ func TestIssuePoolSplitChildCannotCreateNewWaveOrStarveNextRoot(t *testing.T) {
 		t.Fatal("wrong Issue became a Wave", waves, err)
 	}
 }
+
+func TestIssuePoolKnownEditedChildCannotStarveIndependentSource(t *testing.T) {
+	p, _ := issuePoolFixture(t, 42, 43)
+	p.Attempts = 2
+	ctx := context.Background()
+	// A malformed resource payload is still an opaque known-source witness;
+	// it must not prevent intake of a different Issue number.
+	if _, err := p.Admitter.Store.DB.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES('product_split_created_resource','github:17:issue:42','old-split-wave',?)", []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.Scan(ctx)
+	if err != nil || !reflect.DeepEqual(result.Held, []int{42}) || len(result.Admitted) != 1 {
+		t.Fatal("known edited child starved root", result, err)
+	}
+	waves, err := p.Admitter.Store.Waves(ctx)
+	if err != nil || len(waves) != 1 || waves[0].SourceID != issueSourceID(17, 43) {
+		t.Fatal("known child created a Wave", waves, err)
+	}
+}

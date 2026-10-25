@@ -114,6 +114,9 @@ func (k *KernelStore) registerProductWorkItemSourceTx(ctx context.Context, tx *s
 			return saved, errors.New("bounded product identity required")
 		}
 	}
+	if err := rejectProductSplitChildRoot(ctx, tx, definition.ID); err != nil {
+		return saved, err
+	}
 	sort.Strings(definition.Criteria)
 	raw, err := json.Marshal(definition)
 	if err != nil {

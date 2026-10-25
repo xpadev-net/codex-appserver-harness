@@ -273,3 +273,40 @@ func TestIssueAdmissionRejectsGeneratedSplitChildrenEvenWithEmbeddedRootScope(t 
 		assertNoIssueAdmission(t, a)
 	}
 }
+
+func TestIssueAdmissionKnownSplitChildIsHeldAfterAllBodyMarkersAreRemoved(t *testing.T) {
+	a, _ := issueAdmissionFixture(t)
+	ctx := context.Background()
+	// An opaque surviving resource witness prohibits a new root even when
+	// the current external body is a valid standalone scope with no markers.
+	if err := a.Store.Put(ctx, "product_split_created_resource", "github:17:issue:42", "old-split-wave", map[string]any{"creation_id": "known-child"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Admit(ctx, 42); !errors.Is(err, storage.ErrProductSplitChildSourceHeld) {
+		t.Fatal("edited child became a fresh Issue source", err)
+	}
+	assertNoIssueAdmission(t, a)
+}
+
+func TestIssueAdmissionSplitChildDependencyIsNeverAssumedUnmanagedAndComplete(t *testing.T) {
+	for _, mode := range []string{"known_without_markers", "marker_before_binding"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			a, api := issueAdmissionFixture(t)
+			api.issue.Body += "\nharness-depends-on: 11\n"
+			body := "edited closed child without markers"
+			if mode == "known_without_markers" {
+				if err := a.Store.Put(ctx, "product_split_created_resource", "github:17:issue:11", "old-split-wave", map[string]any{"creation_id": "known-child"}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				body = "<!-- harness-split-child:fixture -->"
+			}
+			api.dependencies["issues/11"] = github.Issue{Number: 11, State: "closed", Title: "split child", Body: body, UpdatedAt: api.issue.UpdatedAt}
+			if _, err := a.Admit(ctx, 42); !errors.Is(err, storage.ErrProductSplitChildSourceHeld) {
+				t.Fatal("closed split child treated as an unmanaged completed dependency", mode, err)
+			}
+			assertNoIssueAdmission(t, a)
+		})
+	}
+}

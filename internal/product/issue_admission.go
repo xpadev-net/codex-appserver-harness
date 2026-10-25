@@ -178,6 +178,9 @@ func (a IssueAdmitter) admit(ctx context.Context, number int, selected func(gith
 		if item.State != "closed" {
 			return domain.Wave{}, errors.New("Issue dependency is not closed")
 		}
+		if strings.Contains(item.Body, "```harness-split-part") || strings.Contains(item.Body, "<!-- harness-split-child:") {
+			return domain.Wave{}, storage.ErrProductSplitChildSourceHeld
+		}
 		if err := a.completedDependency(ctx, dependency); err != nil {
 			return domain.Wave{}, err
 		}
@@ -208,6 +211,13 @@ func (a IssueAdmitter) admit(ctx context.Context, number int, selected func(gith
 // A stable WorkItem may have been admitted from either source. Membership is
 // authoritative; the source index only covers older Waves without metadata.
 func (a IssueAdmitter) completedDependency(ctx context.Context, number int) error {
+	known, err := a.Store.IsKnownProductSplitChildIssue(ctx, a.Policy.RepositoryID, number)
+	if err != nil {
+		return err
+	}
+	if known {
+		return storage.ErrProductSplitChildSourceHeld
+	}
 	id := issueSourceID(a.Policy.RepositoryID, number)
 	registration, registrationErr := a.Store.ReadProductWorkItemRegistration(ctx, id)
 	if registrationErr != nil && !errors.Is(registrationErr, sql.ErrNoRows) {

@@ -127,3 +127,13 @@ Artifact ID/digest、実 session/run/call と preparation receipt を結ぶ採�
 全子の preparation が確定すると、その親 WorkItem の通常 model dispatch・workspace 準備・sealing・runner・review/quality を保留する。同じ scope/policy 内の plan 更新でも保留を引き継ぎ、別の登録 root には広げない。receipt と子別 witness に対象親と受付 target を保存し、親 source/proposal の監査と分割送信直前 gate はこの通常実行保留と区別する。旧形式で対象親/epoch が不明な証拠を、新しい既定値で補充しない。監査の exact replay は旧 JSON/digest を保ち、実行判定は不明として保留する。
 
 同じ親・scope・policy の採用済み分割は、plan revision や call/key を変えても新しい子集合として採用しない。現在の intent と同じ ParentHeadID だけを分割用の監査/送信照合から除外して、別 head の採用済み証拠を保留にする。新しい main run からの再採用、直接 metadata port からの再作成、元 intent の direct/GitHub 単一 POST をそれぞれ検査する。
+
+## 数値 identity による子 Issue の source 所有保護
+
+CreateProductWave と通常の RegisterProductWorkItem は、canonical な r{repositoryID}-i{number} の source/WorkItem identity を新規 root として受け付ける前に、保存済みの split resource key と observed journal head/event を同じ transaction で調べる。既知の子 Issue は元の Wave の分割系譜で扱い、本文の marker が編集されても独立 Wave や通常の別名登録へ取り込まない。source identity の数値 repository を用い、別の repository を定義に指定することで回避できない。
+
+この照合は既知の外部資源に対する禁止であり、child execution の許可ではない。resource payload が読めなくても同じ opaque key が残る場合は保留し、resource/head/event の独立証拠を失っても、残った証拠から同じ禁止を維持する。別 repository・別 Issue の新規 source は受け付け、Issue pool は保留した子を越えて次の独立 source を処理する。判定で元 Wave・履歴・予算を再生成/返却しない。
+
+storage fixture は実 process の activation/停止を行った後に trusted GET 観測を注入し、resource/head/event ごとの喪失、canonical identity の別名・repository 差替え、通常登録の拒否と別 source の受付を確認する。product の GET/Issue pool fixture は marker のない有効な root scope でも既知の子を保留し、壊れた一件が次の source を妨げないことを確認する。child の local criterion/part・depth/source の実行登録と親 retirement は引き続き後続で接続する。
+
+close 済み dependency が分割子の marker を持つ、または保存済み数値 identity で既知の分割子と分かる場合も、未管理 Issue の完了とは扱わない。IsKnownProductSplitChildIssue は禁止判定用の分類だけを返し、所有・品質・完了の許可を与えない。子の実行系譜と現在の完了 binding が接続されるまで依存を保留する。
