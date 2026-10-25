@@ -78,14 +78,14 @@ func preflightProductSourceRead(ctx context.Context, tx *sql.Tx, w domain.Wave, 
 	if priorErr == nil && prior.ID != read.ExpectedID || errors.Is(priorErr, sql.ErrNoRows) && read.ExpectedID != "" {
 		return errors.New("source observation CAS conflict")
 	}
-	if read.At.Before(w.CreatedAt) || priorErr == nil && read.At.Before(prior.ObservedAt) {
+	if !read.At.IsZero() && (read.At.Before(w.CreatedAt) || priorErr == nil && read.At.Before(prior.ObservedAt)) {
 		return errors.New("completed source observation time changed")
 	}
 	previous, err := loadProductSourceRead(ctx, tx, w.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if err == nil && read.At.Before(previous.Value.ReadAt) {
+	if err == nil && !read.At.IsZero() && read.At.Before(previous.Value.ReadAt) {
 		return errors.New("source read time moved backwards")
 	}
 	return nil
@@ -132,7 +132,7 @@ func readProductSourceReadTx(ctx context.Context, tx *sql.Tx, w domain.Wave) (Pr
 
 // ReadProductSourceRead authenticates metadata only. Callers deciding readiness
 // must additionally check current source status, controls and age after their
-// complete proof walk. A failed read can have a header but is never ready.
+// complete proof walk. Successful nonready Issue observations grant no work.
 func (k *KernelStore) ReadProductSourceRead(ctx context.Context, target contract.Target) (ProductSourceRead, error) {
 	tx, err := k.kernelTx(ctx)
 	if err != nil {

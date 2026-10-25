@@ -253,9 +253,10 @@ func (k *KernelStore) ObserveProductSource(ctx context.Context, target contract.
 // completed observation time from the trusted host. Saving or reading source
 // metadata cannot renew that time. Unlike digest-only legacy replay, this
 // precondition fences semantic ABA and requires the complete current target.
+// Unavailable facts require a zero readAt and publish no successful-read header.
 func (k *KernelStore) ObserveProductSourceAt(ctx context.Context, target contract.Target, expectedID string, facts ProductSourceFacts, readAt time.Time) (ProductSourceUpdate, error) {
 	readAt = readAt.UTC().Round(0)
-	if readAt.IsZero() || readAt.After(k.clock()) {
+	if facts.Available && (readAt.IsZero() || readAt.After(k.clock())) || !facts.Available && !readAt.IsZero() {
 		return ProductSourceUpdate{}, errors.New("actual completed source observation time required")
 	}
 	return k.observeProductSource(ctx, target, "", facts, &productSourceReadRequest{expectedID, readAt})
@@ -342,7 +343,7 @@ func (k *KernelStore) observeProductSource(ctx context.Context, target contract.
 		hold = &domain.WaveSourceHold{Reason: status, Digest: digest, ObservedAt: k.clock()}
 	}
 	if priorErr == nil && prior.Digest == digest && sameSourceHold(w.SourceHold, hold) {
-		if read != nil {
+		if read != nil && !read.At.IsZero() {
 			if err := saveProductSourceRead(ctx, tx, w, prior, read.At); err != nil {
 				return result, err
 			}
@@ -367,7 +368,7 @@ func (k *KernelStore) observeProductSource(ctx context.Context, target contract.
 			return result, err
 		}
 		observedAt := k.clock()
-		if read != nil {
+		if read != nil && !read.At.IsZero() {
 			observedAt = read.At
 		}
 		saved = ProductSourceSnapshot{ID: id, Version: prior.Version + 1, ObservedAt: observedAt, Value: value, Digest: digest}
@@ -378,7 +379,7 @@ func (k *KernelStore) observeProductSource(ctx context.Context, target contract.
 			return result, err
 		}
 	}
-	if read != nil {
+	if read != nil && !read.At.IsZero() {
 		if err := saveProductSourceRead(ctx, tx, w, saved, read.At); err != nil {
 			return result, err
 		}

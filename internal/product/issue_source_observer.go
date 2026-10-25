@@ -55,6 +55,11 @@ func (o IssueSourceObserver) Validate() error {
 // observe captures the authoritative observation CAS before performing GETs.
 // An unavailable or changing source is a saved prohibition, never ready data.
 func (o IssueSourceObserver) observe(parent, readParent context.Context, api ResourceAPI, w domain.Wave, timeout time.Duration) (storage.ProductSourceUpdate, bool, error) {
+	clock := time.Now
+	if o.Store.Now != nil {
+		clock = o.Store.Now
+	}
+	var readAt time.Time
 	number, err := strconv.Atoi(strings.TrimPrefix(w.SourceID, fmt.Sprintf("r%d-i", o.Policy.RepositoryID)))
 	if err != nil || number < 1 || w.SourceID != issueSourceID(o.Policy.RepositoryID, number) {
 		return storage.ProductSourceUpdate{}, false, errors.New("noncanonical Issue source identity")
@@ -89,6 +94,9 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 			if readErr == nil {
 				current, err := readSourceIssue(readCtx, api, number)
 				readErr = err
+				if readErr == nil {
+					readAt = clock().UTC().Round(0)
+				}
 				if readErr == nil && !reflect.DeepEqual(issue, current) {
 					readErr = errors.New("Issue changed during source observation")
 				}
@@ -116,11 +124,9 @@ func (o IssueSourceObserver) observe(parent, readParent context.Context, api Res
 	if parent.Err() != nil {
 		return storage.ProductSourceUpdate{}, false, parent.Err()
 	}
-	clock := time.Now
-	if o.Store.Now != nil {
-		clock = o.Store.Now
+	if !facts.Available {
+		readAt = time.Time{}
 	}
-	readAt := clock().UTC().Round(0)
 	saveCtx, stop := context.WithTimeout(parent, time.Second)
 	defer stop()
 	update, saveErr := o.Store.ObserveProductSourceAt(saveCtx, w.Target(), expected, facts, readAt)

@@ -50,6 +50,7 @@ func TestIssueSourceObserverQuietGETRefreshesReadTimeWithoutSemanticMutation(t *
 	ctx := context.Background()
 	scanSource(t, o)
 	api.issueReads = 0
+	api.metaReads = 0
 	before, err := o.Store.ReadProductSourceObservation(ctx, w.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +59,11 @@ func TestIssueSourceObserverQuietGETRefreshesReadTimeWithoutSemanticMutation(t *
 	o.Store.Now = func() time.Time { return now }
 	completed := now.Add(time.Second)
 	api.onFinal = func(a *issueAdmissionAPI) { now = completed }
+	o.API = sourceReadClockAPI{ResourceAPI: api, after: func(path string) {
+		if path == "" && api.metaReads == 2 {
+			now = completed.Add(3 * time.Second)
+		}
+	}}
 	woke := 0
 	o.OnMutation = func() { woke++ }
 	result := scanSource(t, o)
@@ -76,6 +82,48 @@ func TestIssueSourceObserverQuietGETRefreshesReadTimeWithoutSemanticMutation(t *
 	again, err := o.Store.ReadProductSourceRead(ctx, w.Target())
 	if err != nil || !reflect.DeepEqual(saved, again) {
 		t.Fatal("metadata read renewed GET", err)
+	}
+}
+
+type sourceReadClockAPI struct {
+	ResourceAPI
+	after func(string)
+}
+
+func (a sourceReadClockAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
+	raw, err := a.ResourceAPI.ResourceGET(ctx, path)
+	a.after(path)
+	return raw, err
+}
+
+func TestIssueSourceObserverFailedGETNeverRefreshesSuccessfulReadTime(t *testing.T) {
+	o, api, w := sourceObserverFixture(t)
+	ctx := context.Background()
+	scanSource(t, o)
+	before, err := o.Store.ReadProductSourceRead(ctx, w.Target())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(time.Minute)
+	o.Store.Now = func() time.Time { return now }
+	api.fail = "issues/42"
+	result, scanErr := o.Scan(ctx)
+	if result.Attempted == 0 {
+		result, scanErr = o.Scan(ctx)
+	}
+	if len(result.Failed) != 1 || scanErr != nil {
+		t.Fatal("failure prohibition was not persisted", result, scanErr)
+	}
+	if _, err := o.Store.ReadProductSourceRead(ctx, w.Target()); err == nil {
+		t.Fatal("failed GET received current read metadata")
+	}
+	var retained storage.ProductSourceRead
+	if err := o.Store.Record(ctx, "product_source_read", w.ID, &retained); err != nil || !reflect.DeepEqual(before, retained) {
+		t.Fatal("failed read renewed successful GET time", err)
+	}
+	current, err := o.Store.Wave(ctx, w.ID)
+	if err != nil || current.SourceHold == nil || current.SourceHold.Reason != "unavailable" {
+		t.Fatal("failed read lost source prohibition", current, err)
 	}
 }
 func TestIssueSourceObserverPersistsHoldAndRecoveryWithoutModelTurn(t *testing.T) {
