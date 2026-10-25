@@ -61,7 +61,23 @@ func validateSplitHTTPPolicy(ctx context.Context, k *storage.KernelStore, job st
 	if w.Target() != job.Value.Request.Target {
 		return storage.ErrProductSplitHeld
 	}
+	if job.Value.Ancestry != nil {
+		child := job.Value.Child.Value
+		if policy == nil || policy.Validate() != nil || policy.Repository != child.Repository || policy.RepositoryID != child.RepositoryID {
+			return storage.ErrProductSplitHeld
+		}
+		pin, err := k.ReadProductSplitChildSourcePolicy(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID)
+		if err != nil {
+			return err
+		}
+		if pin != policy.Digest() || pin != job.Value.Ancestry.Value.SourcePolicyDigest {
+			return storage.ErrProductSplitHeld
+		}
+	}
 	if w.Source == "direct" {
+		if job.Value.Ancestry != nil {
+			return nil
+		}
 		if policy != nil {
 			return storage.ErrProductSplitHeld
 		}

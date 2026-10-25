@@ -28,11 +28,25 @@ type ProductNestedSplitAllocation struct {
 // Ledger snapshots participate only in negative witness queries. The physical
 // records remain the sole authority for positive reads and new admissions.
 func splitScopeWitnessSQL(query string) string {
-	return `WITH split_scope_witnesses AS (
+	return `WITH split_scope_witnesses AS NOT MATERIALIZED (
  SELECT rowid,kind,id,work_item_id,payload FROM main.records
  UNION ALL SELECT rowid,'product_nested_split_allocation_ledger',operation_key,wave_id,payload
  FROM kernel_budget_ledger WHERE kind='split_children'
  AND json_type(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.allocation') IS NOT NULL
+ UNION ALL SELECT rowid,'product_nested_split_creation_ancestor',kind||':'||id,
+ coalesce(json_extract(CASE WHEN json_valid(ancestry) THEN ancestry ELSE '{}' END,'$.value.request.target.wave_id'),work_item_id),ancestry FROM (
+ SELECT rowid,kind,id,work_item_id,CASE kind
+ WHEN 'product_split_create' THEN json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.value.ancestry')
+ WHEN 'product_split_create_event' THEN json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.value.ancestry')
+ WHEN 'product_split_create_gate' THEN json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.ancestry')
+ WHEN 'product_split_create_gate_history' THEN json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.ancestry')
+ ELSE json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry') END AS ancestry
+ FROM main.records WHERE kind IN ('product_split_create','product_split_create_event','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_gate_history','product_split_create_retry_budget','product_split_created_resource')
+ ) WHERE ancestry IS NOT NULL
+ UNION ALL SELECT rowid,'product_nested_split_retry_ancestor',operation_key,
+ wave_id,json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry')
+ FROM kernel_budget_ledger WHERE kind='split_create_retry'
+ AND json_type(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry') IS NOT NULL
  ) ` + query
 }
 

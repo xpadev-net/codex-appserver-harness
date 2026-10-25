@@ -11,15 +11,16 @@ import (
 )
 
 type splitCreateRetryBudget struct {
-	CreationID        string `json:"creation_id"`
-	InitialCreationID string `json:"initial_creation_id"`
-	PreviousID        string `json:"previous_id"`
-	PreviousDigest    string `json:"previous_digest"`
-	WaveID            string `json:"wave_id"`
-	ProposalID        string `json:"proposal_id"`
-	ParentHeadID      string `json:"parent_head_id"`
-	ChildID           string `json:"child_id"`
-	Attempt           int    `json:"attempt"`
+	Ancestry          *ProductNestedSplitAllocation `json:"ancestry,omitempty"`
+	CreationID        string                        `json:"creation_id"`
+	InitialCreationID string                        `json:"initial_creation_id"`
+	PreviousID        string                        `json:"previous_id"`
+	PreviousDigest    string                        `json:"previous_digest"`
+	WaveID            string                        `json:"wave_id"`
+	ProposalID        string                        `json:"proposal_id"`
+	ParentHeadID      string                        `json:"parent_head_id"`
+	ChildID           string                        `json:"child_id"`
+	Attempt           int                           `json:"attempt"`
 }
 
 func splitCreateRetryID(previousID string) string {
@@ -34,7 +35,7 @@ func validSplitCreateAttempt(job ProductSplitCreate) bool {
 }
 func splitRetryBudget(job ProductSplitCreate) splitCreateRetryBudget {
 	v := job.Value
-	return splitCreateRetryBudget{CreationID: job.ID, InitialCreationID: splitCreateID(v.Child.ID), PreviousID: v.RetryOf, PreviousDigest: v.RetryOfDigest, WaveID: v.Request.Target.WaveID, ProposalID: v.Request.ProposalID, ParentHeadID: v.ParentHeadID, ChildID: v.Child.ID, Attempt: v.Attempt}
+	return splitCreateRetryBudget{Ancestry: v.Ancestry, CreationID: job.ID, InitialCreationID: splitCreateID(v.Child.ID), PreviousID: v.RetryOf, PreviousDigest: v.RetryOfDigest, WaveID: v.Request.Target.WaveID, ProposalID: v.Request.ProposalID, ParentHeadID: v.ParentHeadID, ChildID: v.Child.ID, Attempt: v.Attempt}
 }
 func validateSplitCreateRetryTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, depth int) error {
 	if job.Value.RetryOf == "" {
@@ -68,7 +69,7 @@ func validateSplitCreateRetryTx(ctx context.Context, tx *sql.Tx, job ProductSpli
 	if err := json.Unmarshal(raw, &ledger); err != nil {
 		return errors.Join(ErrProductSplitHeld, ErrTaskEvidence)
 	}
-	if saved != want || ledger != want || amount != 1 || unknown != 0 {
+	if !reflect.DeepEqual(saved, want) || !reflect.DeepEqual(ledger, want) || amount != 1 || unknown != 0 {
 		return ErrProductSplitHeld
 	}
 	return nil
@@ -91,7 +92,7 @@ func splitCreateRetryCountTx(ctx context.Context, tx *sql.Tx, waveID string) (in
  UNION SELECT operation_key FROM kernel_budget_ledger WHERE wave_id=? AND kind='split_create_retry'
  UNION SELECT run_id FROM kernel_resource_leases WHERE wave_id=? AND run_id LIKE 'split-create-retry-%'
  UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM split_scope_witnesses r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.creations') c WHERE r.kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history') AND json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.request.target.wave_id')=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
- UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM split_scope_witnesses r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.children') b,json_each(CASE WHEN json_valid(b.value) THEN b.value ELSE '{}' END,'$.value.creations') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_split_completion') AND json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.request.target.wave_id')=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
+ UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM split_scope_witnesses r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.children') b,json_each(CASE WHEN json_valid(b.value) THEN b.value ELSE '{}' END,'$.value.creations') c WHERE r.kind IN ('product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_split_completion') AND json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.request.target.wave_id')=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
  UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM split_scope_witnesses r,json_each(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.creations') c WHERE r.kind='product_split_child_scope_source' AND r.work_item_id=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0
  UNION SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') FROM split_scope_witnesses r,json_each(coalesce(json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.value.split_scope.creations'),json_extract(CASE WHEN json_valid(r.payload) THEN r.payload ELSE '{}' END,'$.split_scope.creations'))) c WHERE r.kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND r.work_item_id=? AND json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.attempt')>0 LIMIT 33`), waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID)
 	if err != nil {
@@ -204,7 +205,7 @@ func (k *KernelStore) ReserveProductSplitCreateUnsentRetry(ctx context.Context, 
 	if err := kernelRecordTx(ctx, tx, "product_split_create_history", id, r.ProposalID, value); err != nil {
 		return empty, err
 	}
-	if err := kernelRecordTx(ctx, tx, "product_split_create_admission", id, r.Target.WaveID, splitCreateAdmission{r.ProposalID, value.ParentHeadID, value.Child.ID, job.Digest}); err != nil {
+	if err := kernelRecordTx(ctx, tx, "product_split_create_admission", id, r.Target.WaveID, splitCreateAdmission{value.Ancestry, r.ProposalID, value.ParentHeadID, value.Child.ID, job.Digest}); err != nil {
 		return empty, err
 	}
 	job, err = saveSplitCreateTx(ctx, tx, job, nil)

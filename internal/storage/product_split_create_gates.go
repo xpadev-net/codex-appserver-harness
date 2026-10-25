@@ -8,13 +8,16 @@ import (
 )
 
 type ProductSplitCreateGate struct {
-	CreationID     string                       `json:"creation_id"`
-	CreationDigest string                       `json:"creation_digest"`
-	Request        ProductSplitChildPlanRequest `json:"request"`
-	ParentHeadID   string                       `json:"parent_head_id"`
-	SourceID       string                       `json:"source_id"`
-	SourceDigest   string                       `json:"source_digest"`
-	ObservedAt     time.Time                    `json:"observed_at"`
+	Ancestry           *ProductNestedSplitAllocation `json:"ancestry,omitempty"`
+	ParentSourceID     string                        `json:"parent_source_id,omitempty"`
+	ParentSourceDigest string                        `json:"parent_source_digest,omitempty"`
+	CreationID         string                        `json:"creation_id"`
+	CreationDigest     string                        `json:"creation_digest"`
+	Request            ProductSplitChildPlanRequest  `json:"request"`
+	ParentHeadID       string                        `json:"parent_head_id"`
+	SourceID           string                        `json:"source_id"`
+	SourceDigest       string                        `json:"source_digest"`
+	ObservedAt         time.Time                     `json:"observed_at"`
 }
 type splitCreateGateRecord struct {
 	Value  ProductSplitCreateGate `json:"value"`
@@ -33,11 +36,17 @@ func loadSplitCreateGate(ctx context.Context, tx *sql.Tx, job ProductSplitCreate
 	if digest != head.Digest || head.Value.CreationID != job.ID || head.Value.CreationDigest != job.Digest || head.Value.Request != job.Value.Request || head.Value.ParentHeadID != job.Value.ParentHeadID || head.Value.ObservedAt.Before(job.Value.CreatedAt) {
 		return head, ErrProductSplitHeld
 	}
+	if !reflect.DeepEqual(head.Value.Ancestry, job.Value.Ancestry) || job.Value.Ancestry == nil && (head.Value.ParentSourceID != "" || head.Value.ParentSourceDigest != "") || job.Value.Ancestry != nil && (head.Value.ParentSourceID == "" || !validSourceDigest(head.Value.ParentSourceDigest)) {
+		return head, ErrProductSplitHeld
+	}
 	if err := taskEvidenceRecord(ctx, tx, "product_split_create_gate_history", head.Digest, &history); err != nil {
 		return head, splitEvidenceErr(err)
 	}
 	if !reflect.DeepEqual(head, history) {
 		return head, ErrProductSplitHeld
+	}
+	if err := validateNestedSplitCreationGateSource(ctx, tx, job, head.Value); err != nil {
+		return head, err
 	}
 	return head, nil
 }
@@ -98,7 +107,14 @@ func (k *KernelStore) ObserveProductSplitCreateGate(ctx context.Context, id, own
 	} else {
 		return empty, splitEvidenceErr(err)
 	}
-	value := ProductSplitCreateGate{job.ID, job.Digest, job.Value.Request, job.Value.ParentHeadID, sourceID, sourceDigest, k.clock()}
+	value := ProductSplitCreateGate{Ancestry: job.Value.Ancestry, CreationID: job.ID, CreationDigest: job.Digest, Request: job.Value.Request, ParentHeadID: job.Value.ParentHeadID, SourceID: sourceID, SourceDigest: sourceDigest, ObservedAt: k.clock()}
+	if job.Value.Ancestry != nil {
+		source, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
+		if err != nil {
+			return empty, err
+		}
+		value.ParentSourceID, value.ParentSourceDigest = source.ID, source.Digest
+	}
 	checksum, err := contentDigest(value)
 	if err != nil {
 		return empty, err
@@ -135,6 +151,15 @@ func (k *KernelStore) splitCreateSendGateTx(ctx context.Context, tx *sql.Tx, job
 			return "", splitEvidenceErr(err)
 		}
 		if snapshot.ID != gate.Value.SourceID || snapshot.Digest != gate.Value.SourceDigest {
+			return "", ErrProductSplitHeld
+		}
+	}
+	if job.Value.Ancestry != nil {
+		source, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
+		if err != nil {
+			return "", err
+		}
+		if source.ID != gate.Value.ParentSourceID || source.Digest != gate.Value.ParentSourceDigest {
 			return "", ErrProductSplitHeld
 		}
 	}
