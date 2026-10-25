@@ -330,3 +330,61 @@ func TestProductSplitToolReplayChecksTheAdoptedArtifactDigest(t *testing.T) {
 		t.Fatal("cached reply accepted a different source Artifact digest", err)
 	}
 }
+
+func TestProductSplitToolFreshMainRunCannotAdoptAgainAfterReplan(t *testing.T) {
+	ctx := context.Background()
+	k, w, call, _ := productSplitToolFixture(t, "product_v3")
+	if _, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call); err != nil {
+		t.Fatal(err)
+	}
+	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{{ID: "before-replan", FailurePolicy: "drain_and_block", Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{"old-parent"}}, Tasks: []contract.TaskSpec{{ID: "old-parent", Kind: "work", Instruction: "old parent remains held", Criteria: []string{"AC", "extra"}, WorkItemIDs: []string{"split-root"}, DependsOn: []contract.TaskDependency{}, InputArtifactIDs: []string{}}}}}}
+	if _, err := k.AdoptPlan(ctx, w.Target(), "initial-plan-after-adoption", plan); err != nil {
+		t.Fatal(err)
+	}
+	current, err := k.Wave(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Phases[0].ID = "new-plan"
+	plan.Phases[0].Tasks[0].ID = "replanned-old-parent"
+	plan.Phases[0].Completion.RequiredTaskIDs = []string{"replanned-old-parent"}
+	if _, err := k.AdoptPlan(ctx, current.Target(), "new-plan-after-adoption", plan); err != nil {
+		t.Fatal(err)
+	}
+	current, err = k.Wave(ctx, w.ID)
+	if err != nil || current.PlanRevision <= w.PlanRevision {
+		t.Fatal("plan did not change", current, err)
+	}
+	var run contract.SessionRun
+	if err := k.Record(ctx, "agent_run", call.RunID, &run); err != nil {
+		t.Fatal(err)
+	}
+	run.State = "completed"
+	if err := k.Put(ctx, "agent_run", run.ID, call.SessionID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.MarkSessionStopped(ctx, call.SessionID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ArchiveSessionRun(ctx, call.SessionID, run.ID, "fixture known stopped main completion"); err != nil {
+		t.Fatal(err)
+	}
+	b, nextRun, _ := reserveBudgetMain(t, k, "replanned-split-main", current.Target())
+	var request contract.SplitProductRequest
+	if err := json.Unmarshal(call.Arguments, &request); err != nil {
+		t.Fatal(err)
+	}
+	request.Target = current.Target()
+	next := kernelCall(t, b, nextRun, "product_split", request)
+	next.TurnID = "new-split-turn"
+	if _, err := (contract.KernelGateway{Backend: k}).Handle(ctx, next); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("new charged main run adopted duplicate split", err)
+	}
+	var count, amount int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_split_create'").Scan(&count); err != nil || count != 2 {
+		t.Fatal("new main run duplicated child journals", count, err)
+	}
+	if err := k.DB.QueryRow("SELECT sum(amount) FROM kernel_budget_ledger WHERE kind='split_children'").Scan(&amount); err != nil || amount != 2 {
+		t.Fatal("new main run duplicated lifetime child reservation", amount, err)
+	}
+}

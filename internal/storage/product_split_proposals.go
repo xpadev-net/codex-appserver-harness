@@ -186,6 +186,13 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 	if held {
 		return value, ErrProductSplitHeld
 	}
+	other, err := productSplitParentPreparationHeld(ctx, tx, w, r.ParentWorkItemID, splitProposalHead(r))
+	if err != nil {
+		return value, splitEvidenceErr(err)
+	}
+	if other {
+		return value, ErrProductSplitHeld
+	}
 	return value, nil
 }
 

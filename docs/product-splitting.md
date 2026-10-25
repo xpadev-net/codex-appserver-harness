@@ -125,3 +125,5 @@ Artifact ID/digest、実 session/run/call と preparation receipt を結ぶ採�
 分割子の body に元の harness-scope が引用されても、harness-split-part fence または harness-split-child marker がある Issue は新しい root の受付対象にしない。明示 Issue 受付と Issue pool が同じ判定を使い、pool は保留した子を越えて次の独立 source を処理する。marker を除去された既知資源と子の実行 source の結付けは、子 registration 段階でも別途認証する。
 
 全子の preparation が確定すると、その親 WorkItem の通常 model dispatch・workspace 準備・sealing・runner・review/quality を保留する。同じ scope/policy 内の plan 更新でも保留を引き継ぎ、別の登録 root には広げない。receipt と子別 witness に対象親と受付 target を保存し、親 source/proposal の監査と分割送信直前 gate はこの通常実行保留と区別する。旧形式で対象親/epoch が不明な証拠を、新しい既定値で補充しない。監査の exact replay は旧 JSON/digest を保ち、実行判定は不明として保留する。
+
+同じ親・scope・policy の採用済み分割は、plan revision や call/key を変えても新しい子集合として採用しない。現在の intent と同じ ParentHeadID だけを分割用の監査/送信照合から除外して、別 head の採用済み証拠を保留にする。新しい main run からの再採用、直接 metadata port からの再作成、元 intent の direct/GitHub 単一 POST をそれぞれ検査する。

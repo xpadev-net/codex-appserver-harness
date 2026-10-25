@@ -16,24 +16,34 @@ func productWorkItemExecutionHeld(ctx context.Context, q queryer, w domain.Wave,
 	if err != nil || held {
 		return held, err
 	}
-	// A committed whole-set split preparation fences the old parent's product
-	// tasks and quality. Presence of surviving evidence is sufficient to hold;
-	// missing proof never enables an old root by falling back to no split.
+	return productSplitParentPreparationHeld(ctx, q, w, workID, "")
+}
+
+// allowedHead is supplied only by split source/metadata validation. It permits
+// the original intent to finish, but forbids a new split of the same parent
+// epoch after replanning with a different head/key.
+func productSplitParentPreparationHeld(ctx context.Context, q queryer, w domain.Wave, workID, allowedHead string) (bool, error) {
 	var prepared bool
-	err = q.QueryRowContext(ctx, `SELECT EXISTS(
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(
  SELECT 1 FROM records WHERE kind IN ('product_split_preparation','product_split_preparation_history','product_split_preparation_admission')
  AND json_extract(payload,'$.value.wave_id')=?
  AND (json_extract(payload,'$.value.target') IS NULL OR (
  json_extract(payload,'$.value.parent_work_item_id')=? AND json_extract(payload,'$.value.target.scope_revision')=? AND json_extract(payload,'$.value.target.policy_revision')=?))
+ AND (?='' OR coalesce(json_extract(payload,'$.value.parent_head_id'),'')<>?)
  ) OR EXISTS(
  SELECT 1 FROM records WHERE kind='product_split_preparation_creation' AND work_item_id=?
  AND (json_extract(payload,'$.target') IS NULL OR (
  json_extract(payload,'$.parent_work_item_id')=? AND json_extract(payload,'$.target.scope_revision')=? AND json_extract(payload,'$.target.policy_revision')=?))
+ AND (?='' OR coalesce(json_extract(payload,'$.parent_head_id'),'')<>?)
  ) OR EXISTS(
  SELECT 1 FROM records WHERE kind='product_split_tool_adoption' AND json_extract(payload,'$.source.target.wave_id')=?
  AND (json_extract(payload,'$.preparation.value.target') IS NULL OR (
  json_extract(payload,'$.preparation.value.parent_work_item_id')=? AND json_extract(payload,'$.preparation.value.target.scope_revision')=? AND json_extract(payload,'$.preparation.value.target.policy_revision')=?))
- )`, w.ID, workID, w.ScopeRevision, w.Policy.Revision, w.ID, workID, w.ScopeRevision, w.Policy.Revision, w.ID, workID, w.ScopeRevision, w.Policy.Revision).Scan(&prepared)
+ AND (?='' OR coalesce(json_extract(payload,'$.parent_head_id'),'')<>?)
+ )`,
+		w.ID, workID, w.ScopeRevision, w.Policy.Revision, allowedHead, allowedHead,
+		w.ID, workID, w.ScopeRevision, w.Policy.Revision, allowedHead, allowedHead,
+		w.ID, workID, w.ScopeRevision, w.Policy.Revision, allowedHead, allowedHead).Scan(&prepared)
 	return prepared, err
 }
 

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 
@@ -108,6 +109,18 @@ func TestProductSplitPreparationHoldSurvivesAnActualPlanRevision(t *testing.T) {
 	held, err = productWorkItemExecutionHeld(ctx, k.DB, current, "independent-root")
 	if err != nil || held {
 		t.Fatal("replan held independent root", held, err)
+	}
+	r.Target = current.Target()
+	r.Key = "another-split-after-replan"
+	if _, err := k.PrepareProductSplitProposal(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("replan allowed duplicate split proposal", err)
+	}
+	if _, err := k.PrepareProductSplitExecution(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("replan allowed duplicate child set", err)
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_split_create'").Scan(&count); err != nil || count != 2 {
+		t.Fatal("duplicate journals after replan", count, err)
 	}
 }
 
