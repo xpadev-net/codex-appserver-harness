@@ -213,6 +213,43 @@ func TestProductNestedSplitCreationParentSourceGateRejectsStaleHoldAndABA(t *tes
 	if err := read(); err != nil {
 		t.Fatal(err)
 	}
+	var registration ProductWorkItemRegistrationSnapshot
+	for _, candidate := range job.Value.Ancestry.Value.Registrations {
+		if candidate.Value.Definition.ID == r.ParentWorkItemID {
+			registration = candidate
+		}
+	}
+	for _, record := range []struct{ kind, id string }{{"product_work_item_registration", r.ParentWorkItemID}, {"product_work_item_registration_version", structureID("product-work-", r.ParentWorkItemID, registration.Digest)}, {"wave_work_item", r.ParentWorkItemID}, {"product_split_child_source_policy_history", r.ParentWorkItemID}} {
+		t.Run("current_copy_"+record.kind, func(t *testing.T) {
+			tx, err := k.kernelTx(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if _, err := tx.Exec("DELETE FROM records WHERE kind=? AND id=?", record.kind, record.id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := k.nestedSplitCreationSourceTx(ctx, tx, job); !readinessHoldError(err) {
+				t.Fatal("authenticated snapshot replaced a missing current copy", err)
+			}
+		})
+	}
+	// The public gate must still authenticate the complete graph before the
+	// source-only helper can reuse its binding in the same transaction.
+	var owner string
+	var raw []byte
+	if err := k.DB.QueryRow("SELECT work_item_id,payload FROM records WHERE kind='product_split_child_scope' AND id=?", r.ParentWorkItemID).Scan(&owner, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_split_child_scope' AND id=?", r.ParentWorkItemID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.ObserveProductSplitCreateGate(ctx, job.ID, job.Value.OwnerID, job.Digest, "", ""); !readinessHoldError(err) {
+		t.Fatal("public gate accepted a missing canonical scope", err)
+	}
+	if _, err := k.DB.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES('product_split_child_scope',?,?,?)", r.ParentWorkItemID, owner, raw); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProductNestedSplitCreationWitnessesRetainAncestorsAfterAllPriorEvidenceLoss(t *testing.T) {

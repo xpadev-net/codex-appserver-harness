@@ -315,3 +315,8 @@ PrepareProductSplitParentScope は登録済み孫の source/policy と完全な 
 下位の typed proposal/plan/allocation/scope/registration の envelope は同じ parent scope value を埋め込むため、この配列を引き継げる。負の witness 照会は物理記録に加え、creation journal と retry/allocation ledger から取り出す祖先 envelope の配列も参照する。配列の各 group を bounded な virtual row として扱い、欠落・非配列・空・128超過・不正要素は所有 Wave の unavailable witness とする。他 Wave の照会を SQLite JSON エラーで止めない。
 
 これは metadata proof の保存。設定上限を超える分割、canonical parent binding の接続が未完了の深い proposal admission、Task/model/runner、再帰 coverage や最終受入の許可にはしない。保存済み proof は実在する全登録・source policy・scope の各正式記録から再導出して照合し、compact witness 自体を正式証拠の代用にしない。
+
+
+平坦な祖先の抽出では、配列が存在する記録と、配列が必須の深さの記録に限定した小さな summary を照会中に一度作る。compact witness は従来どおり物理記録から直接読む。正式 proof の認証結果を transaction 間で cache したり、元記録の欠落を summary で補ったりしない。
+
+送信 gate の二つの内部経路は、同じ transaction 内の完全な creation ancestry 認証と preflight で検証済みの親 binding を使う。選択した親の現在の登録 head/version/membership と source/policy head/history は再度照合し、source の5秒の制約を適用する。新たな公開経路から未認証の snapshot を渡す用途には使わない。
