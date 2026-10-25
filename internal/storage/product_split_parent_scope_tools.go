@@ -11,10 +11,11 @@ import (
 )
 
 type productSplitParentScopeToolReceipt struct {
-	Source            kernelToolOperation `json:"source"`
-	ParentWorkItemID  string              `json:"parent_work_item_id"`
-	ParentScopeID     string              `json:"parent_scope_id"`
-	ParentScopeDigest string              `json:"parent_scope_digest"`
+	Value             ProductSplitParentScopeValue `json:"value"`
+	Source            kernelToolOperation          `json:"source"`
+	ParentWorkItemID  string                       `json:"parent_work_item_id"`
+	ParentScopeID     string                       `json:"parent_scope_id"`
+	ParentScopeDigest string                       `json:"parent_scope_digest"`
 }
 
 func requireProductSplitParentScopeSessionTx(ctx context.Context, tx *sql.Tx, b contract.SessionBinding) error {
@@ -66,7 +67,7 @@ func (k *KernelStore) acceptProductSplitParentScopeTx(ctx context.Context, tx *s
 	if err != nil {
 		return contract.ToolReply{}, err
 	}
-	receipt := productSplitParentScopeToolReceipt{Source: op, ParentWorkItemID: request.ParentWorkItemID, ParentScopeID: saved.ID, ParentScopeDigest: saved.Digest}
+	receipt := productSplitParentScopeToolReceipt{Value: saved.Value, Source: op, ParentWorkItemID: request.ParentWorkItemID, ParentScopeID: saved.ID, ParentScopeDigest: saved.Digest}
 	if err := kernelRecordTx(ctx, tx, "product_split_parent_scope_tool", op.ID, op.Target.WaveID, receipt); err != nil {
 		return contract.ToolReply{}, err
 	}
@@ -89,7 +90,7 @@ func (k *KernelStore) verifyProductSplitParentScopeReplayTx(ctx context.Context,
 	if err != nil {
 		return splitEvidenceErr(err)
 	}
-	if saved.ID != receipt.ParentScopeID || saved.Digest != receipt.ParentScopeDigest || saved.Value.SavedAt.After(k.clock()) {
+	if saved.ID != receipt.ParentScopeID || saved.Digest != receipt.ParentScopeDigest || saved.Value.SavedAt.After(k.clock()) || !reflect.DeepEqual(receipt.Value, saved.Value) {
 		return ErrProductSplitHeld
 	}
 	expected, err := productSplitParentScopeToolReply(op, saved)

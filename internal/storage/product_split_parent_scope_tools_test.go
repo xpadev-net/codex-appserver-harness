@@ -179,3 +179,93 @@ func TestProductV4StillAdoptsRootSplitWithV3Wire(t *testing.T) {
 		t.Fatal(reply, err)
 	}
 }
+
+func TestProductSplitParentScopeToolReceiptAloneProhibitsReplacement(t *testing.T) {
+	ctx := context.Background()
+	k, r, _, call := productSplitParentScopeToolFixture(t, "product_v4")
+	reply, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := k.ReadProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := k.clock().Add(time.Second)
+	k.Now = func() time.Time { return now }
+	if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, r.ParentWorkItemID, source.ID, source.Value.Facts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.DB.Exec("DELETE FROM records WHERE kind IN ('product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission')"); err != nil {
+		t.Fatal(err)
+	}
+	call.CallID = "replacement"
+	if _, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call); err == nil {
+		t.Fatal("new call replaced lost proof despite receipt")
+	}
+	if _, err := k.PrepareProductSplitParentScope(ctx, r.Target, r.ParentWorkItemID); err == nil {
+		t.Fatal("host port replaced lost proof despite receipt")
+	}
+	var count int
+	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind IN ('product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission')").Scan(&count); err != nil || count != 0 {
+		t.Fatal(count, err)
+	}
+	var receipt productSplitParentScopeToolReceipt
+	if err := k.Record(ctx, "product_split_parent_scope_tool", reply.OperationID, &receipt); err != nil || receipt.ParentScopeID != reply.ResourceID {
+		t.Fatal(receipt, err)
+	}
+}
+
+func TestProductSplitParentScopeToolRetainsUpstreamSiblingProhibitions(t *testing.T) {
+	ctx := context.Background()
+	k, r, binding, call := productSplitParentScopeToolFixture(t, "product_v4")
+	if _, err := (contract.KernelGateway{Backend: k}).Handle(ctx, call); err != nil {
+		t.Fatal(err)
+	}
+	original, err := k.ReadProductSplitProposal(ctx, binding.Value.Request.Target, binding.Value.Request.ParentWorkItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Retain only the independent tool receipt as evidence of the entire split.
+	for _, query := range []string{
+		"DELETE FROM records WHERE kind LIKE 'product_split_%' AND kind<>'product_split_parent_scope_tool'",
+		"DELETE FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version') AND json_type(payload,'$.value.split_scope')='object'",
+		"DELETE FROM records WHERE kind='wave_work_item' AND json_type(payload,'$.split_scope')='object'",
+		"DELETE FROM kernel_budget_ledger WHERE kind IN ('split_children','split_create_retry')",
+		"DELETE FROM kernel_resource_leases WHERE resource LIKE 'product-split-mutation:%'",
+	} {
+		if _, err := k.DB.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var receipt productSplitParentScopeToolReceipt
+	var raw []byte
+	if err := k.DB.QueryRow("SELECT payload FROM records WHERE kind='product_split_parent_scope_tool'").Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	for _, child := range receipt.Value.Children {
+		if known, err := productSplitChildExecutionHeld(ctx, k.DB, child.Value.Child.Value.WorkItemID); err != nil || !known {
+			t.Fatal("sibling execution identity forgotten", known, err)
+		}
+		if known, err := splitChildScopeIssueKnown(ctx, k.DB, "", child.Value.Issue.RepositoryID, child.Value.Issue.Number); err != nil || !known {
+			t.Fatal("sibling Issue could become Root", known, err)
+		}
+		for _, creation := range child.Value.Creations {
+			if known, err := splitChildScopeCreationKnown(ctx, k.DB, creation.ID); err != nil || !known {
+				t.Fatal("consumed creation forgotten", known, err)
+			}
+		}
+	}
+	if known, err := splitChildScopeParentKnown(ctx, k.DB, binding.Value.ParentHeadID); err != nil || !known {
+		t.Fatal("parent split forgotten", known, err)
+	}
+	if _, err := k.PrepareProductSplitProposal(ctx, original.Value.Request); err == nil {
+		t.Fatal("upstream proposal recreated")
+	}
+	if _, err := k.PrepareProductSplitParentScope(ctx, r.Target, r.ParentWorkItemID); err == nil {
+		t.Fatal("receipt used to repair missing positive proof")
+	}
+}
