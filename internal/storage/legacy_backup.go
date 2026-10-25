@@ -69,13 +69,56 @@ func backupLegacyDatabase(ctx context.Context, source, destination string, check
 	if err := vacantLegacyBackupDestination(source, destination); err != nil {
 		return empty, err
 	}
-	version, err := inspectDatabaseFile(source)
+	// Inspect and copy through one retained read-only connection. Host path
+	// replacement is serialized by controller.lock; bookends also reject
+	// unexpected/non-cooperating one-way replacement before reading schema.
+	if checkpoint != nil {
+		if err := checkpoint("source_open"); err != nil {
+			return empty, err
+		}
+	}
+	if err := checkLegacyBackupSource(source, sourceInfo); err != nil {
+		return empty, err
+	}
+	sourceDSN, err := sqliteFileDSN(source, "ro")
 	if err != nil {
 		return empty, err
 	}
-	if version != 1 {
+	sourceDB, err := sql.Open("sqlite3", sourceDSN)
+	if err != nil {
+		return empty, err
+	}
+	defer sourceDB.Close()
+	sourceConn, err := sourceDB.Conn(ctx)
+	if err != nil {
+		return empty, err
+	}
+	defer sourceConn.Close()
+	if err := checkLegacyBackupSource(source, sourceInfo); err != nil {
+		return empty, err
+	}
+	if checkpoint != nil {
+		if err := checkpoint("source_schema"); err != nil {
+			return empty, err
+		}
+	}
+	if err := checkLegacyBackupSource(source, sourceInfo); err != nil {
+		return empty, err
+	}
+	var header, count, minimum, maximum int
+	if err := sourceConn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&header); err != nil {
+		return empty, err
+	}
+	if err := sourceConn.QueryRowContext(ctx, "SELECT count(*),coalesce(min(version),0),coalesce(max(version),0) FROM schema_migrations").Scan(&count, &minimum, &maximum); err != nil {
+		return empty, err
+	}
+	if err := checkLegacyBackupSource(source, sourceInfo); err != nil {
+		return empty, err
+	}
+	if count != 1 || minimum != 1 || maximum != 1 || header != 0 && header != 1 {
 		return empty, errors.New("existing version-one database required for legacy backup")
 	}
+
 	// SQLite opens only this unique private staging name. Another host operation
 	// may reserve the public destination at any point without being overwritten.
 	stage, err := os.MkdirTemp(filepath.Dir(destination), ".legacy-backup-")
@@ -94,7 +137,7 @@ func backupLegacyDatabase(ctx context.Context, source, destination string, check
 		return empty, err
 	}
 	copyCtx := ctx
-	if err := copyLegacySQLite(copyCtx, source, staged, sourceInfo, checkpoint); err != nil {
+	if err := copyLegacySQLite(copyCtx, sourceConn, staged, checkpoint); err != nil {
 		return empty, err
 	}
 	current, err := os.Lstat(source)
@@ -105,7 +148,7 @@ func backupLegacyDatabase(ctx context.Context, source, destination string, check
 	if err != nil || !os.SameFile(current, owned) || !privateBackupFile(current) {
 		return empty, errors.New("staged backup identity changed")
 	}
-	version, err = inspectDatabaseFileWith(staged, func(db *sql.DB, _ int) error {
+	version, err := inspectDatabaseFileWith(staged, func(db *sql.DB, _ int) error {
 		var result string
 		if err := db.QueryRowContext(copyCtx, "PRAGMA integrity_check").Scan(&result); err != nil {
 			return err
@@ -235,40 +278,27 @@ func privateBackupFile(info os.FileInfo) bool {
 	return info.Mode().IsRegular() && info.Mode().Perm()&0077 == 0 && ok && stat.Uid == uint32(os.Geteuid()) && stat.Nlink == 1
 }
 
-func copyLegacySQLite(ctx context.Context, source, destination string, sourceInfo os.FileInfo, checkpoint func(string) error) error {
-	sourceDSN, err := sqliteFileDSN(source, "ro")
+func checkLegacyBackupSource(path string, expected os.FileInfo) error {
+	current, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
+	if !os.SameFile(current, expected) || !privateBackupFile(current) {
+		return errors.New("source identity changed during backup")
+	}
+	return nil
+}
+
+func copyLegacySQLite(ctx context.Context, sourceConn *sql.Conn, destination string, checkpoint func(string) error) error {
 	destinationDSN, err := sqliteFileDSN(destination, "rw")
 	if err != nil {
 		return err
 	}
-	src, err := sql.Open("sqlite3", sourceDSN)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
 	dst, err := sql.Open("sqlite3", destinationDSN)
 	if err != nil {
 		return err
 	}
 	defer dst.Close()
-	if checkpoint != nil {
-		if err := checkpoint("source_open"); err != nil {
-			return err
-		}
-	}
-	sourceConn, err := src.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer sourceConn.Close()
-	current, err := os.Lstat(source)
-	if err != nil || !os.SameFile(current, sourceInfo) || !privateBackupFile(current) {
-		return errors.New("source identity changed before copy")
-	}
-
 	destinationConn, err := dst.Conn(ctx)
 	if err != nil {
 		return err

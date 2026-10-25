@@ -331,7 +331,7 @@ func TestLegacyBackupRequiresLegacyControllerRootLock(t *testing.T) {
 }
 
 func TestLegacyBackupSourceReplacementNeverPublishesSnapshot(t *testing.T) {
-	for _, point := range []string{"source_open", "copy"} {
+	for _, point := range []string{"source_open", "source_schema", "copy"} {
 		t.Run(point, func(t *testing.T) {
 
 			_, source, destination := legacyBackupFixture(t)
