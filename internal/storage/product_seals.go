@@ -297,7 +297,10 @@ func (k *KernelStore) FinishProductSeal(ctx context.Context, taskID, runID strin
 			if err != nil {
 				return saved, err
 			}
-			scope := productVerificationScope(w, registration)
+			scope, err := productVerificationScopeTx(ctx, tx, w, registration)
+			if err != nil {
+				return saved, err
+			}
 			digest, err := contentDigest(scope)
 			if err != nil {
 				return saved, err

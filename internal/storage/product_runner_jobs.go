@@ -264,7 +264,11 @@ func (k *KernelStore) productRunnerPreflightTx(ctx context.Context, tx *sql.Tx, 
 	if err != nil {
 		return w, err
 	}
-	digest, err := contentDigest(productVerificationScope(w, registration))
+	scope, err := productVerificationScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return w, err
+	}
+	digest, err := contentDigest(scope)
 	if err != nil {
 		return w, err
 	}

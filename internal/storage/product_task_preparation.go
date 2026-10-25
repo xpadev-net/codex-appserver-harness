@@ -10,6 +10,7 @@ import (
 )
 
 type ProductTaskPreparation struct {
+	SplitScope    *ProductSplitScopeInput             `json:"split_scope,omitempty"`
 	SourceRequest *ProductSourceRequestAdoption       `json:"source_request,omitempty"`
 	Continuations []ProductContinuation               `json:"continuations,omitempty"`
 	Task          domain.Task                         `json:"task"`
@@ -88,6 +89,14 @@ func (k *KernelStore) productTaskPreparationTx(ctx context.Context, tx *sql.Tx, 
 	}
 	if !productRegistrationScope(registration, w) {
 		return out, ErrTaskEvidence
+	}
+	binding, err := productSplitChildScopeTx(ctx, tx, w, registration)
+	if err != nil {
+		return out, err
+	}
+	if binding != nil {
+		input := productSplitScopeInput(*binding)
+		out.SplitScope = &input
 	}
 	out.SourceRequest, err = k.productSourceRequestTx(ctx, tx, w)
 	if err != nil {

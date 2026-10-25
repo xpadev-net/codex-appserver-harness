@@ -64,6 +64,8 @@ type appliedMainDecision struct {
 	Decision contract.MainDecision `json:"decision"`
 }
 type sessionManifest struct {
+	ProductSplitScopes                    []ProductSplitScopeInput         `json:"product_split_scopes,omitempty"`
+	UnavailableProductSplitScopes         []UnavailableProductWorkItem     `json:"unavailable_product_split_scopes,omitempty"`
 	ProductSourceRequest                  *ProductSourceRequestAdoption    `json:"product_source_request,omitempty"`
 	UnavailableProductSourceRequest       string                           `json:"unavailable_product_source_request,omitempty"`
 	ProductContinuations                  []ProductContinuationInput       `json:"product_continuations,omitempty"`
@@ -247,6 +249,9 @@ func (k *KernelStore) sessionContextTx(ctx context.Context, tx *sql.Tx, b contra
 		if manifest.ProductVerificationPolicy != nil {
 			state.Instructions += " product_verification_policy fixes trusted test-write paths and registered/required profile IDs. A verification.Plan must refer to the known input Candidate and original assigned criteria; it cannot remove required profiles or supply runner success. Full trusted execution argv stays outside this manifest."
 		}
+		if len(manifest.ProductSplitScopes) > 0 {
+			state.Instructions += " product_split_scopes gives the complete local requirement, criterion IDs, parent whole/part mapping, depth and source for each assigned child WorkItem. For a split child, verification.Plan.criteria_tests and unverified_criteria use the local scope.included IDs and requirements. The controller checks scope_digest; it is not an extra verification.Plan field. TaskResult criteria keep the assigned Task criterion IDs for Wave planning; completing one local part does not satisfy the entire parent criterion. Keep the original Wave request and all part/dependency obligations. These records grant no execution, source freshness, quality or parent completion."
+		}
 		raw, err := encodeWakeJSON(manifest)
 		if err != nil {
 			return state, refs, err
@@ -358,6 +363,19 @@ func (k *KernelStore) sessionManifestTx(ctx context.Context, tx *sql.Tx, b contr
 	m.ProductWorkItems, m.UnavailableProductWorkItems, err = k.productWorkItemInputsTx(ctx, tx, b, w)
 	if err != nil {
 		return m, err
+	}
+	for _, registration := range m.ProductWorkItems {
+		binding, e := productSplitChildScopeTx(ctx, tx, w, registration)
+		if readinessHoldError(e) || errors.Is(e, ErrProductSplitHeld) {
+			m.UnavailableProductSplitScopes = append(m.UnavailableProductSplitScopes, UnavailableProductWorkItem{ID: registration.Value.Definition.ID, Reason: "split_scope_evidence_unavailable"})
+			continue
+		}
+		if e != nil {
+			return m, e
+		}
+		if binding != nil {
+			m.ProductSplitScopes = append(m.ProductSplitScopes, productSplitScopeInput(*binding))
+		}
 	}
 	seenContinuations := map[string]bool{}
 	for _, registration := range m.ProductWorkItems {
