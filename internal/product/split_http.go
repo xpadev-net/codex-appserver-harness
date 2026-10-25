@@ -76,27 +76,26 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 			})
 		}
 	}
+	if err := runSplitSourceReads(ctx, reads); err != nil {
+		return "", "", err
+	}
 	sourceID, sourceDigest := "", ""
 	if w.Source != "direct" {
 		observer := IssueSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
 		if err := observer.Validate(); err != nil {
 			return "", "", err
 		}
-		reads = append(reads, func(read context.Context) error {
-			budget := github.WithResourceReadBudget(read, 16<<20)
-			update, acknowledged, err := observer.observe(read, budget, &budgetResourceAPI{ResourceAPI: api}, w, 5*time.Second)
-			if err != nil {
-				return err
-			}
-			if !acknowledged || update.Hold != nil || update.Snapshot.Value.Status != "ready" {
-				return storage.ErrProductSplitHeld
-			}
-			sourceID, sourceDigest = update.Snapshot.ID, update.Snapshot.Digest
-			return nil
-		})
-	}
-	if err := runSplitSourceReads(ctx, reads); err != nil {
-		return "", "", err
+		// Keep the Wave Issue's existing immediate-GET/gate contract: unlike
+		// child sources its semantic snapshot has no replaceable CheckedAt.
+		budget := github.WithResourceReadBudget(ctx, 16<<20)
+		update, acknowledged, err := observer.observe(ctx, budget, &budgetResourceAPI{ResourceAPI: api}, w, 5*time.Second)
+		if err != nil {
+			return "", "", err
+		}
+		if !acknowledged || update.Hold != nil || update.Snapshot.Value.Status != "ready" {
+			return "", "", storage.ErrProductSplitHeld
+		}
+		sourceID, sourceDigest = update.Snapshot.ID, update.Snapshot.Digest
 	}
 	return sourceID, sourceDigest, nil
 }
@@ -104,7 +103,7 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 // Join every observer, including source saves, before activation or returning
 // an error. A failed/canceled read never leaves detached freshness updates.
 func runSplitSourceReads(ctx context.Context, reads []func(context.Context) error) error {
-	if len(reads) > 129 {
+	if len(reads) > 128 {
 		return storage.ErrProductSplitHeld
 	}
 	if len(reads) == 1 {
