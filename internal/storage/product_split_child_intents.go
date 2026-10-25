@@ -74,9 +74,17 @@ func deriveProductSplitChildIntents(proposal ProductSplitProposal, registration 
 		value := ProductSplitChildIntentValue{Target: proposal.Value.Request.Target, ParentHeadID: splitProposalHead(proposal.Value.Request), ProposalID: proposal.ID, ProposalDigest: proposal.Digest, ParentWorkItemID: proposal.Value.Request.ParentWorkItemID, WorkItemID: workIDs[child.Key], Repository: registration.Value.Definition.Repository, RepositoryID: registration.Value.Definition.RepositoryID, Depth: proposal.Value.Depth + 1, Child: child, ParentCriteria: []string{}, DependsOnWorkItemIDs: []string{}, Marker: "<!-- harness-split-child:" + intent.ID + " -->"}
 		seen := map[string]bool{}
 		for _, mapping := range child.Coverage {
-			if !seen[mapping.ParentCriterion] {
-				seen[mapping.ParentCriterion] = true
-				value.ParentCriteria = append(value.ParentCriteria, mapping.ParentCriterion)
+			root := mapping.ParentCriterion
+			if proposal.Value.ParentSplitScope != nil {
+				var ok bool
+				root, ok = proposal.Value.ParentCriterionRoots[mapping.ParentCriterion]
+				if !ok || root == "" {
+					return nil, ErrProductSplitHeld
+				}
+			}
+			if !seen[root] {
+				seen[root] = true
+				value.ParentCriteria = append(value.ParentCriteria, root)
 			}
 		}
 		sort.Strings(value.ParentCriteria)
