@@ -225,6 +225,12 @@ func (k *KernelStore) ReadLatestProductSplitCreate(ctx context.Context, childID 
 	return loadLatestProductSplitCreate(ctx, tx, childID)
 }
 func loadLatestProductSplitCreate(ctx context.Context, tx *sql.Tx, childID string) (ProductSplitCreate, error) {
+	return readSplitProof(ctx, tx, "loadLatestProductSplitCreate", childID, func(read context.Context) (ProductSplitCreate, error) {
+		return loadLatestProductSplitCreateUncached(read, tx, childID)
+	})
+}
+
+func loadLatestProductSplitCreateUncached(ctx context.Context, tx *sql.Tx, childID string) (ProductSplitCreate, error) {
 	job, err := loadSplitCreate(ctx, tx, splitCreateID(childID))
 	if err != nil {
 		return job, err

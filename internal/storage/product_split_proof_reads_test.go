@@ -215,3 +215,41 @@ func TestSplitProofReadActiveWalkBoundaries(t *testing.T) {
 		t.Fatal("last permitted walk failed or leaked active state", got, err)
 	}
 }
+
+func TestSplitProofLatestCreationNeverHidesADeletedRetryHead(t *testing.T) {
+	ctx := context.Background()
+	k, _, _, initial := splitCreationFixture(t)
+	if _, err := k.AbortUnactivatedProductSplitCreate(ctx, initial.ID, initial.Value.OwnerID, initial.Digest, "memo-latest-unsent"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := k.ReserveProductSplitCreateUnsentRetry(ctx, initial.ID, "memo-latest-retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	childID := initial.Value.Child.ID
+	_, err = readSplitProof(ctx, tx, "test-latest-creation", childID, func(read context.Context) (ProductSplitCreate, error) {
+		first, err := loadLatestProductSplitCreate(read, tx, childID)
+		if err != nil {
+			return first, err
+		}
+		second, err := loadLatestProductSplitCreate(read, tx, childID)
+		if err != nil || first.ID != retry.ID || second.ID != retry.ID || second.Value.Attempt != 1 {
+			t.Fatal("latest retry proof changed", first.ID, second.ID, err)
+		}
+		return second, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("DELETE FROM records WHERE kind='product_split_create' AND id=?", retry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadLatestProductSplitCreate(ctx, tx, childID); !readinessHoldError(err) {
+		t.Fatal("previous read concealed a deleted latest retry", err)
+	}
+}

@@ -342,3 +342,11 @@ Coverage は直近の親の local criterion に対する part ID・part count・
 
 
 方向修正後の監査用 loader と plan 等の履歴読み取りは、保存時の parent proof が参照する正式な登録集合から binding を取得する。現在の Wave target を要求して過去の提案・plan・allocation・scope を読めなくしない。現在の提案状態を確認する port と新規提案は現在の登録 binding と target を照合し、過去の proof を新 scope の採用許可へ転用しない。
+
+## 深さ3の作成から source 観測までの接続確認
+
+初期設定で深さ3を採用した controlled Go fixture で、great-grandchild の作成 journal・物理 process group の停止・Issue 観測・scope 結合・全件登録・source/policy 観測を通す。最終登録と source policy history の各1記録しか残らなくても、Root child・孫・今回の子のすべての numeric Issue 所有権、消費済み retry、予約枠と recovery work list の各層を保持する。
+
+最新の作成 journal の探索も、一つの読み取り専用 proof walk の中で再利用する。同じ呼び出し内の retry chain と末尾確認を繰り返さず、書き込み後や別呼び出しへ結果を持ち越さない。retry head が失われた後は、以前の読み取りで隠さず正式証拠の欠落として保留する。
+
+retry は Wave 全体の予算を引き継ぐ。祖先の retry で上限に達した場合、深い分割でも追加 retry を拒否し、失敗した予約は予算を変更しない。この fixture は source と metadata の接続確認であり、Task/model/runner 実行、実 GitHub/native model の分割受入、正式承認や全体完了の証拠には数えない。
