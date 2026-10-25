@@ -251,6 +251,18 @@ chmod 600 product-workspace.json
 
 既定ブランチとrepository IDはGitHub metadataから解決します。設定・状態ディレクトリは候補リポジトリの外に置きます。`init`は既存設定を上書きしません。
 
+新規の trusted config は version 2 です。version 1 は従来どおり読み込めます。明示的に更新する場合は、元設定を残した別の絶対パスを指定します。
+
+```sh
+./harness upgrade-config \
+  --config /absolute/private/harness/config-v1.json \
+  --output /absolute/private/harness/config-v2.json
+```
+
+このコマンドは DB・controller・model・GitHub を開きません。既存の policy snapshot を更新せず、元設定の policy digest を検証可能な `upgrade_origin` として保持します。省略されていた並行上限は直列値 `1/1/1/1/1` を明記し、既に明示されていた上限は保持します。同じ元設定から同じ出力への再実行は成功し、異なる既存出力を上書きしません。出力先は repository・state root・worker 認証ディレクトリの外に置き、同一利用者の管理するディレクトリを使用してください。
+
+変換後の設定が元 policy と異なれば読み込みを拒否します。上限や検証 policy を変更するときは `upgrade_origin` を取り除いて policy revision を更新し、対象作業を既存の `adopt` 手順で明示的に採用してください。この config 更新だけでは DB の Wave/Task/session 移行や runtime 切替は完了しません。旧バイナリへ移行後 DB を渡さず、書き込み済み DB を旧版で開く切戻しは行いません。
+
 生成した設定でprofileコマンド、検証担当に許可するファイルパス、優先label、予算を確定してください。既定の`go test -v ./...`はGoプロジェクト向けの初期設定です。各profileは実行・成功の証拠となる`success_pattern`を必須とし、既定では実際のテストの`--- PASS:`行を要求します。テスト0件・全skip・空出力を合格にしません。既存設定にもprofileに適したpatternを追加し、policy revisionを更新してください。`verifier_paths`は正確なファイル名または`tests/`のようなディレクトリprefixです。`./scripts/ci`等の相対entrypointには、信頼する版の`entrypoint_sha256`も設定します。
 
 `worker_codex_home`にはGitHub資格情報を含まない専用のCodex設定・認証を用意してください。ネイティブCodex実行ファイルを指定します。Nodeランチャーへのパスではありません。launcherは`launcher_contract: argv_passthrough_v1`として、後続のprogram/argv、cwd、環境、終了コードを保ち、終了時に子プロセスを残さないものを指定します。runnerは引数・cwd・終了コードのcanaryも確認します。実行環境の資格情報とネットワーク権限を検証してから`isolation_verified`を有効にします。workerとrunnerは実行時にもcontroller DB・既知のGitHub資格情報パスが見えないことを検査します。共有proxyが認証を注入する環境では、workerにGitHub書き込み権限を渡さない別のネットワーク設定も必要です。
