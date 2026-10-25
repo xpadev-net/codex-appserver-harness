@@ -351,3 +351,99 @@ func TestLegacyInventoryTruncatedRunHistoryNeverClaimsThreadEnded(t *testing.T) 
 		t.Fatal("bounded work was omitted")
 	}
 }
+
+func TestLegacyInventoryOldContinuationRequiresExactResidualScope(t *testing.T) {
+	for _, mode := range []string{"valid", "scope_mismatch", "parent_missing", "owner_mismatch"} {
+		t.Run(mode, func(t *testing.T) {
+			s, source, snapshot := legacyInventoryFixture(t)
+			ctx := context.Background()
+			if _, err := s.DB.Exec("DELETE FROM records WHERE kind='continued_from' AND id='child-remaining'"); err != nil {
+				t.Fatal(err)
+			}
+			before := verification.Scope{Revision: 1, OriginalRequest: "partial child", Criteria: []verification.Criterion{{ID: "A", Requirement: "done"}, {ID: "B", Requirement: "remaining"}}, Included: []string{"A"}, Remaining: []string{"B"}, PreviouslyMerged: []string{}}
+			after := before
+			after.Included = []string{"B"}
+			after.Remaining = []string{}
+			after.PreviouslyMerged = []string{"A"}
+			if mode == "scope_mismatch" {
+				after.OriginalRequest = "different request"
+			}
+			for id, scope := range map[string]verification.Scope{"child": before, "child-remaining": after} {
+				if err := s.Put(ctx, "scope", id, id, scope); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "parent_missing" {
+				if _, err := s.DB.Exec("DELETE FROM operation_outbox WHERE work_item_id='child'"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.DB.Exec("DELETE FROM work_items WHERE id='child'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "owner_mismatch" {
+				if _, err := s.DB.Exec("UPDATE records SET work_item_id='wi' WHERE kind='scope' AND id='child'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := freezeLegacyInventory(t, source, snapshot)
+			page, err := ReadLegacyMigrationInventory(ctx, r.DestinationRoot, "", 128)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, entry := range page.Value.WorkItems {
+				if entry.WorkItem.ID != "child-remaining" {
+					continue
+				}
+				found = true
+				if mode == "valid" {
+					if entry.RootWorkItemID != "wi" || len(entry.Links) != 2 || entry.Links[0].Kind != "continued_from" || len(entry.Issues) != 1 || entry.Issues[0].Reason != "thread_run_unresolved" {
+						t.Fatal("validated old continuation lost family", entry)
+					}
+				} else if entry.RootWorkItemID != "" || len(entry.Issues) == 0 {
+					t.Fatal("unproven suffix inferred a family", entry)
+				}
+			}
+			if !found {
+				t.Fatal("old continuation omitted")
+			}
+		})
+	}
+}
+
+func TestLegacyInventoryMissingSuccessorBaselinesAndInvalidRunRemainUnresolved(t *testing.T) {
+	s, source, snapshot := legacyInventoryFixture(t)
+	ctx := context.Background()
+	if _, err := s.DB.Exec("DELETE FROM records WHERE kind='budget_baseline'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(ctx, "agent_run", "invalid-run", "child", map[string]any{"id": "wrong", "thread_id": "ended-thread", "state": "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	r := freezeLegacyInventory(t, source, snapshot)
+	page, err := ReadLegacyMigrationInventory(ctx, r.DestinationRoot, "", 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range page.Value.WorkItems {
+		reasons := map[string]bool{}
+		for _, issue := range entry.Issues {
+			reasons[issue.Reason] = true
+		}
+		switch entry.WorkItem.ID {
+		case "child-remaining", "root-final-repair":
+			if !reasons["budget_baseline_missing"] || entry.Baseline != nil {
+				t.Fatal("successor lost carried usage without a hold", entry)
+			}
+		case "child":
+			if reasons["budget_baseline_missing"] || !reasons["run_identity_invalid"] || len(entry.Threads) != 1 || entry.Threads[0].Disposition != "requires_reconciliation" {
+				t.Fatal("invalid run promoted ended thread or initial budget invented", entry)
+			}
+		case "wi":
+			if reasons["budget_baseline_missing"] {
+				t.Fatal("initial work requires carried baseline")
+			}
+		}
+	}
+}

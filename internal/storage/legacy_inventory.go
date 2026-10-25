@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -237,7 +239,29 @@ func legacyInventoryLineage(ctx context.Context, db *sql.DB, item domain.WorkIte
 			parentID = parent
 		}
 		if parentID == "" {
-			return item.ID, links, nil
+			// Older partial continuations predate continued_from. The suffix
+			// alone is not evidence: require identity and the exact residual scope.
+			previousID := strings.TrimSuffix(item.ID, "-remaining")
+			if previousID == item.ID {
+				return item.ID, links, nil
+			}
+			previous, err := legacyInventoryWorkItem(ctx, db, previousID)
+			if err != nil || previous.RepositoryID != item.RepositoryID || previous.Issue != item.Issue || previous.ScopeRevision > item.ScopeRevision || previous.PolicyRevision > item.PolicyRevision {
+				return "", links, errors.New("legacy_continuation_unavailable")
+			}
+			var before, after verification.Scope
+			if legacyInventoryRecord(ctx, db, "scope", previousID, previousID, &before) != nil || legacyInventoryRecord(ctx, db, "scope", item.ID, item.ID, &after) != nil || before.Validate() != nil || after.Validate() != nil || before.Revision != previous.ScopeRevision || after.Revision != item.ScopeRevision || len(before.Remaining) == 0 {
+				return "", links, errors.New("legacy_continuation_scope_unavailable")
+			}
+			expected := before
+			expected.Included = append([]string{}, before.Remaining...)
+			expected.Remaining = []string{}
+			expected.PreviouslyMerged = append(append([]string{}, before.PreviouslyMerged...), before.Included...)
+			if !reflect.DeepEqual(expected, after) {
+				return "", links, errors.New("legacy_continuation_scope_unavailable")
+			}
+			links = append(links, LegacyInventoryLink{item.ID, previousID, "continued_from"})
+			parentID = previousID
 		}
 		var err error
 		item, err = legacyInventoryWorkItem(ctx, db, parentID)
@@ -273,6 +297,13 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		issue("budget_baseline_invalid")
+	} else {
+		for _, link := range entry.Links {
+			if link.ChildID == id && (link.Kind == "continued_from" || link.Kind == "final_recovery_audit") {
+				issue("budget_baseline_missing")
+				break
+			}
+		}
 	}
 	rows, err := db.QueryContext(ctx, "SELECT id,payload,state FROM operation_outbox WHERE work_item_id=? AND state NOT IN ('done','canceled') ORDER BY id LIMIT 257", id)
 	if err != nil {
@@ -316,6 +347,7 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 	byThread := map[string][]runHeader{}
 	runCount := 0
 	runsTruncated := false
+	runsUnassignable := false
 	for runs.Next() {
 		runCount++
 		if runCount > 256 {
@@ -332,6 +364,7 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 		}
 		if json.Unmarshal(raw, &run) != nil || run.ID != runID || run.ThreadID == "" {
 			issue("run_identity_invalid")
+			runsUnassignable = true
 			continue
 		}
 		byThread[run.ThreadID] = append(byThread[run.ThreadID], run)
@@ -371,7 +404,7 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 				thread.Disposition = "requires_reconciliation"
 			}
 		}
-		if runsTruncated {
+		if runsTruncated || runsUnassignable {
 			thread.Disposition = "requires_reconciliation"
 		}
 		if thread.Disposition == "requires_reconciliation" {
