@@ -75,6 +75,13 @@ func TestProductNestedSplitCoverageRetiresEveryAuthenticatedDelegatedNode(t *tes
 			if err != nil || len(held.Value.Unavailable) == 0 || len(held.Value.Residual) != 2 || !slices.Contains(held.Value.UnmergedWorkItems, r.ParentWorkItemID) {
 				t.Fatal("missing group retained retirement", held, err)
 			}
+			identified := false
+			for _, pending := range held.Value.Unavailable {
+				identified = identified || pending.WorkItemID == r.ParentWorkItemID
+			}
+			if !identified {
+				t.Fatal("lost delegation omitted its parent identity", held.Value.Unavailable)
+			}
 		})
 	}
 }

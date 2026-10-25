@@ -153,3 +153,22 @@ func TestProductSplitDependencyExpansionRequiresEveryActualLeafAndRetainsOrigins
 		})
 	}
 }
+
+func TestProductSplitDependencyUnavailableDelegationCannotBecomeOrdinaryLeaf(t *testing.T) {
+	for _, reason := range []string{"split_scope_mapping_unavailable", "split_registration_evidence_unavailable", "split_parent_registration_unavailable", "split_parent_scope_unavailable", "split_local_verification_unavailable", "source_registration_unavailable"} {
+		t.Run(reason, func(t *testing.T) {
+			ledger := splitDependencyReducerFixture()
+			ledger.Value.Splits = slices.DeleteFunc(ledger.Value.Splits, func(g ProductSplitCoverage) bool { return g.ParentWorkItemID == "left" })
+			ledger.Value.Merged = append(ledger.Value.Merged, ProductCoverageFact{WorkItemID: "left", RegistrationDigest: "reg-left", SplitScopeDigest: "scope-left", LocalCriteria: []string{"local"}, MergeID: "own-parent-merge", MergeSHA: strings.Repeat("e", 40)})
+			ledger.Value.Unavailable = []ProductCoveragePending{{WorkItemID: "left", RecordID: "lost-delegation", Reason: reason}}
+			if leaves, origins, err := productMergeDependencyLeaves(ledger, []string{"left"}); !errors.Is(err, ErrProductMergeDependencyHeld) || len(leaves) != 0 || len(origins) != 0 {
+				t.Fatal("unavailable delegation became an ordinary merged leaf", leaves, origins, err)
+			}
+			// A loss attributed to this parent must not block an independent leaf.
+			leaves, _, err := productMergeDependencyLeaves(ledger, []string{"right"})
+			if err != nil || !reflect.DeepEqual(leaves, []string{"right"}) {
+				t.Fatal("unrelated contributor inherited the hold", leaves, err)
+			}
+		})
+	}
+}

@@ -40,12 +40,18 @@ func productMergeDependencyLeaves(coverage ProductCoverageLedger, required []str
 		}
 		byParent[groups[i].ParentWorkItemID] = i
 	}
+	unavailable := map[string]bool{}
+	for _, pending := range coverage.Value.Unavailable {
+		if pending.WorkItemID != "" {
+			unavailable[pending.WorkItemID] = true
+		}
+	}
 	aggregateProductSplitCoverage(groups, facts)
 	origins := map[string]ProductSplitDependencyOrigin{}
 	active := map[string]bool{}
 	var visit func(string) ([]string, error)
 	visit = func(id string) ([]string, error) {
-		if id == "" || ambiguous[id] || active[id] || len(active) >= maxProductWorkItems {
+		if id == "" || unavailable[id] || ambiguous[id] || active[id] || len(active) >= maxProductWorkItems {
 			return nil, ErrProductMergeDependencyHeld
 		}
 		index, delegated := byParent[id]
