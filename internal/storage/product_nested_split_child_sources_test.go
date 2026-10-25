@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -127,6 +128,28 @@ func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutDeeperAdmission
 			}
 		})
 	}
+	t.Run("resealed_policy_cannot_drop_ancestors", func(t *testing.T) {
+		k := cloneNestedScopeStore(t, base)
+		var policy splitChildSourcePolicy
+		if err := k.Record(ctx, "product_split_child_source_policy", id, &policy); err != nil {
+			t.Fatal(err)
+		}
+		policy.Value.AncestorSet = nil
+		policy.Digest, err = contentDigest(policy.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := k.DB.Exec("UPDATE records SET payload=? WHERE kind IN ('product_split_child_source_policy','product_split_child_source_policy_history') AND id=?", raw, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := k.ReadProductSplitChildSource(ctx, r.Target, id); !readinessHoldError(err) {
+			t.Fatal("resealed policy erased ancestors", err)
+		}
+	})
 	t.Run("missing_source_head", func(t *testing.T) {
 		k := cloneNestedScopeStore(t, base)
 		if _, err := k.DB.Exec("DELETE FROM records WHERE kind='product_split_child_source' AND id=?", id); err != nil {
