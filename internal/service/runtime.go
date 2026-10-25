@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,8 +20,7 @@ import (
 )
 
 func (c *Controller) policyDigest() string {
-	data, _ := json.Marshal(c.Config)
-	return fmt.Sprintf("%x", sha256.Sum256(data))
+	return trustedConfigPolicyDigest(c.Config)
 }
 func (c *Controller) VerifyRuntime(ctx context.Context) error {
 	remote, err := workspace.Git(ctx, c.Config.RepositoryPath, "remote", "get-url", "origin")

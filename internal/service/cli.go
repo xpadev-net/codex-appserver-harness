@@ -26,11 +26,12 @@ import (
 
 func CLI(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("commands: init, serve, status, inspect, metrics, pause, resume, hold, release, cancel, retry, interrupt, associate, split, adopt, webhook, reconcile-job, retry-final")
+		return errors.New("commands: init, upgrade-config, serve, status, inspect, metrics, pause, resume, hold, release, cancel, retry, interrupt, associate, split, adopt, webhook, reconcile-job, retry-final")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	configPath := fs.String("config", "", "trusted config JSON outside repository")
+	outputPath := fs.String("output", "", "separate trusted v2 config destination")
 	id := fs.String("id", "", "WorkItem ID")
 	reason := fs.String("reason", "", "operator reason")
 	file := fs.String("file", "", "proposal or scope JSON")
@@ -53,6 +54,16 @@ func CLI(ctx context.Context, args []string) error {
 	}
 	if command == "init" {
 		return initConfig(ctx, *configPath, *repo, *repoPath, *model, *binary, *launcher)
+	}
+	if command == "upgrade-config" {
+		if fs.NArg() != 0 || *outputPath == "" {
+			return errors.New("upgrade-config requires --config and --output with no positional arguments")
+		}
+		receipt, err := UpgradeTrustedConfig(ctx, *configPath, *outputPath)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(receipt)
 	}
 	cfg, err := Load(*configPath)
 	if err != nil {
@@ -393,7 +404,7 @@ func initConfig(ctx context.Context, path, repository, repositoryPath, model, bi
 	}
 	root := filepath.Join(filepath.Dir(absolute), "state")
 	execution := domain.DefaultExecutionLimits()
-	cfg := Config{LauncherContract: "argv_passthrough_v1", CIRefMode: "head", PriorityLabels: []string{"priority:high", "priority:normal", "priority:low"}, LogRetentionDays: 30, MaxArtifactBytes: 1 << 30, Version: 1, Repository: repository, RepositoryID: metadata.ID, RepositoryPath: repositoryPath, BaseBranch: metadata.DefaultBranch, Root: root, Model: model, CodexBinary: binary, WorkerCodexHome: filepath.Join(filepath.Dir(absolute), "worker-codex"), Launcher: []string{launcher}, ReadyLabel: "harness:ready", HoldLabel: "harness:hold", Verification: policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"go", "test", "-v", "./..."}, TimeoutSeconds: 900, SuccessPattern: policy.GoTestSuccessPattern}}}, VerifierPaths: []string{"tests/"}, Review: review.Policy{RequiredApprovals: 1, TrustedReviewerIDs: []int64{}}, ReviewTrigger: "@codex review", RequiredChecks: []gate.RequiredCheck{}, MergeMethod: "squash", Execution: &execution, Limits: Limits{NetworkRetries: 3, ValidationJobs: 100, RepairRounds: 3, RunnerRetries: 1, ReviewRequests: 2, SplitDepth: 2, SplitChildren: 8, Tokens: 1000000, TurnSeconds: 1800, ReviewSeconds: 3600}, ReconcileSeconds: 60}
+	cfg := Config{LauncherContract: "argv_passthrough_v1", CIRefMode: "head", PriorityLabels: []string{"priority:high", "priority:normal", "priority:low"}, LogRetentionDays: 30, MaxArtifactBytes: 1 << 30, Version: 2, Repository: repository, RepositoryID: metadata.ID, RepositoryPath: repositoryPath, BaseBranch: metadata.DefaultBranch, Root: root, Model: model, CodexBinary: binary, WorkerCodexHome: filepath.Join(filepath.Dir(absolute), "worker-codex"), Launcher: []string{launcher}, ReadyLabel: "harness:ready", HoldLabel: "harness:hold", Verification: policy.Verification{Revision: 1, RequiredProfiles: []string{"unit"}, Profiles: map[string]policy.Profile{"unit": {Revision: 1, Argv: []string{"go", "test", "-v", "./..."}, TimeoutSeconds: 900, SuccessPattern: policy.GoTestSuccessPattern}}}, VerifierPaths: []string{"tests/"}, Review: review.Policy{RequiredApprovals: 1, TrustedReviewerIDs: []int64{}}, ReviewTrigger: "@codex review", RequiredChecks: []gate.RequiredCheck{}, MergeMethod: "squash", Execution: &execution, Limits: Limits{NetworkRetries: 3, ValidationJobs: 100, RepairRounds: 3, RunnerRetries: 1, ReviewRequests: 2, SplitDepth: 2, SplitChildren: 8, Tokens: 1000000, TurnSeconds: 1800, ReviewSeconds: 3600}, ReconcileSeconds: 60}
 	if err = cfg.Validate(); err != nil {
 		return err
 	}

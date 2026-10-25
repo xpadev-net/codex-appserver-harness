@@ -56,6 +56,7 @@ type Config struct {
 	Limits            Limits                  `json:"limits"`
 	Execution         *domain.ExecutionLimits `json:"execution,omitempty"`
 	ReconcileSeconds  int                     `json:"reconcile_seconds"`
+	UpgradeOrigin     *ConfigUpgradeOrigin    `json:"upgrade_origin,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -71,7 +72,12 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	if err = contract.DecodeStrict(b, &c); err != nil {
+	return loadConfigData(path, b)
+}
+
+func loadConfigData(path string, b []byte) (Config, error) {
+	var c Config
+	if err := contract.DecodeStrict(b, &c); err != nil {
 		return c, err
 	}
 	c.RepositoryPath = canonical(c.RepositoryPath)
@@ -84,7 +90,7 @@ func Load(path string) (Config, error) {
 	if c.CapabilitiesPath != "" {
 		c.CapabilitiesPath = canonical(c.CapabilitiesPath)
 	}
-	if err = c.Validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		return c, err
 	}
 	absolute, err := filepath.Abs(path)
@@ -101,6 +107,12 @@ func within(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 func (c Config) Validate() error {
+	if c.Version != 1 && c.Version != 2 || c.Version == 2 && c.Execution == nil {
+		return errors.New("supported trusted config version and explicit v2 execution limits required")
+	}
+	if err := c.validateUpgradeOrigin(); err != nil {
+		return err
+	}
 	if c.Execution != nil {
 		if err := c.Execution.Validate(); err != nil {
 			return err
@@ -115,7 +127,7 @@ func (c Config) Validate() error {
 	if c.LauncherContract != "argv_passthrough_v1" {
 		return errors.New("launcher_contract must be argv_passthrough_v1")
 	}
-	if (c.CIRefMode != "head" && c.CIRefMode != "test_merge") || len(c.PriorityLabels) == 0 || c.LogRetentionDays < 1 || c.MaxArtifactBytes < 1 || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.Repository) || c.Version != 1 || c.RepositoryID < 1 || !strings.Contains(c.Repository, "/") || c.BaseBranch == "" || c.Model == "" || !filepath.IsAbs(c.RepositoryPath) || !filepath.IsAbs(c.Root) || !filepath.IsAbs(c.CodexBinary) || !filepath.IsAbs(c.WorkerCodexHome) || within(c.RepositoryPath, c.Root) || within(c.Root, c.RepositoryPath) || within(c.RepositoryPath, c.WorkerCodexHome) || len(c.Launcher) == 0 || !filepath.IsAbs(c.Launcher[0]) || c.ReconcileSeconds < 1 || c.ReadyLabel == "" || c.HoldLabel == "" {
+	if (c.CIRefMode != "head" && c.CIRefMode != "test_merge") || len(c.PriorityLabels) == 0 || c.LogRetentionDays < 1 || c.MaxArtifactBytes < 1 || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.Repository) || c.RepositoryID < 1 || !strings.Contains(c.Repository, "/") || c.BaseBranch == "" || c.Model == "" || !filepath.IsAbs(c.RepositoryPath) || !filepath.IsAbs(c.Root) || !filepath.IsAbs(c.CodexBinary) || !filepath.IsAbs(c.WorkerCodexHome) || within(c.RepositoryPath, c.Root) || within(c.Root, c.RepositoryPath) || within(c.RepositoryPath, c.WorkerCodexHome) || len(c.Launcher) == 0 || !filepath.IsAbs(c.Launcher[0]) || c.ReconcileSeconds < 1 || c.ReadyLabel == "" || c.HoldLabel == "" {
 		return errors.New("invalid configuration or execution paths overlap trusted repository")
 	}
 	if c.Limits.NetworkRetries < 0 || c.Limits.ValidationJobs < 1 || c.Limits.RepairRounds < 1 || c.Limits.RunnerRetries < 0 || c.Limits.ReviewRequests < 1 || c.Limits.SplitDepth < 1 || c.Limits.SplitChildren < 2 || c.Limits.Tokens < 1 || c.Limits.TurnSeconds < 1 || c.Limits.ReviewSeconds < 1 {
