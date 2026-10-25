@@ -11,14 +11,14 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
 )
 
-// Only the current isolated product_v2 runtime activates model dispatch. A
+// Only a current isolated product_v2/v3 runtime activates model dispatch. A
 // standalone local executor remains useful without enabling model turns.
 func productModelRuntime(k *storage.KernelStore, runtime control.IsolatedConfig, repositories map[int64]product.ExecutionRepository) (*storage.ProductModelRuntime, error) {
 	if !runtime.ProductTools || runtime.ProductToolProfile == "" || runtime.ProductToolProfile == "product_v1" {
 		return nil, nil
 	}
-	if runtime.ProductToolProfile != "product_v2" || !runtime.IsolationVerified || runtime.Model == "" || runtime.LauncherContract != "argv_passthrough_v1" || len(runtime.Launcher) == 0 {
-		return nil, errors.New("complete isolated product_v2 model runtime required")
+	if (runtime.ProductToolProfile != "product_v2" && runtime.ProductToolProfile != "product_v3") || !runtime.IsolationVerified || runtime.Model == "" || runtime.LauncherContract != "argv_passthrough_v1" || len(runtime.Launcher) == 0 {
+		return nil, errors.New("complete isolated product_v2/v3 model runtime required")
 	}
 
 	canonical := func(path string) bool {

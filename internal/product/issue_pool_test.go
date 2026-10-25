@@ -554,3 +554,17 @@ func TestIssuePoolCancellationJoinsInFlightRead(t *testing.T) {
 	}
 	assertNoIssueAdmission(t, p.Admitter)
 }
+
+func TestIssuePoolSplitChildCannotCreateNewWaveOrStarveNextRoot(t *testing.T) {
+	p, api := issuePoolFixture(t, 42, 43)
+	p.Attempts = 2
+	setPoolItem(t, api, 0, func(issue *github.Issue) { issue.Body += "\n<!-- harness-split-child:fixture -->\n" })
+	result, err := p.Scan(context.Background())
+	if err != nil || len(result.Admitted) != 1 || !reflect.DeepEqual(result.Held, []int{42}) {
+		t.Fatal("split child starved root", result, err)
+	}
+	waves, err := p.Admitter.Store.Waves(context.Background())
+	if err != nil || len(waves) != 1 || waves[0].SourceID != issueSourceID(17, 43) {
+		t.Fatal("wrong Issue became a Wave", waves, err)
+	}
+}

@@ -166,7 +166,7 @@ chmod 600 product-request.json
 
 Pのstage/product flagと初期policy版はコマンドが指定し、実行上限・main sessionは保存した`kernel.json`から決めます。入力からpolicy、session、candidateを設定できません。JSONは12 MiB、元要求は8 MiB、request IDは4096 bytes、WorkItemは1〜128件/各定義64 KiBまでです。コマンド自体はmodelやGitHubを呼び出さず、commit後にdaemonへbest-effort hintを送ります。
 
-これはPのsource受付です。製品Taskのmodel dispatchには、稼働中executorと同じ隔離済み`product_v2` runtime、設定済みrepository/policy、認証済みのworkspace準備証跡が必要です。未登録時は`product_readiness_unavailable`で保留します。公開gateや正式なCloud承認、P Waveの最終受入を省略しません。[保存契約](docs/product-operations.md)を参照してください。
+これはPのsource受付です。製品Taskのmodel dispatchには、稼働中executorと同じ隔離済み`product_v2` / `product_v3` runtime、設定済みrepository/policy、認証済みのworkspace準備証跡が必要です。未登録時は`product_readiness_unavailable`で保留します。公開gateや正式なCloud承認、P Waveの最終受入を省略しません。[保存契約](docs/product-operations.md)を参照してください。
 
 ### GitHub Issueの明示的な受付
 

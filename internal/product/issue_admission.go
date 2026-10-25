@@ -152,6 +152,11 @@ func (a IssueAdmitter) admit(ctx context.Context, number int, selected func(gith
 	if selected != nil && !selected(issue) {
 		return domain.Wave{}, errIssueNotSelected
 	}
+	// Generated children belong to their existing Wave. Their requirement may
+	// itself quote a valid harness-scope block; that is never a fresh root.
+	if strings.Contains(issue.Body, "```harness-split-part") || strings.Contains(issue.Body, "<!-- harness-split-child:") {
+		return domain.Wave{}, errors.New("split child Issue requires its existing Wave lineage")
+	}
 	scope, err := verification.ParseScope(issue.Body)
 	if err != nil {
 		return domain.Wave{}, err

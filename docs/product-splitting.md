@@ -111,3 +111,19 @@ trusted host 用の PrepareProductSplitExecution は、現在の root proposal�
 receipt は元 request の digest と proposal/plan/allocation、全 creation の ID/digest を固定し、head/history/admission および子別の独立 witness を保存する。receipt や既知 journal の欠落を新規 intent で補修せず、残った receipt だけでも上流の再作成・枠返却・初回 POST ID の再利用を拒否する。子別 witness を送信/照合 worker の対象列挙にも残す。exact replay/reopen は同じ集合を返し、Wave pause 中は既存集合の監査だけが可能である。
 
 検査は二人目の子の journal 保存と最終 witness 保存の故障注入による全 rollback、保存後の各証拠喪失/exact 復旧、receipt だけ残る喪失、全初回 journal 喪失時の再生成拒否、複数 DB 接続の同時採用を確認する。外部送信や子 WorkItem 登録・親退役はこの port で行わない。model main からの版付き tool/実 session 認可は次段階でこの transaction へ接続する。
+
+## main の明示採用 tool（product_v3）
+
+common runtime の private 設定を `product_tools: true` / `product_tool_profile: product_v3` にした新規 parent thread だけに、product_split を追加する。v1/v2 の保存済み schema は変えず、profile の不一致は既存の明示 main rotation / 新 Task への引き渡しで解決する。Task の v3 tool set は v2 と同一で、分割の構造操作は公開しない。controller も実 session/run/thread/turn、現在の charged Wave scope、pinned profile と parent 種別を同じ transaction で認可する。
+
+Task は split_proposal 種別の JSON Artifact と親へのメッセージで分割判断を依頼できる。メッセージ本文だけでは採用しない。main は product_split に schema_version=1、現在の target、proposal_artifact_id を渡して明示採用する。controller は同じ Wave/scope/policy の読取可能な committed Artifact（application/json、最大1MiB）を private object の byte 数・digest と照合し、型付き proposal の全 criterion/part 対応を検証する。repository、現在 registration digest、owner、全送信 journal は host が決める。
+
+Artifact ID/digest、実 session/run/call と preparation receipt を結ぶ採用記録を、全子の準備と tool operation の確定と同じ transaction に保存する。末尾の tool receipt 保存に失敗すると早期 turn binding まで rollback する。exact call replay は同じ応答を返し、採用証拠の欠落は自動修復しない。別 call で保存済みの分割を置き換えない。採用記録だけが残った場合も、上流の新 key・枠返却・初回 journal の再生成を拒否する。
+
+応答の completed は準備処理の完了を意味し、子 Issue の作成成功・子の実行許可・親退役・最終受入を表さない。private workspace を含む host projection は返さず、preparation ID/digest・子数・prepared stage だけを返す。実 POST には別途 publication.split の host allowlist と送信直前 gate が必要である。実 model の P 全体受入、子の登録・part scope/depth/source 系譜と親 gateway は引き続き必要である。
+
+分割子の body に元の harness-scope が引用されても、harness-split-part fence または harness-split-child marker がある Issue は新しい root の受付対象にしない。明示 Issue 受付と Issue pool が同じ判定を使い、pool は保留した子を越えて次の独立 source を処理する。marker を除去された既知資源と子の実行 source の結付けは、子 registration 段階でも別途認証する。
+
+全子の preparation が確定すると、その親 WorkItem の通常 model dispatch・workspace 準備・sealing・runner・review/quality を保留する。同じ scope/policy 内の plan 更新でも保留を引き継ぎ、別の登録 root には広げない。receipt と子別 witness に対象親と受付 target を保存し、親 source/proposal の監査と分割送信直前 gate はこの通常実行保留と区別する。旧形式で対象親/epoch が不明な証拠を、新しい既定値で補充しない。監査の exact replay は旧 JSON/digest を保ち、実行判定は不明として保留する。
+
+同じ親・scope・policy の採用済み分割は、plan revision や call/key を変えても新しい子集合として採用しない。現在の intent と同じ ParentHeadID だけを分割用の監査/送信照合から除外して、別 head の採用済み証拠を保留にする。新しい main run からの再採用、直接 metadata port からの再作成、元 intent の direct/GitHub 単一 POST をそれぞれ検査する。

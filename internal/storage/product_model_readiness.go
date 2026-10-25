@@ -54,8 +54,8 @@ func (k *KernelStore) BindProductModelRuntime(config ProductModelRuntime) (func(
 	}
 	raw, err := json.Marshal(config)
 	var frozen ProductModelRuntime
-	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &frozen) != nil || !validSourceDigest(frozen.RuntimeDigest) || frozen.ToolProfile != "product_v2" || strings.TrimSpace(frozen.Model) == "" || !utf8.ValidString(frozen.Model) || strings.ContainsAny(frozen.Model, "\x00\r\n") || len(frozen.Model) > contract.MaxInline || len(frozen.Repositories) < 1 || len(frozen.Repositories) > 128 {
-		return nil, errors.New("bounded host model, product_v2 runtime and repositories required")
+	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &frozen) != nil || !validSourceDigest(frozen.RuntimeDigest) || (frozen.ToolProfile != "product_v2" && frozen.ToolProfile != "product_v3") || strings.TrimSpace(frozen.Model) == "" || !utf8.ValidString(frozen.Model) || strings.ContainsAny(frozen.Model, "\x00\r\n") || len(frozen.Model) > contract.MaxInline || len(frozen.Repositories) < 1 || len(frozen.Repositories) > 128 {
+		return nil, errors.New("bounded host model, product_v2/v3 runtime and repositories required")
 	}
 	ids := map[int64]bool{}
 	for i := range frozen.Repositories {

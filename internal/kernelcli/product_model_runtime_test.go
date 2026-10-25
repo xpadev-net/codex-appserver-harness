@@ -36,10 +36,21 @@ func TestProductModelRuntimeRequiresCompletePrivateCurrentConfiguration(t *testi
 		t.Fatal(err)
 	}
 	defer k.Close()
-	for _, mode := range []string{"valid", "disabled", "legacy", "root", "model", "isolation", "binary", "writable_binary", "public_home", "launcher", "profile", "auth"} {
+	for _, mode := range []string{"valid", "v3", "disabled", "legacy", "root", "model", "isolation", "binary", "writable_binary", "public_home", "launcher", "profile", "auth"} {
 		t.Run(mode, func(t *testing.T) {
-			c, runtime := productModelRuntimeFixture(t, k, main.Model)
+			targetStore, targetMain := k, main
+			if mode == "v3" {
+				var openErr error
+				targetStore, targetMain, openErr = openKernel(context.Background(), cliRoot(t))
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				defer targetStore.Close()
+			}
+			c, runtime := productModelRuntimeFixture(t, targetStore, targetMain.Model)
 			switch mode {
+			case "v3":
+				runtime.ProductToolProfile = "product_v3"
 			case "disabled":
 				runtime.ProductTools = false
 			case "legacy":
@@ -70,20 +81,20 @@ func TestProductModelRuntimeRequiresCompletePrivateCurrentConfiguration(t *testi
 					t.Fatal(err)
 				}
 			}
-			config, err := productModelRuntime(k, runtime, map[int64]product.ExecutionRepository{17: c.Repositories[0]})
+			config, err := productModelRuntime(targetStore, runtime, map[int64]product.ExecutionRepository{17: c.Repositories[0]})
 			if mode == "disabled" || mode == "legacy" {
 				if err != nil || config != nil {
 					t.Fatal("local-only executor enabled models", config, err)
 				}
 				return
 			}
-			if mode != "valid" {
+			if mode != "valid" && mode != "v3" {
 				if err == nil {
 					t.Fatal("incomplete runtime activated", mode, config)
 				}
 				return
 			}
-			if err != nil || config == nil || len(config.RuntimeDigest) != 64 || config.Model != main.Model || config.Repositories[0].Policy.RepositoryID != 17 {
+			if err != nil || config == nil || len(config.RuntimeDigest) != 64 || config.Model != targetMain.Model || config.Repositories[0].Policy.RepositoryID != 17 || config.ToolProfile != runtime.ProductToolProfile {
 				t.Fatal(config, err)
 			}
 		})
