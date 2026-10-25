@@ -125,7 +125,7 @@ func startSplitCreationOwner(t *testing.T, k *KernelStore, job ProductSplitCreat
 		_ = cmd.Wait()
 	})
 	wait := 5 * time.Second
-	if len(timeout) > 0 && timeout[0] > 0 && timeout[0] <= 30*time.Second {
+	if len(timeout) > 0 && timeout[0] > 0 && timeout[0] <= time.Minute {
 		wait = timeout[0]
 	}
 	deadline := time.Now().Add(wait)

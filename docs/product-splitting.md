@@ -268,4 +268,14 @@ SQLite の検査は枠上限・全件原子性・途中失敗 rollback・各証�
 
 private HTTP spec は親となる子自身の保存済み source policy を必要とする。Wave が direct の場合も、実 HTTP helper はその子 Issue を repository/Issue の bookend GET で再取得する。send gate は5秒以内の ready snapshot の ID/digest を固定し、activation 時にも同じ snapshot と freshness を照合する。hold、closed、本文/identity の変更、古い source、変更後に本文だけ元へ戻す ABA は以前の gate を再利用できない。GitHub 起点の Wave では元の root source 検査も維持する。
 
-one-use activation、物理 process group の停止、停止後の GET 照合、unknown 時の非再送と未 activation 時だけの有界 retry は既存契約を維持する。送信前に source が不成立なら activation/POST を行わず、安全な abort として戻る場合がある。試験は SQLite、実 subprocess/process-group と deterministic gh transport を使い、実 GitHub への孫 Issue 作成や model の split E2E とは区別する。孫の全件登録・再帰 part coverage・Task/model 実行は後続の接続まで保留する。
+one-use activation、物理 process group の停止、停止後の GET 照合、unknown 時の非再送と未 activation 時だけの有界 retry は既存契約を維持する。送信前に source が不成立なら activation/POST を行わず、安全な abort として戻る場合がある。試験は SQLite、実 subprocess/process-group と deterministic gh transport を使い、実 GitHub への孫 Issue 作成や model の split E2E とは区別する。孫の scope は次の祖先付き集合で保存する。全件登録・再帰 part coverage・Task/model 実行は後続の接続まで保留する。
+
+## 祖先と全 sibling を保持した孫 scope の一括保存
+
+全孫の作成 journal が物理停止・GET 照合を終えた場合、BindProductSplitChildScopes は専用の nested envelope に完全な local scope 集合を保存する。集合 head/history/admission、各 binding の head/history/admission、各 numeric Issue source の記録は、元の全祖先 group、実在する nested allocation、今回の全孫 scope を共通の snapshot として保持する。2孫の場合は11記録を同一 transaction で保存し、16MiBを超える snapshot は採用しない。root の既存形式は変更しない。
+
+いずれか一つの記録だけが残った場合も、祖先と今回の全孫の numeric Issue 所有権・creation chain・消費済み retry・予約枠を保持する。負の witness 照会と recovery work list は、外側の祖先 group と内側の孫集合を独立に参照する。失われた正式記録をそこから復元したり、通常 root として再取り込みしたりしない。
+
+新規集合は live な current target と fresh な親 source を要求し、全子の停止・GET・local criterion/part/depth と元条件への対応を再検査する。pause/方向修正後も保存済み集合は静的な監査対象として保持するが、旧集合を新 scope へ付け替えない。各独立 index の欠落は exact 復旧を必要とし、途中保存失敗は全 rollback する。他の scope が保持する numeric source との衝突も保留する。
+
+この保存は孫 WorkItem の登録、source ready、Task/model/runner、品質または親退役の許可ではない。再帰登録・local part coverage と実行 gate は引き続き保留する。欠落・原子性の検査では、全 subprocess を停止・GET 照合した fixture DB を private なディレクトリへ SQLite VACUUM INTO で複製し、外部操作を再送せず保存状態の喪失を検査する。
