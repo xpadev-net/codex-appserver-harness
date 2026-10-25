@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-func nestedRegistrationScopeFixture(t *testing.T) (*KernelStore, ProductSplitChildPlanRequest, ProductNestedSplitChildScopes) {
+func nestedRegistrationScopeFixture(t *testing.T, depth ...int) (*KernelStore, ProductSplitChildPlanRequest, ProductNestedSplitChildScopes) {
 	t.Helper()
-	k, r := nestedObservedScopesFixture(t)
+	k, r := nestedObservedScopesFixture(t, depth...)
 	if _, err := k.BindProductSplitChildScopes(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}

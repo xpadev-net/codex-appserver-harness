@@ -16,8 +16,13 @@ import (
 
 func splitChildScopesFixture(t *testing.T, all, retry bool, before ...func(*KernelStore, ProductSplitChildPlanRequest)) (*KernelStore, ProductSplitProposalRequest, ProductSplitChildPlanRequest, []ProductSplitCreate) {
 	t.Helper()
+	return splitChildScopesFixtureWithDepth(t, all, retry, nil, before...)
+}
+
+func splitChildScopesFixtureWithDepth(t *testing.T, all, retry bool, depth []int, before ...func(*KernelStore, ProductSplitChildPlanRequest)) (*KernelStore, ProductSplitProposalRequest, ProductSplitChildPlanRequest, []ProductSplitCreate) {
+	t.Helper()
 	ctx := context.Background()
-	k, parent, _, r := splitChildPlanFixture(t)
+	k, parent, _, r := splitChildPlanFixture(t, depth...)
 	prepared, err := k.PrepareProductSplitExecution(ctx, parent)
 	if err != nil {
 		t.Fatal(err)

@@ -16,10 +16,10 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/verification"
 )
 
-func nestedCreationFixture(t *testing.T) (*KernelStore, ProductSplitChildPlanRequest, ProductSplitCreate) {
+func nestedCreationFixture(t *testing.T, depth ...int) (*KernelStore, ProductSplitChildPlanRequest, ProductSplitCreate) {
 	t.Helper()
 	ctx := context.Background()
-	k, _, rootRequest, _ := splitChildScopesFixture(t, true, false)
+	k, _, rootRequest, _ := splitChildScopesFixtureWithDepth(t, true, false, depth)
 	if _, err := k.BindProductSplitChildScopes(ctx, rootRequest); err != nil {
 		t.Fatal(err)
 	}

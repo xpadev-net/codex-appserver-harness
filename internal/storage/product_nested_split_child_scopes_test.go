@@ -17,10 +17,10 @@ import (
 
 // One physical fixture is copied only after every native group is stopped.
 // Adversarial metadata tests never repeat or infer an external creation.
-func nestedObservedScopesFixture(t *testing.T) (*KernelStore, ProductSplitChildPlanRequest) {
+func nestedObservedScopesFixture(t *testing.T, depth ...int) (*KernelStore, ProductSplitChildPlanRequest) {
 	t.Helper()
 	ctx := context.Background()
-	k, r, first := nestedCreationFixture(t)
+	k, r, first := nestedCreationFixture(t, depth...)
 	plan := first.Value.Ancestry.Value.Plan
 	for i, child := range plan.Children {
 		job, err := k.PrepareProductSplitCreate(ctx, r, child.ID, []string{first.Value.OwnerID, "second-scope-child"}[i])
