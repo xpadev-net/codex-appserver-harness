@@ -102,18 +102,25 @@ func TestProductDeeperSplitProposalUsesCanonicalGrandchildAndRetainsLocalParts(t
 				}
 			}
 			if _, err := k.PrepareProductNestedSplitProposal(ctx, r, ref); err == nil || mode != "late_failure" && !errors.Is(err, ErrProductSplitHeld) {
- t.Fatal("invalid deeper admission accepted or failed for an unrelated reason", err)
- }
+				t.Fatal("invalid deeper admission accepted or failed for an unrelated reason", err)
+			}
 			var n int
 			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind IN ('product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request') AND json_extract(payload,'$.value.proposal_head_id')=?", head).Scan(&n); err != nil || n != 0 {
 				t.Fatal("partial deeper proposal", n, err)
-			}            if mode == "ancestor_stale" {
-                ancestorID := previous.Value.Scopes.Value.Request.ParentWorkItemID
-                source, err := k.ReadProductSplitChildSource(ctx, r.Target, ancestorID)
-                if err != nil { t.Fatal(err) }
-                if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, ancestorID, source.ID, source.Value.Facts); err != nil { t.Fatal(err) }
-                if _, err := k.PrepareProductNestedSplitProposal(ctx, r, ref); err != nil { t.Fatal("refreshing only the stale ancestor did not admit the same proposal at the same clock", err) }
-            }
+			}
+			if mode == "ancestor_stale" {
+				ancestorID := previous.Value.Scopes.Value.Request.ParentWorkItemID
+				source, err := k.ReadProductSplitChildSource(ctx, r.Target, ancestorID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.ObserveProductSplitChildSource(ctx, r.Target, ancestorID, source.ID, source.Value.Facts); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := k.PrepareProductNestedSplitProposal(ctx, r, ref); err != nil {
+					t.Fatal("refreshing only the stale ancestor did not admit the same proposal at the same clock", err)
+				}
+			}
 
 		})
 	}
