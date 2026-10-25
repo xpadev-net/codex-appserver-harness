@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -21,7 +23,60 @@ func splitScopeUnreadableForWave(ctx context.Context, q queryer, waveID string) 
  WHEN kind='product_split_child_scope_source' THEN
  coalesce(json_type(payload,'$.request')='object' AND json_extract(payload,'$.request.target.wave_id')=work_item_id AND json_type(payload,'$.request.proposal_id')='text' AND json_type(payload,'$.parent_head_id')='text',0)=0
  ELSE coalesce(json_type(payload,'$.value.request')='object' AND json_extract(payload,'$.value.request.target.wave_id')=work_item_id AND json_type(payload,'$.value.request.proposal_id')='text' AND json_type(payload,'$.value.parent_head_id')='text',0)=0 END)`, waveID).Scan(&malformed)
-	return malformed, err
+	if err != nil || malformed {
+		return malformed, err
+	}
+	return splitLegacyScopeUnreadableForWave(ctx, q, waveID)
+}
+
+// Older history owners identify a proposal, not a Wave. Resolve that owner
+// only from authenticated immutable proposal history. An unattributable old
+// witness remains a prohibition until the original evidence is restored.
+func splitLegacyScopeUnreadableForWave(ctx context.Context, q queryer, waveID string) (bool, error) {
+	var raw []byte
+	err := q.QueryRowContext(ctx, `SELECT json_group_array(work_item_id) FROM (SELECT DISTINCT work_item_id FROM records WHERE kind IN ('product_split_child_scope_history','product_split_child_scopes_history','product_split_registrations_history') AND work_item_id LIKE 'product-split-%'
+ AND CASE WHEN NOT json_valid(payload) THEN 1 ELSE coalesce(json_type(payload,'$.value.request.target.wave_id')='text' AND json_extract(payload,'$.value.request.proposal_id')=work_item_id,0)=0 END LIMIT ?)`, maxProductCoverageMerges+1).Scan(&raw)
+	if err != nil {
+		return false, err
+	}
+	var owners []string
+	if err := json.Unmarshal(raw, &owners); err != nil {
+		return false, err
+	}
+	if len(owners) == 0 {
+		return false, nil
+	}
+	wave, err := loadWave(ctx, q, waveID)
+	if err == nil && (wave.Policy.Stage != "P" || !wave.Policy.Product) {
+		return false, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	if len(owners) > maxProductCoverageMerges {
+		return true, nil
+	}
+	for _, owner := range owners {
+		var proposal ProductSplitProposal
+		err := taskEvidenceRecord(ctx, q, "product_split_proposal_history", owner, &proposal)
+		if err != nil {
+			if err == sql.ErrNoRows || readinessHoldError(err) {
+				return true, nil
+			}
+			return false, err
+		}
+		digest, err := contentDigest(proposal.Value)
+		if err != nil {
+			return false, err
+		}
+		if proposal.ID != owner || proposal.Digest != digest || owner != structureID("product-split-", splitProposalHead(proposal.Value.Request), digest) || !proposal.Value.Request.Target.Valid() || proposal.Value.CreatedAt.IsZero() {
+			return true, nil
+		}
+		if proposal.Value.Request.Target.WaveID == waveID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func splitChildScopeParentKnown(ctx context.Context, q queryer, head string) (bool, error) {

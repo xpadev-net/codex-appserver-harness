@@ -165,11 +165,11 @@ func loadProductSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplit
 	if err == sql.ErrNoRows {
 		var known bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scopes_admission' AND id=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scopes_history' AND work_item_id=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scopes_history' AND (work_item_id=? OR json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?))
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_scope_source' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.request.proposal_id')=?)
  OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_registrations','product_split_registrations_history','product_split_registrations_admission') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.request.proposal_id')=?)
- OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id'))=?)`, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item') AND coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.request.proposal_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.request.proposal_id'))=?)`, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
@@ -257,7 +257,7 @@ func (k *KernelStore) BindProductSplitChildScopes(ctx context.Context, r Product
 			return ProductSplitChildScopes{}, ErrProductSplitHeld
 		}
 		workID := binding.Value.Child.Value.WorkItemID
-		for _, record := range []struct{ kind, id, owner string }{{"product_split_child_scope", workID, r.Target.WaveID}, {"product_split_child_scope_history", binding.ID, r.ProposalID}, {"product_split_child_scope_admission", workID, r.Target.WaveID}} {
+		for _, record := range []struct{ kind, id, owner string }{{"product_split_child_scope", workID, r.Target.WaveID}, {"product_split_child_scope_history", binding.ID, r.Target.WaveID}, {"product_split_child_scope_admission", workID, r.Target.WaveID}} {
 			var exists bool
 			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind=? AND id=?)", record.kind, record.id).Scan(&exists); err != nil {
 				return ProductSplitChildScopes{}, err
@@ -281,7 +281,7 @@ func (k *KernelStore) BindProductSplitChildScopes(ctx context.Context, r Product
 			return ProductSplitChildScopes{}, err
 		}
 	}
-	for _, record := range []struct{ kind, id, owner string }{{"product_split_child_scopes", r.ProposalID, r.Target.WaveID}, {"product_split_child_scopes_history", saved.ID, r.ProposalID}, {"product_split_child_scopes_admission", r.ProposalID, r.Target.WaveID}} {
+	for _, record := range []struct{ kind, id, owner string }{{"product_split_child_scopes", r.ProposalID, r.Target.WaveID}, {"product_split_child_scopes_history", saved.ID, r.Target.WaveID}, {"product_split_child_scopes_admission", r.ProposalID, r.Target.WaveID}} {
 		if err := kernelRecordTx(ctx, tx, record.kind, record.id, record.owner, saved); err != nil {
 			return ProductSplitChildScopes{}, err
 		}

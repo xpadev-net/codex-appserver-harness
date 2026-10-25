@@ -172,6 +172,8 @@ split の照合 worker は stopped journal を既存の GET-only reconciler で 
 
 探索は既存 creation/resource に加え、scope・登録 receipt と registration/version/membership の独立 witness を含める。scope の opaque row cursor は payload や長いキーを解釈せずに有界のページ送りを行い、各行の不正な JSON/shape は unavailable として報告する。保存済みの witness から creation ID を見つけても送信権限は得ず、元の全証拠の認証を必要とする。
 
+新規 scope/登録 history は本文と独立した所属列にも Wave ID を保存する。従来の proposal ID を所属とする history も本文を書き換えずに読める。旧 history の本文が壊れた場合は、digest/ID を照合した元 proposal の不変履歴で Wave を特定する。それも失われて所属を証明できなければ、元証拠の復旧まで P の処理を保留し、汎用 K には持ち込まない。
+
 JSON probe は不正な payload が別 Wave の SQL を壊さないように扱う。一方、同じ Wave に所有者不明の scope/登録証拠が残れば、その Wave の枠・新規採用・親実行は保留する。壊れた証拠を無視して枠を返却したり、再作成で補修したりしない。メモリ上の OnMutation は保存後の再評価ヒントであり、main への durable な split 完了購読・通知は別途接続する。
 
 実 subprocess と fixture gh で二つの POST/物理停止、trusted GET の bookend、全子登録、再起動 replay、末尾 commit 失敗と pause/resume、並行 GET/cancel join、別 Wave の不正証拠の隔離を検証する。これらは実 GitHub/model での製品受入ではない。
