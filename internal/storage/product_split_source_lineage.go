@@ -87,6 +87,10 @@ func (k *KernelStore) splitSourceLineageReadyTx(ctx context.Context, tx *sql.Tx,
 		if err != nil {
 			return nil, splitEvidenceErr(err)
 		}
+		// A split stays in one repository and its HTTP spec selects one trusted
+		// IssueSourcePolicy for that repository (validateSplitHTTPPolicy). Ready
+		// under a different historical configuration cannot authorize this
+		// operation; adopting another policy requires explicit new authority.
 		if source.Value.Status != "ready" || source.Value.Facts.PolicyDigest != policyDigest {
 			return nil, ErrProductSplitHeld
 		}
