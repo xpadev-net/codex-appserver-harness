@@ -47,6 +47,9 @@ func readSplitProof[T any](ctx context.Context, tx *sql.Tx, kind string, input a
 		if err := json.Unmarshal(raw, &copy); err != nil {
 			return zero, err
 		}
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		return copy, nil
 	}
 	memo.active[key] = true
