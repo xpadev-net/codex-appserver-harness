@@ -112,25 +112,38 @@ func (k *KernelStore) continuationParentTx(ctx context.Context, q queryer, reque
 	if err != nil {
 		return empty, err
 	}
+	if err := continuationParentContractTx(ctx, q, request, w, parent); err != nil {
+		return empty, err
+	}
+	return parent, nil
+}
+
+// The merge reader authenticates transport, quality and receipt history first.
+// This boundary validates the original registration and the new source contract;
+// both registration and later replay/activation must pass the same scope rule.
+func continuationParentContractTx(ctx context.Context, q queryer, request ProductContinuationRequest, w domain.Wave, parent ProductMergedWorkItem) error {
 	p := parent.Value.Product.Value
 	if parent.Digest != request.ParentReceiptDigest || parent.Value.Projection == nil || p.Target.WaveID != w.ID || p.WorkItem.ID == request.Definition.ID || p.WorkItem.RepositoryID != request.Definition.RepositoryID || p.Repository != request.Definition.Repository || p.Target.ScopeRevision > w.ScopeRevision || p.Target.PolicyRevision > w.Policy.Revision || p.Target.ScopeRevision == w.ScopeRevision && p.Target.PolicyRevision == w.Policy.Revision {
-		return empty, ErrProductContinuationHeld
+		return ErrProductContinuationHeld
 	}
 	var registration ProductWorkItemRegistrationSnapshot
 	if err := taskEvidenceRecord(ctx, q, "product_work_item_registration_version", structureID("product-work-", p.WorkItem.ID, parent.Value.RegistrationDigest), &registration); err != nil {
-		return empty, err
+		return err
 	}
-	if registration.Value.Source != w.Source || registration.Value.SourceID != w.SourceID {
-		return empty, ErrProductContinuationHeld
+	// This legacy continuation shape registers a root definition and cannot
+	// carry a child's local scope. Never silently widen a merged split child
+	// into an unscoped successor, including replay and activation checks.
+	if registration.Value.SplitScope != nil || registration.Value.Source != w.Source || registration.Value.SourceID != w.SourceID {
+		return ErrProductContinuationHeld
 	}
 	var current ProductTargetSnapshot
 	if err := taskEvidenceRecord(ctx, q, "product_target", productTargetID(p.Target, p.WorkItem.ID), &current); err != nil {
-		return empty, err
+		return err
 	}
 	if !reflect.DeepEqual(current, parent.Value.Projection.After) || current.Value.WorkItem.Phase != domain.Merged {
-		return empty, ErrProductContinuationHeld
+		return ErrProductContinuationHeld
 	}
-	return parent, nil
+	return nil
 }
 
 // RegisterProductContinuation atomically registers a new WorkItem and its

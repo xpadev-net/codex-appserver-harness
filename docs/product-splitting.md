@@ -376,3 +376,7 @@ publication は引き続き open な own Issue を要求する。最終目的の
 最終 plan の optional `split_sources_digest` は全 source の semantic ID・版・登録と scope を固定する。同一内容の GET による `CheckedAt` の更新では plan を変えず、編集後に元の内容へ戻った場合も新しい semantic version により古い plan を失効させる。plan 採用、final runner/fetch の起動前、最終検証 evidence と受入で、現在の全 source と pin を照合する。split のない旧 plan の wire/hash は維持し、pin がない旧 split plan へ実行権限を補わない。
 
 canonical な source 確認と並列 GET の controlled Go テストを実施するが、これは子 Task の実行許可や実サービスでの全体完了を表さない。closed own merge の status reducer は認証済み入力境界の確認であり、実 merge の受入証拠には数えない。既定8子の実接続性能、managed delegated close、子の継続作業と実行許可は後続の受入対象である。
+
+## 旧 continuation port の scope 制約
+
+`RegisterProductContinuation` の既存の own-merge 起点形式は Root definition を登録するため、split child の local scope を保持できない。元の正式な登録 version に `split_scope` がある親は、登録・再送・live activation の共通チェックで保留する。古い leaf の merge を Root の作業へ暗黙拡大しない。Root の own-merge continuation は維持し、子の scope を保持する別形式と、own merge を持たない delegated root の tree-origin continuation は独立した受入対象とする。
