@@ -21,7 +21,7 @@ func splitScopeWitnessCreation(ctx context.Context, q queryer, kind, key string)
 		if len(scopes.Value.Children) > 0 {
 			id = scopes.Value.Children[0].Value.CreationID
 		}
-	case "product_split_registrations", "product_split_registrations_history", "product_split_registrations_admission", "product_split_parent_scope", "product_split_parent_scope_history", "product_split_parent_scope_admission", "product_nested_split_proposal", "product_nested_split_proposal_history", "product_nested_split_proposal_admission", "product_nested_split_proposal_request":
+	case "product_split_registrations", "product_split_registrations_history", "product_split_registrations_admission", "product_split_parent_scope", "product_split_parent_scope_history", "product_split_parent_scope_admission", "product_nested_split_proposal", "product_nested_split_proposal_history", "product_nested_split_proposal_admission", "product_nested_split_proposal_request", "product_nested_split_children", "product_nested_split_children_history", "product_nested_split_children_admission", "product_nested_split_child_intent", "product_nested_split_child_intent_history", "product_nested_split_child_intent_admission":
 		var registered ProductSplitRegistrations
 		err = taskEvidenceRecord(ctx, q, kind, key, &registered)
 		if len(registered.Value.Children) > 0 {

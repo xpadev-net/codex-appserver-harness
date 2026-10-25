@@ -22,7 +22,7 @@ func nestedProposalFixture(t *testing.T) (*KernelStore, ProductSplitProposalRequ
 	return k, r, proof, saved
 }
 
-func TestProductNestedSplitProposalPinsWholeParentProofAndDoesNotCreateDescendants(t *testing.T) {
+func TestProductNestedSplitProposalPinsWholeParentProofAndDoesNotCreateExecution(t *testing.T) {
 	ctx := context.Background()
 	k, r, _, _ := nestedSplitContextFixture(t)
 	proof, err := k.PrepareProductSplitParentScope(ctx, r.Target, r.ParentWorkItemID)
@@ -43,15 +43,19 @@ func TestProductNestedSplitProposalPinsWholeParentProofAndDoesNotCreateDescendan
 		t.Fatal("generic proposal reader lost typed envelope", read, err)
 	}
 	planRequest := ProductSplitChildPlanRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID, ProposalID: read.ID, ProposalDigest: read.Digest}
-	if _, err := k.PrepareProductSplitChildPlan(ctx, planRequest); !errors.Is(err, ErrProductSplitHeld) {
-		t.Fatal("descendants admitted without ancestry witnesses", err)
+	plan, err := k.PrepareProductSplitChildPlan(ctx, planRequest)
+	if err != nil || len(plan.Children) != 2 {
+		t.Fatal("ancestor-pinned metadata plan denied", plan, err)
+	}
+	if _, err := k.ReserveProductSplitChildren(ctx, planRequest); !errors.Is(err, ErrProductSplitHeld) {
+		t.Fatal("metadata plan reserved execution seats", err)
 	}
 	if _, err := k.PrepareProductSplitExecution(ctx, r); !errors.Is(err, ErrProductSplitHeld) {
 		t.Fatal("ordinary root port adopted nested implicitly", err)
 	}
 	var count int
 	if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='product_split_child_intent' AND json_extract(payload,'$.value.parent_work_item_id')=?", r.ParentWorkItemID).Scan(&count); err != nil || count != 0 {
-		t.Fatal("nested metadata created child intents", count, err)
+		t.Fatal("nested metadata wrote unprotected legacy intents", count, err)
 	}
 	after, err := k.WaveOperationBudget(ctx, r.Target.WaveID)
 	if err != nil || !reflect.DeepEqual(before, after) {

@@ -141,9 +141,29 @@ func loadSplitIntentRegistrationTx(ctx context.Context, tx *sql.Tx, proposal Pro
 // It is not a send fence, budget reservation or child registration permission.
 func loadProductSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitChildPlan, error) {
 	var plan ProductSplitChildPlan
+	// Typed nested evidence selects its own namespace before decoding any
+	// legacy set. A stray legacy record cannot shadow an authenticated plan.
+	var nested bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_children' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?)", r.ProposalID, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})).Scan(&nested); err != nil {
+		return plan, err
+	}
+	if nested {
+		saved, err := loadNestedSplitChildPlan(ctx, tx, r)
+		if err != nil {
+			return plan, err
+		}
+		return saved.Value.Plan, nil
+	}
 	var set, history ProductSplitChildSet
 	err := taskEvidenceRecord(ctx, tx, "product_split_children", r.ProposalID, &set)
 	if errors.Is(err, sql.ErrNoRows) {
+		nested, nestedErr := loadNestedSplitChildPlan(ctx, tx, r)
+		if nestedErr == nil {
+			return nested.Value.Plan, nil
+		}
+		if nestedErr != sql.ErrNoRows {
+			return plan, nestedErr
+		}
 		var known bool
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_children_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_children_history','product_split_child_intent','product_split_child_intent_history','product_split_child_intent_admission') AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_allocation','product_split_allocation_admission') AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_allocation_history' AND work_item_id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_work_item_seat' AND json_extract(payload,'$.proposal_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_children' AND operation_key=?)", r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID, r.ProposalID).Scan(&known); err != nil {
 			return plan, err
@@ -184,6 +204,9 @@ func loadProductSplitChildPlan(ctx context.Context, tx *sql.Tx, r ProductSplitCh
 		return plan, splitEvidenceErr(err)
 	}
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest || set.Value.ParentHeadID != splitProposalHead(proposal.Value.Request) {
+		return plan, ErrProductSplitHeld
+	}
+	if proposal.Value.ParentSplitScope != nil {
 		return plan, ErrProductSplitHeld
 	}
 	registration, err := loadSplitIntentRegistrationTx(ctx, tx, proposal)
@@ -260,15 +283,8 @@ func (k *KernelStore) prepareProductSplitChildPlanTx(ctx context.Context, tx *sq
 		return plan, ErrProductSplitHeld
 	}
 	if proposal.Value.ParentSplitScope != nil {
-		return plan, ErrProductSplitHeld
+		return k.prepareNestedSplitChildPlanTx(ctx, tx, r, proposal)
 	}
-
-	// Nested descendants must carry ancestor witnesses before durable intents
-	// can be adopted. A nested proposal alone never grants child creation.
-	if proposal.Value.ParentSplitScope != nil {
-		return plan, ErrProductSplitHeld
-	}
-
 	registration, err := loadSplitIntentRegistrationTx(ctx, tx, proposal)
 	if err != nil {
 		return plan, err
