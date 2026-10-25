@@ -227,3 +227,11 @@ InspectProductSplitProposalContext は、登録済みの子自身の local scope
 入力は1MiBまでで、元登録・全件 group・source/history/pin の欠落、scope/policy/source の失効、hold/closed/本文変更、期限切れ・時計巻戻り、保存済み depth cap を保留として返す。作成時刻・journal/admission ID を持たず、記録・予算・Task を変更しない。通常 root の保存形式・digest は optional field の省略により維持する。
 
 この段階では再分割の永続採用・孫 Issue の作成を許可しない。PrepareProductSplitProposal / PrepareProductSplitExecution と creation preflight は引き続き nested context を保留する。永続的な親 scope の witness、孫作成時の親 Issue source fence、再帰 registration / part coverage をまとめて接続してから解除する。読み取り専用の検査結果は model/runner・送信・品質の許可ではない。
+
+## 再分割のための親 scope 証拠
+
+PrepareProductSplitParentScope は、登録済みの子自身の fresh な source と全件登録を認証し、元の全登録 group を head/history/admission の3記録へ同じ transaction で保存する host port。親となる一つの子だけでなく、全 sibling の numeric Issue identity、scope/登録 digest、creation chain と消費済み retry を保持する。子自身の private source policy digest も固定し、既知の source 記録を失った後に別 policy で初期化し直さない。
+
+この証拠は既存の親/子実行保留、source 所有権、枠/予算、creation の欠落検出と recovery work list に参加する。3記録のどれか一つだけが残った場合も、子 Issue の root 再取込み、親の再実行、journal の再作成、消費済み枠/retry の返却を許可しない。証拠の欠落や内容不一致は exact 復旧を必要とする。reopen/pause の exact replay は保存済み値を保持し、方向修正後の旧 scope を現行の義務へ採用しない。
+
+保存する proof 自体は新しい proposal・子 Issue・Task・実行/品質・親最終受入の許可ではない。再分割の永続採用と孫の送信は引き続き保留し、後続の接続でこの親証拠を固定する。
