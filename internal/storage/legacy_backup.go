@@ -29,6 +29,7 @@ type LegacyBackup struct {
 // BackupLegacyDatabase copies committed SQLite state, including live WAL
 // contents, through SQLite's backup API. It never opens the source for writes,
 // initializes it, or overwrites an existing destination or companion file.
+// The caller supplies cancellation and the deadline for its database size.
 func BackupLegacyDatabase(ctx context.Context, source, destination string) (LegacyBackup, error) {
 	return backupLegacyDatabase(ctx, source, destination, nil)
 }
@@ -92,8 +93,7 @@ func backupLegacyDatabase(ctx context.Context, source, destination string, check
 	if err != nil {
 		return empty, err
 	}
-	copyCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
+	copyCtx := ctx
 	if err := copyLegacySQLite(copyCtx, source, staged, sourceInfo, checkpoint); err != nil {
 		return empty, err
 	}

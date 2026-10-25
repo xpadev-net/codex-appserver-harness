@@ -331,48 +331,54 @@ func TestLegacyBackupRequiresLegacyControllerRootLock(t *testing.T) {
 }
 
 func TestLegacyBackupSourceReplacementNeverPublishesSnapshot(t *testing.T) {
-	_, source, destination := legacyBackupFixture(t)
-	otherPath := kernelPath(t)
-	other, err := Open(otherPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := other.Put(context.Background(), "unapproved", "other", "other", true); err != nil {
-		t.Fatal(err)
-	}
-	if err := other.Close(); err != nil {
-		t.Fatal(err)
-	}
-	retained := backupFileBytes(t, otherPath)
-	replaced := false
-	original := source + ".original"
-	defer func() {
-		if replaced {
-			_ = os.Remove(source)
-			_ = os.Rename(original, source)
-		}
-	}()
-	_, err = backupLegacyDatabase(context.Background(), source, destination, func(phase string) error {
-		if phase != "copy" {
-			return nil
-		}
-		if replaced {
-			return nil
-		}
-		if err := os.Rename(source, original); err != nil {
-			return err
-		}
-		replaced = true
-		return os.Symlink(otherPath, source)
-	})
-	if err == nil || !replaced {
-		t.Fatal("source replacement was not rejected", err)
-	}
-	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
-		t.Fatal("unapproved snapshot was published", err)
-	}
-	if !bytes.Equal(retained, backupFileBytes(t, otherPath)) {
-		t.Fatal("replacement source changed")
+	for _, point := range []string{"source_open", "copy"} {
+		t.Run(point, func(t *testing.T) {
+
+			_, source, destination := legacyBackupFixture(t)
+			otherPath := kernelPath(t)
+			other, err := Open(otherPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := other.Put(context.Background(), "unapproved", "other", "other", true); err != nil {
+				t.Fatal(err)
+			}
+			if err := other.Close(); err != nil {
+				t.Fatal(err)
+			}
+			retained := backupFileBytes(t, otherPath)
+			replaced := false
+			original := source + ".original"
+			defer func() {
+				if replaced {
+					_ = os.Remove(source)
+					_ = os.Rename(original, source)
+				}
+			}()
+			_, err = backupLegacyDatabase(context.Background(), source, destination, func(phase string) error {
+				if phase != point {
+					return nil
+				}
+				if replaced {
+					return nil
+				}
+				if err := os.Rename(source, original); err != nil {
+					return err
+				}
+				replaced = true
+				return os.Symlink(otherPath, source)
+			})
+			if err == nil || !replaced {
+				t.Fatal("source replacement was not rejected", err)
+			}
+			if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+				t.Fatal("unapproved snapshot was published", err)
+			}
+			if !bytes.Equal(retained, backupFileBytes(t, otherPath)) {
+				t.Fatal("replacement source changed")
+			}
+
+		})
 	}
 }
 
