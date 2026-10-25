@@ -193,7 +193,8 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 		dispatcher.OnMutation, dispatcher.Report = wake, report
 		completion := product.CloudCompletionWorker{Reader: product.CloudCompletionReader{Store: k, API: product.GitHubResourceAPI, Routes: routes}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 		reconciliation := product.MergeReconciliationWorker{Reconciler: product.MergeReconciler{Store: k, API: product.GitHubResourceAPI}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
-		workers := []func(context.Context) error{w.Run, dispatcher.Run, completion.Run, reconciliation.Run}
+		splitReconciliation := product.SplitCreationReconciliationWorker{Reconciler: product.SplitCreationReconciler{Store: k, API: product.GitHubSplitResourceAPI, MaxPages: 32}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
+		workers := []func(context.Context) error{w.Run, dispatcher.Run, completion.Run, reconciliation.Run, splitReconciliation.Run}
 		if !externalObserver {
 			observer := product.Observer{Store: k, API: product.GitHubResourceAPI, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 			workers = append(workers, observer.Run)

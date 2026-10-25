@@ -69,3 +69,15 @@ supervisor は wrapper を group leader として起動し、結果ファイル�
 Go subprocess と fixture gh による検査は、実際の argv/stdin・source GET 順序・本文同一性・単一 POST、unknown response、キャンセル時の native descendant 停止、controller reopen と結果喪失、遅延 wrapper の拒否、pause/resume、closed/policy mismatch、public/symlink/未知 field の spec 拒否を確認する。実 GitHub への POST や model/正式 Cloud 承認の受入ではない。
 
 この段階は transport の接続であり、自動 marker 検索/GET 再照合 worker、controller/main の分割採用からの自動起動、子 WorkItem の part scope/depth/source binding、親退役/gateway は残る。未 activation の封鎖後に再開する場合の有界な新 transport attempt も別途照合する。unknown を GET の不在だけで再 POST する許可は追加しない。
+
+## 停止後の GET 再照合 worker
+
+publication を明示的に有効にした daemon pipeline に、GET 専用の SplitCreationReconciliationWorker を接続した。送信中の prepared/unknown intent を起動・停止せず、送信側 supervisor が保存した stopped と物理停止証拠がある一件だけを照合する。既知の observed/aborted は再 GET・再通知しない。controller 終了時は進行中の GET を cancel して join し、モデル turn を起動しない。
+
+対象一覧は head/history/admission/event/gate/lease と外部資源 binding の opaque key を cursor 付きで読む。payload の不正や head の喪失を一件ずつ扱い、別の正常な intent を止めない。資源 binding の破損も unavailable として表示可能な対象へ残す。並行処理は既存 publication workers（1..8）内に固定し、同じ intent は flight/cooldown で重複処理しない。
+
+照合は fixed repository の GET、state=all の Issue/PR 一覧（100件/頁、最大32頁、共有16MiB・30秒）の全頁、候補の point GET、repository bookend GET の順とする。全検索を終える前に単一と判断せず、marker の不在・重複・PR 混入、不正/null の一覧、ページ打切り/失敗、point GET での編集・別 ID・closed、repository の変化は保留する。native POST の成功応答をこの照合の代用にしない。
+
+open の一件で固定済み title/body/marker と一致した場合だけ、trusted RecordProductSplitCreatedIssue へ確定し、commit 後に IPC hint を送る。元 Wave が cancel/旧 scope になった後も、送信済みの外部結果は元 epoch の履歴として追跡する。親の状態や予算を変えず、子 WorkItem/Task・quality・親退役は許可しない。検索の不在や失敗による POST 再送もない。
+
+Go/SQLite と GET fixture の検査は、完全 pagination と bookend、重複・null・打切り・失敗・編集・PR・closed の拒否、cancel 後の追跡、壊れた対象による starvation 防止、commit 前の hint 不在、GET cancel/join、稼働中の実送信 group を停止しないことを確認する。main/controller の分割採用、POST dispatch の自動配置、有界な未送信 successor、子 part scope/depth/source 系譜、親 retirement/gateway は残る。
