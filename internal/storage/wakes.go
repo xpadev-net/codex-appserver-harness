@@ -190,6 +190,9 @@ func (k *KernelStore) wakeNotificationTx(ctx context.Context, tx *sql.Tx, b cont
 	if held {
 		return ErrWakeHeld
 	}
+	if n.Kind == "split_registered" {
+		return checkProductSplitCompletionWakeTx(ctx, tx, b, n)
+	}
 	if b.Kind == "orchestrator" && wave.OrchestratorSessionID == b.ID {
 		if n.Kind == "parent_attention" {
 			return k.checkParentAttentionWakeTx(ctx, tx, b, n)
@@ -276,7 +279,7 @@ func (k *KernelStore) PendingWakeNotifications(ctx context.Context, sessionID st
 				return nil, err
 			}
 			key := gateKey{Target: n.Target, Terminal: n.Kind == "wave_terminal", State: n.WaveState}
-			if n.Kind == "parent_attention" {
+			if n.Kind == "parent_attention" || n.Kind == "split_registered" {
 				key.AttentionID = n.ID
 			}
 			gate, known := gateCache[key]

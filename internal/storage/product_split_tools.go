@@ -14,6 +14,7 @@ import (
 )
 
 type ProductSplitToolAdoption struct {
+	SubscriptionID    string                  `json:"subscription_id,omitempty"`
 	Preparation       ProductSplitPreparation `json:"preparation"`
 	Source            kernelToolOperation     `json:"source"`
 	ArtifactID        string                  `json:"artifact_id"`
@@ -70,7 +71,11 @@ func (k *KernelStore) acceptProductSplitTx(ctx context.Context, tx *sql.Tx, op k
 	if err != nil {
 		return empty, err
 	}
-	adoption := ProductSplitToolAdoption{Preparation: saved, Source: op, ArtifactID: artifact.ID, ArtifactDigest: artifact.Digest, ParentHeadID: saved.Value.ParentHeadID, PreparationID: saved.ID, PreparationDigest: saved.Digest}
+	sub, err := k.ensureOperationSubscriptionTx(ctx, tx, op)
+	if err != nil {
+		return empty, err
+	}
+	adoption := ProductSplitToolAdoption{SubscriptionID: sub.ID, Preparation: saved, Source: op, ArtifactID: artifact.ID, ArtifactDigest: artifact.Digest, ParentHeadID: saved.Value.ParentHeadID, PreparationID: saved.ID, PreparationDigest: saved.Digest}
 	if err := kernelRecordTx(ctx, tx, "product_split_tool_adoption", op.ID, op.Target.WaveID, adoption); err != nil {
 		return empty, err
 	}
@@ -84,7 +89,7 @@ func (k *KernelStore) acceptProductSplitTx(ctx context.Context, tx *sql.Tx, op k
 	if err != nil {
 		return empty, err
 	}
-	return contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{}, ResourceID: saved.ID, Content: string(content)}, nil
+	return contract.ToolReply{SchemaVersion: 1, State: "completed", OperationID: op.ID, SubscriptionIDs: []string{sub.ID}, ResourceID: saved.ID, Content: string(content)}, nil
 }
 
 // Cached completion is an audited preparation response, never a repair of lost
@@ -95,6 +100,16 @@ func verifyProductSplitReplayTx(ctx context.Context, tx *sql.Tx, op kernelToolOp
 		return splitEvidenceErr(err)
 	}
 	if adoption.Source != op || adoption.ArtifactID != request.ProposalArtifactID || !validSourceDigest(adoption.ArtifactDigest) || adoption.PreparationID != reply.ResourceID {
+		return ErrProductSplitHeld
+	}
+	if adoption.SubscriptionID != "" {
+		if len(reply.SubscriptionIDs) != 1 || reply.SubscriptionIDs[0] != adoption.SubscriptionID {
+			return ErrProductSplitHeld
+		}
+		if err := checkProductSplitSubscriptionTx(ctx, tx, op, adoption.SubscriptionID); err != nil {
+			return err
+		}
+	} else if len(reply.SubscriptionIDs) != 0 {
 		return ErrProductSplitHeld
 	}
 	artifact, err := loadArtifact(ctx, tx, adoption.ArtifactID)
