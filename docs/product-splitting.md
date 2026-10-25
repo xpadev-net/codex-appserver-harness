@@ -116,6 +116,10 @@ receipt は元 request の digest と proposal/plan/allocation、全 creation �
 
 common runtime の private 設定を `product_tools: true` / `product_tool_profile: product_v3` にした新規 parent thread だけに、product_split を追加する。v1/v2 の保存済み schema は変えず、profile の不一致は既存の明示 main rotation / 新 Task への引き渡しで解決する。Task の v3 tool set は v2 と同一で、分割の構造操作は公開しない。controller も実 session/run/thread/turn、現在の charged Wave scope、pinned profile と parent 種別を同じ transaction で認可する。
 
+`product_v4` は v3 の tool/schema をそのまま継承し、Main 専用の `product_split_parent_scope` を追加する。入力は `schema_version: 1`、現在の `target`、登録済みの分割子を示す `parent_work_item_id`。controller は実 run の Wave 権限と v4 profile を認証し、親 scope の head/history/admission と呼出元 receipt、tool operation を同じ transaction で保存する。応答は `parent_scope_id` / `parent_scope_digest` と、その子自身の公開 `scope`（local criteria、coverage、dependencies、binding 参照）のみとし、兄弟の Issue 本文や作成・枠・祖先の内部証跡は返さない。応答が inline 上限を超える場合も全体を rollback する。
+
+これは再分割のための参照準備であり、proposal の採用・子の作成・実行許可・source の更新・品質合格ではない。元の v3 thread はそのまま再開し、新 tool へ移行する場合は明示 rotation が必要。Task の v4 tool set は v3 と同じで、構造変更は Main へメッセージで依頼する。exact call replay は保存済みの参照と応答全体を再認証し、欠けた証跡や改変された cached reply を補修しない。内部の tool receipt にも元の完全な親 scope を保持し、head/history/admission の全喪失後でも、その子の新しい参照や上流の子集合・消費済み creation/枠を再作成しない。receipt のコピーは兄弟を含む禁止証跡として参照し、失われた原本を復元する権限には用いない。v4 からの nested proposal 採用とその完了通知の接続は別段階で実装・検証する。
+
 Task は split_proposal 種別の JSON Artifact と親へのメッセージで分割判断を依頼できる。メッセージ本文だけでは採用しない。main は product_split に schema_version=1、現在の target、proposal_artifact_id を渡して明示採用する。controller は同じ Wave/scope/policy の読取可能な committed Artifact（application/json、最大1MiB）を private object の byte 数・digest と照合し、型付き proposal の全 criterion/part 対応を検証する。repository、現在 registration digest、owner、全送信 journal は host が決める。
 
 Artifact ID/digest、実 session/run/call と preparation receipt を結ぶ採用記録を、全子の準備と tool operation の確定と同じ transaction に保存する。末尾の tool receipt 保存に失敗すると早期 turn binding まで rollback する。exact call replay は同じ応答を返し、採用証拠の欠落は自動修復しない。別 call で保存済みの分割を置き換えない。採用記録だけが残った場合も、上流の新 key・枠返却・初回 journal の再生成を拒否する。

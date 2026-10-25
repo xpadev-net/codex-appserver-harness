@@ -33,8 +33,8 @@ func requireProductSplitSessionTx(ctx context.Context, tx *sql.Tx, b contract.Se
 	if err := taskEvidenceRecord(ctx, tx, "session_tool_profile", id, &profile); err != nil {
 		return err
 	}
-	if profile.SessionID != b.ID || profile.Generation != b.Generation || profile.Profile != "product_v3" || profile.CreatedAt.IsZero() {
-		return errors.New("product split requires a pinned product_v3 parent session")
+	if profile.SessionID != b.ID || profile.Generation != b.Generation || (profile.Profile != "product_v3" && profile.Profile != "product_v4") || profile.CreatedAt.IsZero() {
+		return errors.New("product split requires a pinned product_v3/v4 parent session")
 	}
 	return nil
 }

@@ -20,7 +20,7 @@ func TestRuntimeProductToolsUseCommonDriverAndPinnedThreadProfile(t *testing.T) 
 	for _, mode := range []struct {
 		enabled bool
 		profile string
-	}{{false, ""}, {true, ""}, {true, "product_v2"}, {true, "product_v3"}} {
+	}{{false, ""}, {true, ""}, {true, "product_v2"}, {true, "product_v3"}, {true, "product_v4"}} {
 		enabled := mode.enabled
 		ctx := context.Background()
 		k, b := taskFixture(t)
@@ -41,7 +41,7 @@ func TestRuntimeProductToolsUseCommonDriverAndPinnedThreadProfile(t *testing.T) 
 						external = true
 					}
 				}
-				if external != (mode.profile == "product_v2" || mode.profile == "product_v3") {
+				if external != (mode.profile == "product_v2" || mode.profile == "product_v3" || mode.profile == "product_v4") {
 					t.Fatal("native tool schema differs from pinned profile")
 				}
 			}
@@ -49,7 +49,7 @@ func TestRuntimeProductToolsUseCommonDriverAndPinnedThreadProfile(t *testing.T) 
 				t.Fatal("Task acquired Wave tool", tool.Name)
 			}
 		}
-		if names["product_split"] || names["pr_publish"] != enabled || names["pr_review_request"] != enabled || !names["send_message"] {
+		if names["product_split_parent_scope"] || names["product_split"] || names["pr_publish"] != enabled || names["pr_review_request"] != enabled || !names["send_message"] {
 			t.Fatal("wrong native tool set", enabled, names)
 		}
 		current, err := k.SessionBinding(ctx, b.ID)

@@ -36,10 +36,10 @@ func TestProductModelRuntimeRequiresCompletePrivateCurrentConfiguration(t *testi
 		t.Fatal(err)
 	}
 	defer k.Close()
-	for _, mode := range []string{"valid", "v3", "disabled", "legacy", "root", "model", "isolation", "binary", "writable_binary", "public_home", "launcher", "profile", "auth"} {
+	for _, mode := range []string{"valid", "v3", "v4", "disabled", "legacy", "root", "model", "isolation", "binary", "writable_binary", "public_home", "launcher", "profile", "auth"} {
 		t.Run(mode, func(t *testing.T) {
 			targetStore, targetMain := k, main
-			if mode == "v3" {
+			if mode == "v3" || mode == "v4" {
 				var openErr error
 				targetStore, targetMain, openErr = openKernel(context.Background(), cliRoot(t))
 				if openErr != nil {
@@ -49,6 +49,8 @@ func TestProductModelRuntimeRequiresCompletePrivateCurrentConfiguration(t *testi
 			}
 			c, runtime := productModelRuntimeFixture(t, targetStore, targetMain.Model)
 			switch mode {
+			case "v4":
+				runtime.ProductToolProfile = "product_v4"
 			case "v3":
 				runtime.ProductToolProfile = "product_v3"
 			case "disabled":
@@ -88,7 +90,7 @@ func TestProductModelRuntimeRequiresCompletePrivateCurrentConfiguration(t *testi
 				}
 				return
 			}
-			if mode != "valid" && mode != "v3" {
+			if mode != "valid" && mode != "v3" && mode != "v4" {
 				if err == nil {
 					t.Fatal("incomplete runtime activated", mode, config)
 				}

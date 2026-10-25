@@ -86,7 +86,7 @@ func loadSplitParentScopeUncached(ctx context.Context, tx *sql.Tx, binding Produ
 	err := taskEvidenceRecord(ctx, tx, "product_split_parent_scope", id, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_parent_scope_admission' AND id=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_parent_scope_history' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source','product_nested_split_scope_group','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_ancestor_group') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?)`), id, id, id).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_parent_scope_admission' AND id=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_split_parent_scope_history','product_split_parent_scope_tool') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source','product_nested_split_scope_group','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_ancestor_group') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?)`), id, id, id).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
@@ -147,6 +147,18 @@ func (k *KernelStore) PrepareProductSplitParentScope(ctx context.Context, target
 		return empty, err
 	}
 	defer tx.Rollback()
+	saved, err := k.prepareProductSplitParentScopeTx(ctx, tx, target, parentID)
+	if err != nil {
+		return empty, err
+	}
+	if err := tx.Commit(); err != nil {
+		return empty, err
+	}
+	return saved, nil
+}
+
+func (k *KernelStore) prepareProductSplitParentScopeTx(ctx context.Context, tx *sql.Tx, target contract.Target, parentID string) (ProductSplitParentScope, error) {
+	var empty ProductSplitParentScope
 	binding, err := splitChildSourceBindingTx(ctx, tx, target, parentID)
 	if err != nil {
 		return empty, err
@@ -184,9 +196,6 @@ func (k *KernelStore) PrepareProductSplitParentScope(ctx context.Context, target
 		if err := kernelRecordTx(ctx, tx, record.kind, record.id, target.WaveID, saved); err != nil {
 			return empty, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return empty, err
 	}
 	return saved, nil
 }
