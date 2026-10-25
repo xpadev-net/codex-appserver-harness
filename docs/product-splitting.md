@@ -198,4 +198,8 @@ trusted host の ObserveProductSplitChildSource は、登録済みの local bind
 
 CAS は semantic digest ではなく版を含む snapshot ID を使い、同じ facts に戻った後の遅延 callback による上書きも拒否する。facts が同じ GET 確認では ID/版/history を増やさず CheckedAt だけ更新する。意味のある変更は最大1024版まで元 history を保存し、上限を超えて reset/切捨てしない。鮮度チェックは caller が固定した policy と最大5分の有界期限、時計巻戻りを確認し、source-only の結果を返す。
 
-この段階は host port と証拠保存の接続で、実 GET observer・daemon・send gate は後続である。子の実行保留は維持し、part 集約 coverage・親 retirement・依存・多段 depth と併せて接続する。
+SplitChildSourceObserver は private な repository/policy と登録済み local binding を確認してから、repository GET → 子 issue GET 2回 → repository GET を行う。issue ID・本文・状態・label・更新時刻が読み取り中に変化すれば取得不能として保存する。policy の pin が異なる場合や local proof が欠ける場合は GET を行わない。保存は GET 前の snapshot ID による CAS とし、親 context の cancel 後に detached write を行わない。
+
+publication の source loop は repository ごとに root と子を確認する。子の一覧は opaque な row cursor で有界に走査し、同じ子の scope/history/admission を1 scan 内で重複確認しない。失敗行の後も独立した子へ進み、cursor を保存して再起動後に再開する。OnMutation は意味のある facts の commit 後だけ通知し、鮮度更新だけでは発生しない。
+
+KernelSourceGate は親 Wave が direct でも子 issue 自身を公開直前に再取得し、ready と固定 policy・有界鮮度を確認する。GitHub 由来の親では引き続き親 source も確認する。source 確認だけで子の実行保留を解除せず、part 集約 coverage・親 retirement・依存・多段 depth の接続を後続で行う。

@@ -172,6 +172,14 @@ func runPublicationSources(ctx context.Context, k *storage.KernelStore, sources 
 			if err != nil && report != nil {
 				report(err)
 			}
+			children := product.SplitChildSourceObserver{Store: k, API: o.API, Policy: p, Attempts: 32, OnMutation: wake, Report: report}
+			_, err = children.Scan(ctx)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil && report != nil {
+				report(err)
+			}
 		}
 		timer := time.NewTimer(every)
 		select {
