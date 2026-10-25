@@ -33,6 +33,12 @@ type splitWorkItemSeat struct {
 }
 
 func loadProductSplitAllocation(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitAllocation, error) {
+	return readSplitProof(ctx, tx, "loadProductSplitAllocation", r, func(read context.Context) (ProductSplitAllocation, error) {
+		return loadProductSplitAllocationUncached(read, tx, r)
+	})
+}
+
+func loadProductSplitAllocationUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductSplitAllocation, error) {
 	var saved, history ProductSplitAllocation
 	var nested bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_nested_split_proposal' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.allocation.value.request.proposal_id')=?) OR EXISTS(SELECT 1 FROM kernel_budget_ledger WHERE kind='split_children' AND operation_key=? AND json_type(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.allocation') IS NOT NULL)`, splitProposalHead(ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID}), r.ProposalID, r.ProposalID).Scan(&nested); err != nil {

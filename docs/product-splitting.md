@@ -320,3 +320,12 @@ PrepareProductSplitParentScope は登録済み孫の source/policy と完全な 
 平坦な祖先の抽出では、配列が存在する記録と、配列が必須の深さの記録に限定した小さな summary を照会中に一度作る。compact witness は従来どおり物理記録から直接読む。正式 proof の認証結果を transaction 間で cache したり、元記録の欠落を summary で補ったりしない。
 
 送信 gate の二つの内部経路は、同じ transaction 内の完全な creation ancestry 認証と preflight で検証済みの親 binding を使う。選択した親の現在の登録 head/version/membership と source/policy head/history は再度照合し、source の5秒の制約を適用する。新たな公開経路から未認証の snapshot を渡す用途には使わない。
+
+
+## 読み取り検証中の重複した proof walk の抑制
+
+split の正式な loader は、一つの同期的・読み取り専用 call tree の内部だけで、認証が完了した結果を再利用する。private な子 context に実際の sql.Tx identity と完全な入力を結び付け、上位の呼び出し元へ context を返さない。同じ transaction であっても loader が戻った後の次の呼び出しは、新しい検証を始める。別 transaction、書き込み後、方向修正後、scope の欠落後へ認証結果を持ち越さない。
+
+再利用する値は毎回独立した JSON copy へ戻し、返した slice/map の変更が別の読み取りへ伝播しないようにする。失敗は再利用せず、従来の部分的な返却値と error を保持する。循環参照と過大な active walk は保留し、cache は最大2048件・64MiBまでとする。cache の容量に達した場合は追加の再利用を止め、正式な読み取り検証を続ける。
+
+source head/policy の更新・鮮度判定、Task/model/runner の実行許可、予算はこの再利用の対象にしない。source の時刻と5秒の送信制約は変更しない。

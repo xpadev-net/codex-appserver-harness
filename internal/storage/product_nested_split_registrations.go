@@ -25,6 +25,12 @@ type ProductNestedSplitRegistrations struct {
 }
 
 func loadNestedSplitRegistrations(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitRegistrations, error) {
+	return readSplitProof(ctx, tx, "loadNestedSplitRegistrations", r, func(read context.Context) (ProductNestedSplitRegistrations, error) {
+		return loadNestedSplitRegistrationsUncached(read, tx, r)
+	})
+}
+
+func loadNestedSplitRegistrationsUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitRegistrations, error) {
 	var saved ProductNestedSplitRegistrations
 	malformed, err := splitScopeUnreadableForWave(ctx, tx, r.Target.WaveID)
 	if err != nil {

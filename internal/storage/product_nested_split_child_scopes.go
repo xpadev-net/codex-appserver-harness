@@ -31,6 +31,12 @@ func nestedSplitScopeRecords(saved ProductNestedSplitChildScopes) []struct{ kind
 }
 
 func loadNestedSplitChildScopes(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitChildScopes, error) {
+	return readSplitProof(ctx, tx, "loadNestedSplitChildScopes", r, func(read context.Context) (ProductNestedSplitChildScopes, error) {
+		return loadNestedSplitChildScopesUncached(read, tx, r)
+	})
+}
+
+func loadNestedSplitChildScopesUncached(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (ProductNestedSplitChildScopes, error) {
 	var saved ProductNestedSplitChildScopes
 	malformed, err := splitScopeUnreadableForWave(ctx, tx, r.Target.WaveID)
 	if err != nil {

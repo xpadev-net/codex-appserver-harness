@@ -46,6 +46,12 @@ func bindNestedParentProof(ctx context.Context, tx *sql.Tx, value *ProductSplitP
 }
 
 func loadNestedSplitProposal(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest) (ProductNestedSplitProposal, error) {
+	return readSplitProof(ctx, tx, "loadNestedSplitProposal", r, func(read context.Context) (ProductNestedSplitProposal, error) {
+		return loadNestedSplitProposalUncached(read, tx, r)
+	})
+}
+
+func loadNestedSplitProposalUncached(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest) (ProductNestedSplitProposal, error) {
 	var saved ProductNestedSplitProposal
 	head := splitProposalHead(r)
 	err := taskEvidenceRecord(ctx, tx, "product_nested_split_proposal", head, &saved)
