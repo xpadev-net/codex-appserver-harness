@@ -20,6 +20,24 @@ func nestedSplitCriterionRootsTx(ctx context.Context, tx *sql.Tx, w domain.Wave,
 	if binding.Value.Child.Value.Depth != proposal.Value.Depth+1 || binding.Value.Child.Value.Depth < 1 {
 		return nil, ErrProductSplitHeld
 	}
+	roots, err := nestedSplitRootsFromBinding(registration, binding, proposal)
+	if err != nil {
+		return nil, err
+	}
+	rootSet := map[string]bool{}
+	for _, root := range roots {
+		rootSet[root] = true
+	}
+	for _, criterion := range w.Criteria {
+		delete(rootSet, criterion.ID)
+	}
+	if len(rootSet) != 0 {
+		return nil, ErrProductSplitHeld
+	}
+	return roots, nil
+}
+
+func nestedSplitRootsFromBinding(registration ProductWorkItemRegistrationSnapshot, binding ProductSplitChildScopeBinding, proposal ProductSplitProposal) (map[string]string, error) {
 	roots := map[string]string{}
 	rootSet := map[string]bool{}
 	for _, mapping := range binding.Value.Child.Value.Child.Coverage {
@@ -38,12 +56,6 @@ func nestedSplitCriterionRootsTx(ctx context.Context, tx *sql.Tx, w domain.Wave,
 		rootSet[root] = true
 	}
 	if len(roots) != len(binding.Value.Scope.Included) || len(rootSet) != len(registration.Value.Definition.Criteria) {
-		return nil, ErrProductSplitHeld
-	}
-	for _, criterion := range w.Criteria {
-		delete(rootSet, criterion.ID)
-	}
-	if len(rootSet) != 0 {
 		return nil, ErrProductSplitHeld
 	}
 	return roots, nil

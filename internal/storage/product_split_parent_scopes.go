@@ -65,7 +65,7 @@ func loadSplitParentScope(ctx context.Context, tx *sql.Tx, binding ProductSplitC
 	err := taskEvidenceRecord(ctx, tx, "product_split_parent_scope", id, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_parent_scope_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_parent_scope_history' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?)`, id, id).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_parent_scope_admission' AND id=?) OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_parent_scope_history' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?) OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?)`, id, id, id).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {

@@ -259,6 +259,16 @@ func (k *KernelStore) prepareProductSplitChildPlanTx(ctx context.Context, tx *sq
 	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest {
 		return plan, ErrProductSplitHeld
 	}
+	if proposal.Value.ParentSplitScope != nil {
+		return plan, ErrProductSplitHeld
+	}
+
+	// Nested descendants must carry ancestor witnesses before durable intents
+	// can be adopted. A nested proposal alone never grants child creation.
+	if proposal.Value.ParentSplitScope != nil {
+		return plan, ErrProductSplitHeld
+	}
+
 	registration, err := loadSplitIntentRegistrationTx(ctx, tx, proposal)
 	if err != nil {
 		return plan, err

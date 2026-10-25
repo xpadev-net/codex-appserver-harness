@@ -235,3 +235,11 @@ PrepareProductSplitParentScope は、登録済みの子自身の fresh な sourc
 この証拠は既存の親/子実行保留、source 所有権、枠/予算、creation の欠落検出と recovery work list に参加する。3記録のどれか一つだけが残った場合も、子 Issue の root 再取込み、親の再実行、journal の再作成、消費済み枠/retry の返却を許可しない。証拠の欠落や内容不一致は exact 復旧を必要とする。reopen/pause の exact replay は保存済み値を保持し、方向修正後の旧 scope を現行の義務へ採用しない。
 
 保存する proof 自体は新しい proposal・子 Issue・Task・実行/品質・親最終受入の許可ではない。再分割の永続採用と孫の送信は引き続き保留し、後続の接続でこの親証拠を固定する。
+
+## 親証拠を固定した再分割 proposal の永続採用
+
+PrepareProductNestedSplitProposal は、host が保存済み ParentScope の ID/digest を明示して再分割 proposal を採用する専用 port。local scope・保存済み depth・元条件への対応、fresh な own source と policy を再検査して固定する。head/history/admission/request はすべて元の全 sibling group を含む独立した envelope とし、親証拠の sidecar を失っても source 所有権・creation・予算の負の証拠を失わない。
+
+root と再分割の operation key は Wave 内で共有し、同じ key の別用途への再利用、固定済み head の本文変更、欠落証拠の自動再作成を拒否する。既存の proposal reader は元 scope を検査して専用 envelope を返し、reopen/pause の exact replay と方向修正後の失効を区別する。root の保存形式は維持する。
+
+通常の root 採用 port は再分割を暗黙に採用しない。再分割 proposal からの永続 child intent、割当・作成 journal、Issue 送信も引き続き保留する。孫の各段階へ祖先の witness を引き継ぐ処理、own source の送信 fence、再帰登録/coverage を接続してから進める。
