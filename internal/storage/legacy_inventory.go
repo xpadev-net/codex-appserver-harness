@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -43,6 +44,11 @@ type LegacyInventoryBaseline struct {
 	ObservedTokens int64 `json:"observed_tokens"`
 }
 
+type LegacyInventoryEvidence struct {
+	ID      string          `json:"id"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 type LegacyInventoryWork struct {
 	WorkItem       domain.WorkItem          `json:"work_item"`
 	RootWorkItemID string                   `json:"root_work_item_id"`
@@ -50,9 +56,14 @@ type LegacyInventoryWork struct {
 	ScopeDigest    string                   `json:"scope_digest"`
 	PolicyDigest   string                   `json:"policy_digest"`
 	Baseline       *LegacyInventoryBaseline `json:"baseline,omitempty"`
-	Operations     []domain.Operation       `json:"operations"`
-	Threads        []LegacyInventoryThread  `json:"threads"`
-	Issues         []LegacyInventoryIssue   `json:"issues"`
+	// FinalAcceptance and CompletionProof are preserved verbatim as historical
+	// evidence. They are not trusted as authorization by the Wave runtime.
+	FinalAcceptance json.RawMessage           `json:"final_acceptance,omitempty"`
+	CompletionProof json.RawMessage           `json:"completion_proof,omitempty"`
+	FinalHistory    []LegacyInventoryEvidence `json:"final_history"`
+	Operations      []domain.Operation        `json:"operations"`
+	Threads         []LegacyInventoryThread   `json:"threads"`
+	Issues          []LegacyInventoryIssue    `json:"issues"`
 }
 
 type LegacyInventoryValue struct {
@@ -155,7 +166,7 @@ func ReadLegacyMigrationInventory(ctx context.Context, root, after string, limit
 		found = found[:limit]
 	}
 	for _, row := range found {
-		entry := LegacyInventoryWork{Operations: []domain.Operation{}, Threads: []LegacyInventoryThread{}, Issues: []LegacyInventoryIssue{}}
+		entry := LegacyInventoryWork{FinalHistory: []LegacyInventoryEvidence{}, Operations: []domain.Operation{}, Threads: []LegacyInventoryThread{}, Issues: []LegacyInventoryIssue{}}
 		if err := json.Unmarshal(row.data, &entry.WorkItem); err != nil || entry.WorkItem.ID != row.id || entry.WorkItem.RepositoryID != row.repository || entry.WorkItem.Issue != row.issue || row.id == "" || row.repository < 1 || row.issue < 1 {
 			entry.WorkItem = domain.WorkItem{ID: row.id, RepositoryID: row.repository, Issue: row.issue}
 			entry.Issues = append(entry.Issues, LegacyInventoryIssue{row.id, "work_item_identity_invalid"})
@@ -276,6 +287,63 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 	id := entry.WorkItem.ID
 	issue := func(reason string) { entry.Issues = append(entry.Issues, LegacyInventoryIssue{id, reason}) }
 	var scope verification.Scope
+	finalKey := fmt.Sprintf("r%d-i%d", entry.WorkItem.RepositoryID, entry.WorkItem.Issue)
+	for _, record := range []struct {
+		kind string
+		out  *json.RawMessage
+	}{{"parent_final_state", &entry.FinalAcceptance}, {"parent_completion", &entry.CompletionProof}} {
+		var owner string
+		var payload []byte
+		err := db.QueryRowContext(ctx, "SELECT work_item_id,payload FROM records WHERE kind=? AND id=?", record.kind, finalKey).Scan(&owner, &payload)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !json.Valid(payload) {
+			issue(record.kind + "_identity_invalid")
+			continue
+		}
+		if owner != id {
+			ownerItem, ownerErr := legacyInventoryWorkItem(ctx, db, owner)
+			ownerRoot := ""
+			if ownerErr == nil && ownerItem.RepositoryID == entry.WorkItem.RepositoryID && ownerItem.Issue == entry.WorkItem.Issue {
+				ownerRoot, _, ownerErr = legacyInventoryLineage(ctx, db, ownerItem)
+			}
+			if ownerErr != nil || ownerRoot != entry.RootWorkItemID {
+				issue(record.kind + "_identity_invalid")
+			}
+			continue
+		}
+		*record.out = append(json.RawMessage(nil), payload...)
+	}
+	historyRows, err := db.QueryContext(ctx, "SELECT id,payload FROM records WHERE kind='parent_final_history' AND work_item_id=? ORDER BY id LIMIT 257", id)
+	if err != nil {
+		return err
+	}
+	for count := 0; historyRows.Next(); count++ {
+		if count >= 256 {
+			issue("parent_final_history_limit")
+			break
+		}
+		var evidence LegacyInventoryEvidence
+		if err := historyRows.Scan(&evidence.ID, &evidence.Payload); err != nil {
+			historyRows.Close()
+			return err
+		}
+		if !json.Valid(evidence.Payload) {
+			issue("parent_final_history_invalid")
+			continue
+		}
+		evidence.Payload = append(json.RawMessage(nil), evidence.Payload...)
+		entry.FinalHistory = append(entry.FinalHistory, evidence)
+	}
+	if err := historyRows.Err(); err != nil {
+		historyRows.Close()
+		return err
+	}
+	historyRows.Close()
 	if err := legacyInventoryRecord(ctx, db, "scope", id, id, &scope); err != nil || scope.Validate() != nil || scope.Revision != entry.WorkItem.ScopeRevision {
 		issue("scope_unavailable")
 	} else {
