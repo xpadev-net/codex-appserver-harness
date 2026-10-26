@@ -48,7 +48,18 @@ func splitScopeUnreadableForWaveUncached(ctx context.Context, q queryer, waveID 
 	query = strings.Replace(query, "FROM kernel_budget_ledger WHERE kind='split_create_retry'", "FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=?", 1)
 	query = strings.Replace(query, "FROM main.records WHERE kind IN ('product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source')", "FROM main.records WHERE work_item_id=? AND kind IN ('product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source')", 1)
 	query = strings.Replace(query, "FROM main.records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_completion','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')", "FROM main.records WHERE work_item_id=? AND kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_completion','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')", 1)
-	err := q.QueryRowContext(ctx, query, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID).Scan(&malformed)
+	// Keep the nine bindings aligned with the scoped SQL branches: direct
+	// records, split ledger, creation owner and target, derived ancestry,
+	// retry ledger, nested scope, compact registrations, and final Wave filter.
+	const waveBindings = 9
+	if strings.Count(query, "?") != waveBindings {
+		return false, fmt.Errorf("split scope witness bind count: %w", ErrProductSplitHeld)
+	}
+	args := make([]any, waveBindings)
+	for i := range args {
+		args[i] = waveID
+	}
+	err := q.QueryRowContext(ctx, query, args...).Scan(&malformed)
 	if err != nil || malformed {
 		return malformed, err
 	}
