@@ -20,6 +20,9 @@ import (
 type WorkspacePreparer struct {
 	Store       *storage.KernelStore
 	RefreshBase func(context.Context, string) (storage.ProductBasePlan, error)
+	// RefreshSource performs a host-owned read, never a metadata replay. A
+	// checkout may outlast source freshness even when its immutable input is unchanged.
+	RefreshSource func(context.Context) error
 }
 
 func sameUserDirectory(path string, private bool) error {
@@ -93,6 +96,11 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 	} // Historical read-only replay grants no start.
 	if saved.State != "prepared" {
 		return saved, storage.ErrProductWorkspaceHeld
+	}
+	if p.RefreshSource != nil {
+		if err := p.RefreshSource(ctx); err != nil {
+			return saved, err
+		}
 	}
 	if request.BasePlanID != "" {
 		if err := p.refreshBase(ctx, request); err != nil {
@@ -227,6 +235,15 @@ func (p WorkspacePreparer) Prepare(ctx context.Context, request storage.ProductW
 			if createErr == nil {
 				proof = verified
 			}
+		}
+	}
+	// Source polling cannot provide a fresh receipt for the entire duration of
+	// a checkout. Re-read after the synchronous owner stopped, before the store
+	// validates the prepared workspace; its original freshness limit still applies.
+	if createErr == nil && p.RefreshSource != nil {
+		createErr = p.RefreshSource(ctx)
+		if createErr != nil {
+			proof = storage.ProductWorkspaceProof{ProofID: saved.ID + ":stopped", Outcome: "failed", Reason: "source revalidation failed after workspace owner stopped"}
 		}
 	}
 	if createErr == nil && request.BasePlanID != "" {

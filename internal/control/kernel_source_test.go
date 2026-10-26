@@ -910,3 +910,43 @@ func TestWavePlanToolStartsBackgroundTaskBeforeMainTurnEnds(t *testing.T) {
 	}
 	assertCapacity(t, k, 0)
 }
+
+func TestKernelSourceChangedProductAdmissionRetriesOnlyAfterKnownStop(t *testing.T) {
+	for _, stopped := range []bool{true, false} {
+		t.Run(fmt.Sprint(stopped), func(t *testing.T) {
+			ctx := context.Background()
+			k, b := taskFixture(t)
+			source := NewKernelSource(k)
+			selected := sourceTaskWork(t, source, b.ID)
+			if !stopped {
+				if _, err := k.DB.Exec("UPDATE kernel_sessions SET process_stopped=0 WHERE id=?", b.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := source.Complete(ctx, Completion{SessionID: b.ID, RunID: selected.Execute.RunID, Err: storage.ErrProductAdmissionChanged})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var holds, runs int
+			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='kernel_dispatch_hold' AND id=?", b.ID).Scan(&holds); err != nil {
+				t.Fatal(err)
+			}
+			if holds != map[bool]int{true: 0, false: 1}[stopped] {
+				t.Fatal("changed product gate ignored physical stopping", stopped, holds)
+			}
+			if err := k.DB.QueryRow("SELECT count(*) FROM records WHERE kind='agent_run'").Scan(&runs); err != nil || runs != 0 {
+				t.Fatal("no-run gate fabricated a model run", runs, err)
+			}
+			task, err := k.Task(ctx, b.TaskID)
+			if err != nil || task.Attempts != 0 {
+				t.Fatal("no-run gate consumed a Task attempt", task.Attempts, err)
+			}
+			if stopped {
+				next := sourceTaskWork(t, source, b.ID)
+				if next.Execute.RunID == selected.Execute.RunID {
+					t.Fatal("reselection reused the stopped preparation's run identity")
+				}
+			}
+		})
+	}
+}

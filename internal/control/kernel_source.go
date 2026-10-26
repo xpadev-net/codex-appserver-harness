@@ -450,6 +450,7 @@ func (s *KernelSource) Complete(ctx context.Context, c Completion) error {
 		if c.Err == nil {
 			return nil
 		}
+
 		gated := false
 		var selection dispatchSelection
 		selectionErr := s.Store.Record(ctx, "kernel_dispatch_selection", c.RunID, &selection)
@@ -466,7 +467,15 @@ func (s *KernelSource) Complete(ctx context.Context, c Completion) error {
 		} else if !errors.Is(selectionErr, sql.ErrNoRows) {
 			return selectionErr
 		}
-		retryable := gated || errors.Is(c.Err, context.Canceled) || errors.Is(c.Err, context.DeadlineExceeded) || errors.Is(c.Err, storage.ErrManagedProcessHeld) || errors.Is(c.Err, storage.ErrExecutionCapacity)
+		// A product gate may change while the native thread is being prepared.
+		// No saved run means turn/start was never permitted. After a confirmed
+		// stop, reselect with a new identity and fresh gates rather than pinning
+		// a permanent dispatch hold to a transient source/base observation.
+		productChanged := errors.Is(c.Err, storage.ErrProductAdmissionChanged) && state.ProcessStopped && !state.Creating
+		retryable := productChanged || gated || errors.Is(c.Err, context.Canceled) || errors.Is(c.Err, context.DeadlineExceeded) || errors.Is(c.Err, storage.ErrManagedProcessHeld) || errors.Is(c.Err, storage.ErrExecutionCapacity)
+		if errors.Is(c.Err, storage.ErrProductAdmissionChanged) && (!state.ProcessStopped || state.Creating) {
+			retryable = false
+		}
 		if state.Binding.Kind == "task" && state.Binding.TaskState == contract.TaskBlocked {
 			// A preparation permanently claims this future run ID even if no turn was
 			// reserved. Generic blocked-input gates must not make that ID auto-retryable.

@@ -18,6 +18,11 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
+// ErrProductAdmissionChanged is returned only before a model run is reserved.
+// The controller may reselect after proving the prepared process stopped; the
+// new request still has to pass every current gate and use a new run identity.
+var ErrProductAdmissionChanged = errors.New("product admission changed before model run reservation")
+
 // Trusted composition-root configuration, never a model tool or persisted
 // readiness Boolean. Every actual process still uses mandatory runtime probes.
 type ProductModelRepository struct {
@@ -262,7 +267,7 @@ func (k *KernelStore) recordProductModelAdmissionTx(ctx context.Context, tx *sql
 	if reason, err := k.productTaskReadinessTx(ctx, tx, w, task); err != nil {
 		return err
 	} else if reason != "" {
-		return ErrProductWorkspaceHeld
+		return errors.Join(ErrProductWorkspaceHeld, ErrProductAdmissionChanged)
 	}
 	config := k.productModelConfig()
 	if config == nil {

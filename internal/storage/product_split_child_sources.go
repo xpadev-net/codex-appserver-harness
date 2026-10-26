@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"reflect"
 	"strconv"
 	"time"
@@ -11,6 +12,10 @@ import (
 )
 
 const maxSplitSourceVersions = 1024
+
+// ErrProductSplitSourceSuperseded means another observation won the source CAS.
+// It grants no freshness: a caller may only retry by performing a new GET.
+var ErrProductSplitSourceSuperseded = errors.New("split child source observation superseded")
 
 // The compact reference preserves negative creation/budget/source witnesses;
 // authoritative reads still require the complete registered local binding.
@@ -292,11 +297,14 @@ func (k *KernelStore) ObserveProductSplitChildSourceAt(ctx context.Context, targ
 		return ProductSplitChildSourceUpdate{}, priorErr
 	}
 	if priorErr == nil && expectedSnapshotID != prior.ID || priorErr != nil && expectedSnapshotID != "" {
-		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
+		return ProductSplitChildSourceUpdate{}, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
 	}
 	now := readAt
-	if now.Before(binding.Value.CreatedAt) || priorErr == nil && now.Before(prior.CheckedAt) {
+	if now.Before(binding.Value.CreatedAt) {
 		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
+	}
+	if priorErr == nil && now.Before(prior.CheckedAt) {
+		return ProductSplitChildSourceUpdate{}, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
 	}
 	reference, err := splitSourceReferenceTx(ctx, tx, binding)
 	if err != nil {

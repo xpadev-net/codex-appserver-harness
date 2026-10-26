@@ -230,3 +230,68 @@ func TestProductWorkspacePreparerDisablesNewBranchConditionalFiltersBeforeChecko
 		t.Fatal(string(data), err)
 	}
 }
+
+func TestProductWorkspaceSourceRevalidationSurroundsActualCheckout(t *testing.T) {
+	for _, mode := range []string{"ready", "before_claim", "after_stop"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			p, request, _, _ := workspacePreparerFixture(t)
+			denied := errors.New("controlled source unavailable")
+			reads := 0
+			p.RefreshSource = func(read context.Context) error {
+				reads++
+				saved, err := p.Store.ProductWorkspace(read, request.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if reads == 1 {
+					if saved.State != "prepared" {
+						t.Fatal("source read after mutation admission", saved.State)
+					}
+					if _, err := os.Stat(saved.Value.CWD); !os.IsNotExist(err) {
+						t.Fatal("checkout existed before source read", err)
+					}
+					if mode == "before_claim" {
+						return denied
+					}
+				} else if reads == 2 {
+					if saved.State != "launching" {
+						t.Fatal("source was not re-read before stopping receipt", saved.State)
+					}
+					if _, err := verifyPreparedWorkspace(read, saved); err != nil {
+						t.Fatal("source re-read preceded physical checkout completion", err)
+					}
+					if mode == "after_stop" {
+						return denied
+					}
+				} else {
+					t.Fatal("unexpected extra source read")
+				}
+				return nil
+			}
+			saved, err := p.Prepare(ctx, request)
+			if mode == "ready" {
+				if err != nil || saved.State != "ready" || reads != 2 {
+					t.Fatal(saved.State, reads, err)
+				}
+				if _, err := p.Prepare(ctx, request); err != nil || reads != 2 {
+					t.Fatal("audit replay performed a new source read", reads, err)
+				}
+			} else {
+				if !errors.Is(err, denied) {
+					t.Fatal("failed source read accepted", err)
+				}
+				final, err := p.Store.ProductWorkspace(ctx, request.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "before_claim" && (reads != 1 || final.State != "prepared") {
+					t.Fatal("denied source admitted mutation", reads, final.State)
+				}
+				if mode == "after_stop" && (reads != 2 || final.State != "failed" || final.Proof == nil || final.Proof.Outcome != "failed") {
+					t.Fatal("failed final source read granted ready workspace", reads, final.State)
+				}
+			}
+		})
+	}
+}

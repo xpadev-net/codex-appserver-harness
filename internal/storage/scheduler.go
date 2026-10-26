@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -373,6 +374,9 @@ func (k *KernelStore) checkTaskDispatchTx(ctx context.Context, tx *sql.Tx, task 
 			return err
 		}
 		if reason != "" {
+			if strings.HasPrefix(reason, "product_") {
+				return fmt.Errorf("%w: Task not ready: %s", ErrProductAdmissionChanged, reason)
+			}
 			return fmt.Errorf("Task not ready: %s", reason)
 		}
 		return nil
