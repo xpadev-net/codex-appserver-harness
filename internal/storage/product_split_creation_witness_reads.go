@@ -69,7 +69,7 @@ func loadSplitCreationWitnessIDs(ctx context.Context, tx *sql.Tx) (splitCreation
 	// other witness branches (including ledgers and derived ancestry) intact,
 	// while avoiding a full records scan for unrelated record kinds.
 	const allRecords = "SELECT rowid,kind,id,work_item_id,payload FROM main.records"
-	query = strings.Replace(query, allRecords, allRecords+" WHERE kind IN "+splitCreationGroupKinds+" OR kind IN "+splitCreationLeafKinds+" OR kind IN "+splitCreationRegistrationKinds, 1)
+	query = strings.Replace(query, allRecords, allRecords+" WHERE kind IN "+splitCreationGroupKinds+" OR kind IN "+splitCreationLeafKinds+" OR kind IN "+splitCreationRegistrationKinds+" OR kind='product_split_child_scope_source'", 1)
 	// The four projections consume the same relation. Materialize it only for
 	// this statement so ancestor expansion is performed once, not four times.
 	query = strings.Replace(query, "split_scope_witnesses AS NOT MATERIALIZED", "split_scope_witnesses AS MATERIALIZED", 1)
