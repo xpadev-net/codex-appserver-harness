@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -149,7 +150,7 @@ func (k *KernelStore) prepareProductNestedSplitExecutionTx(ctx context.Context, 
 		nested, err = k.prepareProductNestedSplitProposalTx(ctx, tx, r, parent)
 	}
 	if err != nil {
-		return ProductSplitPreparation{}, splitEvidenceErr(err)
+		return ProductSplitPreparation{}, fmt.Errorf("nested split proposal: %w", splitEvidenceErr(err))
 	}
 	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, nested.Value.Proposal, prior, exists)
 }
@@ -167,7 +168,7 @@ func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx 
 		plan, err = k.prepareProductSplitChildPlanTx(ctx, tx, request)
 	}
 	if err != nil {
-		return empty, splitEvidenceErr(err)
+		return empty, fmt.Errorf("nested split child plan: %w", splitEvidenceErr(err))
 	}
 	if exists {
 		allocation, err = loadProductSplitAllocation(ctx, tx, request)
@@ -175,7 +176,7 @@ func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx 
 		allocation, err = k.reserveProductSplitChildrenTx(ctx, tx, request)
 	}
 	if err != nil {
-		return empty, splitEvidenceErr(err)
+		return empty, fmt.Errorf("nested split allocation: %w", splitEvidenceErr(err))
 	}
 	requestDigest, err := contentDigest(r)
 	if err != nil {
@@ -194,7 +195,7 @@ func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx 
 			job, err = k.prepareProductSplitCreateTx(ctx, tx, request, child.ID, owner)
 		}
 		if err != nil {
-			return empty, splitEvidenceErr(err)
+			return empty, fmt.Errorf("nested split creation %s: %w", child.ID, splitEvidenceErr(err))
 		}
 		if job.Value.Request != request || job.Value.Child.ID != child.ID || job.Value.OwnerID != owner {
 			return empty, ErrProductSplitHeld
