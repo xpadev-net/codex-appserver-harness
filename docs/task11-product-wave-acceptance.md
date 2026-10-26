@@ -1,20 +1,21 @@
 # Task_11: Product Wave pipeline integration evidence
 
-This records the local Go implementation boundary for Task_11 (#42). It is a
-component and fixture acceptance record, not a claim that the external product
-pipeline or P as a whole has passed.
+This records existing local Go components and fixture coverage relevant to
+Task_11 (#42). It is **not Task_11 acceptance**: the components have not yet
+been shown working together through one product Wave from direct/Issue
+admission to a published, subscribed, reviewed, and merged candidate.
 
 ## Acceptance evidence
 
-| Task_11 condition | Go implementation and evidence |
+| Task_11 area | Existing component evidence; missing integrated acceptance |
 | --- | --- |
-| Direct product requests and Issue pool admissions enter the product Wave model | Both paths call the trusted `CreateProductWave` admission port. Direct CLI coverage is in `internal/kernelcli/product_create_test.go`; Issue admission, repository identity, dependency and scope checks are in `internal/product/issue_admission_test.go` (`TestIssueAdmissionUsesNumericRepositoryAndCommonProductPort`, `TestIssueAdmissionRequiresClosedDependenciesAndCompletedClaimedWave`). The daemon Issue pool is configured in `internal/kernelcli/issue_pool.go`. |
-| Product Tasks receive a fixed workspace and are held until runtime/readiness is valid | `internal/product/execution_worker.go`, `internal/product/executor.go`, and the product workspace ports own preparation and stopped-result application. `internal/kernelcli/product_model_runtime_test.go` verifies that model readiness is bound only while the configured executor worker owns the same store and is revoked when it stops. |
-| A newly merged predecessor can advance the base; conflict repair uses a fresh fix Task/session | `internal/product/base_planner.go` verifies repository/ref identity, stable HEAD bookends and predecessor ancestry. `TestExecutionWorkerSelectsActualBaseRefreshesThenNotifiesChangedHead` and `TestConflictFixUsesFreshCheckoutThenHostSealsOrRetainsFailure` verify refresh and new conflict-repair lineage. The old failed Task/workspace remains historical. |
-| Candidate publication/review/merge keep canonical gate and one-use dispatcher checks | `internal/service/product_gates_test.go`, `internal/product/publisher_test.go`, `internal/product/dispatcher_test.go`, and `internal/kernelcli/product_executor.go` cover canonical evidence, source/target revalidation, unknown-send reconciliation, guarded review requests, and daemon placement. These fixtures do not manufacture formal approval. |
-| Partial work, split lineage, budgets and versioned continuation preserve their proof | `internal/storage/product_continuations_test.go` verifies merged history and budget retention; `internal/storage/product_merge_dependencies_test.go` checks authenticated predecessor merge; split-source and bounded-tree coverage is recorded in PR #281 and `docs/product-splitting.md`. |
-| Existing review findings and full-merge requirement edits remain recoverable | `internal/service/assessment_test.go` (`TestNoActionCannotResolveUnassessedFeedback`) and `internal/service/adoption_test.go` (`TestAdoptChangedRequirementsAfterFullMerge`, `TestAdoptFullMergeSerializesWithFinalAcceptance`) cover #44/#45. Shared repository exclusion across Waves is covered by `internal/storage/operation_reservations_test.go` (`TestGitCapacityUsesCommonRepositoryAcrossWavesAndLinkedWorktrees`). |
-| K completion is distinct from product completion; unknown Cloud capability cannot pass a product gate | Product tool and publication gates require the product policy and current candidate evidence. Missing/unknown external capability stays held. `docs/acceptance.md`, `docs/task8-github-acceptance.md`, and issue #20 retain actual Cloud approval, CI/rules, and authority as unverified. |
+| Direct product and Issue pool admission | Both paths call `CreateProductWave`; direct CLI coverage is in `internal/kernelcli/product_create_test.go`, while Issue admission/repository/dependency checks are in `internal/product/issue_admission_test.go`. Missing: a single integration test proving both entry paths reach the same running product executor/publication flow. |
+| Product Task workspace, readiness, and stopped candidate | The executor/workspace ports and `internal/kernelcli/product_model_runtime_test.go` cover preparation, readiness binding, and stopped-result adoption separately. Missing: one Wave-level lifecycle test from source admission through model-ready Task, candidate sealing, and publication readiness. |
+| Base refresh and conflict repair | `internal/product/base_planner.go`, `TestExecutionWorkerSelectsActualBaseRefreshesThenNotifiesChangedHead`, and `TestConflictFixUsesFreshCheckoutThenHostSealsOrRetainsFailure` cover those components. Missing: integrated same-Wave tests for predecessor merge followed by successor candidate, and concurrent same-repository Waves where one candidate changes the other's base. |
+| Publication, review, subscription, and merge | `internal/service/product_gates_test.go`, `internal/product/publisher_test.go`, and `internal/product/dispatcher_test.go` verify separate gate/dispatch boundaries and unknown-send reconciliation. Missing: one Wave-level flow joining publication, automatic subscription, review update, canonical merge gate, and resulting WorkItem/Wave state. |
+| Partial work, split lineage, budgets, and versioned continuation | `internal/storage/product_continuations_test.go`, `internal/storage/product_merge_dependencies_test.go`, PR #281, and `docs/product-splitting.md` cover component contracts. Missing: integrated multi-WorkItem/multi-Wave acceptance proving invalidation and cumulative budgets remain connected through publication and continuation. |
+| #44/#45 and shared-repository regressions | `internal/service/assessment_test.go` (`TestNoActionCannotResolveUnassessedFeedback`), `internal/service/adoption_test.go` (`TestAdoptChangedRequirementsAfterFullMerge`, `TestAdoptFullMergeSerializesWithFinalAcceptance`), and `internal/storage/operation_reservations_test.go` (`TestGitCapacityUsesCommonRepositoryAcrossWavesAndLinkedWorktrees`) cover these independently. |
+| K/P separation and unknown Cloud capability | Product tool/publication gates keep unknown external capability held. This is a required safety boundary, not evidence that formal approval, CI/rules, non-bypass authority, or P acceptance has succeeded. |
 
 ## Verification on the merged implementation
 
@@ -33,14 +34,28 @@ The selected product pipeline tests passed in `internal/product` (61.374s),
 (134.545s) and `internal/workspace` (185.438s).
 
 The #44/#45, shared repository, source hold/recovery, split freshness,
-base-refresh and conflict-repair regression selection also passed:
+base-refresh and conflict-repair regression selection also passed with this
+exact command:
+
+```sh
+go test ./internal/service ./internal/storage ./internal/product \
+  -run '^(TestNoActionCannotResolveUnassessedFeedback|TestAdoptChangedRequirementsAfterFullMerge|TestAdoptFullMergeSerializesWithFinalAcceptance|TestGitCapacityUsesCommonRepositoryAcrossWavesAndLinkedWorktrees|TestProductContinuationRegistrationPreservesOldMergeAndWaveBudget|TestProductContinuationRequiresNewVersionOriginalParentAndAtomicSave|TestIssueSourceObserverPersistsHoldAndRecoveryWithoutModelTurn|TestProductSplitChildSourcePinsIdentityPolicyAndBoundedFreshnessWithoutWaveHold|TestProductBasePlanKeepsSemanticHistoryAndRequiresFreshCurrentSource|TestConflictFixUsesFreshCheckoutThenHostSealsOrRetainsFailure)$' \
+  -count=1 -timeout=15m
+```
+
+Results:
 `internal/service` (9.957s), `internal/storage` (34.067s), and
 `internal/product` (48.767s).
 
 ## Remaining P evidence
 
-These fixtures do not prove a real product repository's end-to-end PR creation,
-Cloud review, formal APPROVED, required CI/rules, non-bypass authority, or a
-product-specific final acceptance. Those remain P unknown/blocked evidence in
-issue #20 and the Task_13 acceptance issue #43. The K result and this local
-Task_11 evidence do not change those statuses.
+The following remain unimplemented or unverified for Task_11: an integrated
+product-Wave acceptance flow across the listed component boundaries, especially
+base changes between concurrent Waves and the durable link from automatic
+subscription updates back to product Task/WorkItem state. Do not close #42
+based on this component evidence.
+
+Real product repository PR creation, Cloud review, formal APPROVED, required
+CI/rules, non-bypass authority, and product-specific final acceptance also
+remain P unknown/blocked evidence in issue #20 and Task_13/#43. The K result
+does not change those statuses.
