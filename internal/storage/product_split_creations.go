@@ -403,6 +403,40 @@ func (k *KernelStore) PrepareProductSplitCreate(ctx context.Context, r ProductSp
 	return saved, tx.Commit()
 }
 
+type splitCreationInputs struct {
+	Allocation ProductSplitAllocation        `json:"allocation"`
+	Plan       ProductSplitChildPlan         `json:"plan"`
+	Ancestry   *ProductNestedSplitAllocation `json:"ancestry"`
+}
+
+// These immutable proof reads share one private read-only call tree. The
+// context ends before any lease/journal write; preflight and live gates are
+// never cached, and the next call after a write validates its proofs again.
+func (k *KernelStore) loadCurrentSplitCreationInputsTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (splitCreationInputs, error) {
+	// Always start a new scope, including when the caller just wrote another
+	// sibling. Only immutable loaders memoize values. The live preflight itself
+	// executes twice and is never represented by a cached success value.
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	var value splitCreationInputs
+	if err := k.splitCreatePreflightTx(read, tx, r); err != nil {
+		return value, err
+	}
+	var err error
+	value.Allocation, err = loadProductSplitAllocation(read, tx, r)
+	if err != nil {
+		return value, splitEvidenceErr(err)
+	}
+	value.Plan, err = loadProductSplitChildPlan(read, tx, r)
+	if err != nil {
+		return value, splitEvidenceErr(err)
+	}
+	value.Ancestry, err = loadSplitCreationAncestry(read, tx, r)
+	if err != nil {
+		return value, err
+	}
+	return value, k.splitCreatePreflightTx(read, tx, r)
+}
+
 func (k *KernelStore) prepareProductSplitCreateTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, childID, ownerID string) (ProductSplitCreate, error) {
 	var job ProductSplitCreate
 	if childID == "" || strings.TrimSpace(ownerID) == "" || len(ownerID) > 256 || strings.ContainsAny(ownerID, "\x00\r\n") {
@@ -418,17 +452,11 @@ func (k *KernelStore) prepareProductSplitCreateTx(ctx context.Context, tx *sql.T
 	if err != sql.ErrNoRows {
 		return job, err
 	}
-	if err := k.splitCreatePreflightTx(ctx, tx, r); err != nil {
+	inputs, err := k.loadCurrentSplitCreationInputsTx(ctx, tx, r)
+	if err != nil {
 		return job, err
 	}
-	allocation, err := loadProductSplitAllocation(ctx, tx, r)
-	if err != nil {
-		return job, splitEvidenceErr(err)
-	}
-	plan, err := loadProductSplitChildPlan(ctx, tx, r)
-	if err != nil {
-		return job, splitEvidenceErr(err)
-	}
+	allocation, plan := inputs.Allocation, inputs.Plan
 	var child ProductSplitChildIntent
 	for _, candidate := range plan.Children {
 		if candidate.ID == childID {
@@ -438,11 +466,7 @@ func (k *KernelStore) prepareProductSplitCreateTx(ctx context.Context, tx *sql.T
 	if child.ID == "" {
 		return job, ErrProductSplitHeld
 	}
-	ancestry, err := loadSplitCreationAncestry(ctx, tx, r)
-	if err != nil {
-		return job, err
-	}
-	job = ProductSplitCreate{ID: splitCreateID(childID), Value: ProductSplitCreateValue{Ancestry: ancestry, Request: r, ParentHeadID: plan.Set.Value.ParentHeadID, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Child: child, OwnerID: ownerID, CreatedAt: k.clock()}, State: "prepared"}
+	job = ProductSplitCreate{ID: splitCreateID(childID), Value: ProductSplitCreateValue{Ancestry: inputs.Ancestry, Request: r, ParentHeadID: plan.Set.Value.ParentHeadID, AllocationID: allocation.ID, AllocationDigest: allocation.Digest, Child: child, OwnerID: ownerID, CreatedAt: k.clock()}, State: "prepared"}
 	job.Digest, err = contentDigest(job.Value)
 	if err != nil {
 		return job, err
@@ -481,7 +505,10 @@ func (k *KernelStore) ActivateProductSplitCreateHTTP(ctx context.Context, id, ow
 		return claim, err
 	}
 	defer tx.Rollback()
-	job, err := loadSplitCreate(ctx, tx, id)
+	// This context ends before saveSplitCreateTx. It shares metadata proofs,
+	// never the current source/clock or the one-use activation decision.
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	job, err := loadSplitCreate(read, tx, id)
 	if err != nil {
 		return claim, err
 	}
@@ -495,10 +522,10 @@ func (k *KernelStore) ActivateProductSplitCreateHTTP(ctx context.Context, id, ow
 	if job.State != "prepared" {
 		return claim, ErrProductSplitHeld
 	}
-	if err := k.splitCreatePreflightTx(ctx, tx, job.Value.Request); err != nil {
+	if err := k.splitCreatePreflightTx(read, tx, job.Value.Request); err != nil {
 		return claim, err
 	}
-	gateDigest, err := k.splitCreateSendGateTx(ctx, tx, job)
+	gateDigest, err := k.splitCreateSendGateTx(read, tx, job)
 	if err != nil {
 		return claim, err
 	}
@@ -508,6 +535,94 @@ func (k *KernelStore) ActivateProductSplitCreateHTTP(ctx context.Context, id, ow
 	job, err = saveSplitCreateTx(ctx, tx, job, &previous)
 	if err != nil {
 		return claim, err
+	}
+	if err := tx.Commit(); err != nil {
+		return claim, err
+	}
+	return ProductSplitCreateClaim{Creation: job, Start: true}, nil
+}
+
+// ObserveAndActivateProductSplitCreateHTTP is the trusted subprocess port
+// immediately after its joined source GETs. Gate and one-use activation commit
+// together; no replay, saved gate, or cached metadata renews an external read.
+func (k *KernelStore) ObserveAndActivateProductSplitCreateHTTP(ctx context.Context, id, owner, digest, specDigest, sourceID, sourceDigest string) (ProductSplitCreateClaim, error) {
+	var claim ProductSplitCreateClaim
+	physical := process.Identify(os.Getpid())
+	if !validSourceDigest(specDigest) || !physical.Valid() || !process.Alive(physical) {
+		return claim, ErrProductSplitHeld
+	}
+	_, group, _, err := process.ReadStat(physical.PID)
+	if err != nil || group != physical.PID {
+		return claim, ErrProductSplitHeld
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return claim, err
+	}
+	defer tx.Rollback()
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	job, err := loadSplitCreate(read, tx, id)
+	if err != nil {
+		return claim, err
+	}
+	claim.Creation = job
+	if job.Value.OwnerID != owner || job.Digest != digest {
+		return claim, ErrProductSplitHeld
+	}
+	if job.State == "unknown" && job.HTTP != nil && job.HTTP.Process == physical && job.HTTP.SpecDigest == specDigest {
+		return claim, nil
+	}
+	record, job, err := k.readSplitCreateGateTx(read, tx, id, owner, digest, sourceID, sourceDigest)
+	if err != nil {
+		return claim, err
+	}
+	if err := validateNestedSplitCreationGateSource(read, tx, job, record.Value); err != nil {
+		return claim, err
+	}
+	// Preserve actual GET times through the writes below. This local deadline
+	// is never persisted as authority and is checked again immediately at commit.
+	expires, notBefore := record.Value.ObservedAt.Add(5*time.Second), record.Value.ObservedAt
+	if job.Value.Ancestry != nil {
+		ids := []string{job.Value.Request.ParentWorkItemID}
+		for _, ref := range record.Value.AncestorSources {
+			ids = append(ids, ref.WorkItemID)
+		}
+		for _, workID := range ids {
+			var source ProductSplitChildSource
+			if err := taskEvidenceRecord(read, tx, "product_split_child_source", workID, &source); err != nil {
+				return claim, splitEvidenceErr(err)
+			}
+			if until := source.CheckedAt.Add(5 * time.Second); until.Before(expires) {
+				expires = until
+			}
+			if source.CheckedAt.After(notBefore) {
+				notBefore = source.CheckedAt
+			}
+		}
+	}
+	wave, err := loadWave(read, tx, job.Value.Request.Target.WaveID)
+	if err != nil {
+		return claim, err
+	}
+	if wave.Deadline.Before(expires) {
+		expires = wave.Deadline
+	}
+	now := k.clock()
+	if now.Before(notBefore) || !now.Before(expires) {
+		return claim, ErrProductSplitHeld
+	}
+	if err := writeSplitCreateGateTx(ctx, tx, job, record); err != nil {
+		return claim, err
+	}
+	previous := job
+	job.HTTP = &ProductSplitCreateOwner{GateDigest: record.Digest, Process: physical, SpecDigest: specDigest, ActivatedAt: now}
+	job.State = "unknown"
+	job, err = saveSplitCreateTx(ctx, tx, job, &previous)
+	if err != nil {
+		return claim, err
+	}
+	if now = k.clock(); now.Before(notBefore) || !now.Before(expires) {
+		return claim, ErrProductSplitHeld
 	}
 	if err := tx.Commit(); err != nil {
 		return claim, err

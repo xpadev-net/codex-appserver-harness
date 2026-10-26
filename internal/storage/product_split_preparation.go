@@ -54,6 +54,25 @@ func (k *KernelStore) PrepareProductSplitExecution(ctx context.Context, r Produc
 	return saved, nil
 }
 
+// PrepareProductNestedSplitExecution is the trusted controller counterpart of
+// product_split_nested. It shares that tool's complete-set transaction and
+// authenticates the original parent proof; it grants no HTTP send or execution.
+func (k *KernelStore) PrepareProductNestedSplitExecution(ctx context.Context, r ProductSplitProposalRequest, parent ProductSplitParentScopeReference) (ProductSplitPreparation, error) {
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return ProductSplitPreparation{}, err
+	}
+	defer tx.Rollback()
+	saved, err := k.prepareProductNestedSplitExecutionTx(ctx, tx, r, parent)
+	if err != nil {
+		return ProductSplitPreparation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ProductSplitPreparation{}, err
+	}
+	return saved, nil
+}
+
 func loadProductSplitPreparationTx(ctx context.Context, tx *sql.Tx, head string) (ProductSplitPreparation, error) {
 	var saved, history ProductSplitPreparation
 	err := taskEvidenceRecord(ctx, tx, "product_split_preparation", head, &saved)

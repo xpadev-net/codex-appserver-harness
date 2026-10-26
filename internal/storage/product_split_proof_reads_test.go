@@ -8,6 +8,40 @@ import (
 	"testing"
 )
 
+func TestSplitMetadataCheckNeverSurvivesAWriteInTheSameTransaction(t *testing.T) {
+	ctx := context.Background()
+	k, wave, _ := productSplitProposalFixture(t)
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	_, err = readSplitProof(ctx, tx, "test-negative-snapshot", wave.ID, func(read context.Context) (bool, error) {
+		for i := 0; i < 2; i++ {
+			held, err := splitScopeUnreadableForWave(read, tx, wave.ID)
+			if err != nil || held {
+				t.Fatal("intact metadata was held", held, err)
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES('product_split_completion','damaged-after-read',?,?)", wave.ID, []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := splitScopeUnreadableForWave(ctx, tx, wave.ID); err != nil || !held {
+		t.Fatal("prior negative metadata check hid a later damaged witness", held, err)
+	}
+	if _, err := tx.Exec("DELETE FROM records WHERE kind='product_split_completion' AND id='damaged-after-read'"); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := splitScopeUnreadableForWave(ctx, tx, wave.ID); err != nil || held {
+		t.Fatal("restored metadata retained a stale prohibition", held, err)
+	}
+}
+
 func TestSplitProofReadsNeverSurviveWritesOrTransactions(t *testing.T) {
 	ctx := context.Background()
 	k, r, scopes := splitRegistrationsFixture(t)
