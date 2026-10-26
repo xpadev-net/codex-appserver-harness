@@ -71,9 +71,15 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 				if !acknowledged || update.Snapshot.Value.Status != "ready" {
 					return storage.ErrProductSplitHeld
 				}
-				_, err = k.RequireProductSplitChildSource(read, job.Value.Request.Target, id, policy.Digest(), 5*time.Second)
-				if err != nil {
-					return fmt.Errorf("split child source freshness: %w", err)
+				// Observe already joined and authenticated the source save. Avoid a
+				// second canonical walk here; the atomic activation revalidates
+				// every current binding/policy/source before allowing a send.
+				now := time.Now().UTC()
+				if k.Now != nil {
+					now = k.Now().UTC()
+				}
+				if update.Snapshot.CheckedAt.IsZero() || now.Before(update.Snapshot.CheckedAt) || now.Sub(update.Snapshot.CheckedAt) > 5*time.Second {
+					return fmt.Errorf("split child source freshness: %w", storage.ErrProductSplitHeld)
 				}
 				return nil
 			})
@@ -253,6 +259,14 @@ func ReadSplitHTTPResult(ctx context.Context, k *storage.KernelStore, id string)
 	if err != nil {
 		return result, err
 	}
+	return readSplitHTTPResultForCreation(k, job)
+}
+
+// The supplied job must come from the current canonical journal read. A result
+// remains a hint; physical stopping and GET reconciliation use fresh authority.
+func readSplitHTTPResultForCreation(k *storage.KernelStore, job storage.ProductSplitCreate) (SplitHTTPResult, error) {
+	var result SplitHTTPResult
+	id := job.ID
 	if job.HTTP == nil {
 		return result, storage.ErrProductSplitHeld
 	}

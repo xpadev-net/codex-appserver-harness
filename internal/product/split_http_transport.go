@@ -18,6 +18,11 @@ type SplitHTTPTransport struct {
 	SourcePolicy *IssueSourcePolicy
 }
 
+// Journal recovery may authenticate a large immutable ancestor tree after the
+// physical owner has stopped. This is independent of the five-second source
+// freshness gate and the physical StopGroup deadline.
+const splitHTTPRecoveryTimeout = 20 * time.Second
+
 func (t SplitHTTPTransport) Start(ctx context.Context, id string) (storage.ProductSplitCreate, error) {
 	var empty storage.ProductSplitCreate
 	if t.Store == nil || !filepath.IsAbs(t.Executable) {
@@ -45,17 +50,20 @@ func (t SplitHTTPTransport) Start(ctx context.Context, id string) (storage.Produ
 	wait, cancel := context.WithTimeout(ctx, 35*time.Second)
 	waitErr := t.waitResult(wait, id, identity)
 	cancel()
-	cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanup, stop := context.WithTimeout(context.Background(), splitHTTPRecoveryTimeout)
 	defer stop()
-	if err := process.StopGroup(cleanup, identity); err != nil {
-		return empty, errors.Join(waitErr, err)
+	physicalStop, cancelStop := context.WithTimeout(cleanup, 5*time.Second)
+	stopErr := process.StopGroup(physicalStop, identity)
+	cancelStop()
+	if stopErr != nil {
+		return empty, errors.Join(waitErr, stopErr)
 	}
 	_ = cmd.Wait()
 	job, err := t.Recover(cleanup, id)
 	return job, errors.Join(waitErr, err)
 }
 func (t SplitHTTPTransport) cleanupUnstarted(id string, cause error) (storage.ProductSplitCreate, error) {
-	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanup, cancel := context.WithTimeout(context.Background(), splitHTTPRecoveryTimeout)
 	defer cancel()
 	job, err := t.Recover(cleanup, id)
 	return job, errors.Join(cause, err)
@@ -72,7 +80,9 @@ func (t SplitHTTPTransport) waitResult(ctx context.Context, id string, identity 
 			if job.HTTP.Process != identity {
 				return storage.ErrProductSplitHeld
 			}
-			if _, err := ReadSplitHTTPResult(ctx, t.Store, id); err == nil {
+			// The job above was just authenticated. This response is only a hint
+			// to stop and reconcile, so do not repeat its canonical proof walk.
+			if _, err := readSplitHTTPResultForCreation(t.Store, job); err == nil {
 				return nil
 			}
 		}
@@ -99,7 +109,7 @@ func (t SplitHTTPTransport) Recover(ctx context.Context, id string) (storage.Pro
 	if t.Store == nil {
 		return empty, errors.New("split journal required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, splitHTTPRecoveryTimeout)
 	defer cancel()
 	job, err := t.Store.ReadProductSplitCreate(ctx, id)
 	if err != nil {
@@ -123,8 +133,11 @@ func (t SplitHTTPTransport) Recover(ctx context.Context, id string) (storage.Pro
 			return empty, errors.Join(storage.ErrProductSplitHeld, err)
 		}
 	}
-	if err := process.StopGroup(ctx, job.HTTP.Process); err != nil {
-		return empty, err
+	physicalStop, cancelStop := context.WithTimeout(ctx, 5*time.Second)
+	stopErr := process.StopGroup(physicalStop, job.HTTP.Process)
+	cancelStop()
+	if stopErr != nil {
+		return empty, stopErr
 	}
 	return t.Store.FinishProductSplitCreateHTTP(ctx, id, job.Value.OwnerID, job.Digest, job.HTTP.SpecDigest, "split-http-stop-"+job.HTTP.SpecDigest)
 }
