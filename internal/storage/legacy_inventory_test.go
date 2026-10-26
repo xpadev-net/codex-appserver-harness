@@ -195,6 +195,9 @@ func TestLegacyInventoryGroupsActualSplitContinuationRepairWithoutReusingEndedTh
 	if len(all["wi"].FinalHistory) != 1 || all["wi"].FinalHistory[0].ID != "r1-i1:s1:a1" {
 		t.Fatal("prior parent final acceptance history omitted", all["wi"].FinalHistory)
 	}
+	if len(all["child"].Events) == 0 || all["child"].Events[0].Event.WorkItemID != "child" || all["child"].Events[0].Applied == "" {
+		t.Fatal("legacy applied event history omitted", all["child"].Events)
+	}
 	for _, issue := range all["wi"].Issues {
 		if issue.Reason == "parent_final_state_identity_invalid" {
 			t.Fatal("valid state transfer marked predecessor as corrupt")
