@@ -237,6 +237,9 @@ func TestProductModelReadinessRechecksAtTurnAndRecordsAtomicAdmission(t *testing
 			if (err == nil) != (mode == "start") {
 				t.Fatal("turn admission did not recheck current runtime", mode, err)
 			}
+			if errors.Is(err, ErrProductAdmissionChanged) != (mode == "revoked" || mode == "changed_model") {
+				t.Fatal("pre-run gate change was confused with a storage failure", mode, err)
+			}
 			current, readErr := k.Task(ctx, task.ID)
 			if readErr != nil {
 				t.Fatal(readErr)

@@ -79,6 +79,13 @@ func (e Executor) Prepare(ctx context.Context, taskID string) (storage.ProductWo
 	}
 	request := storage.ProductWorkspaceRequest{TaskID: task.ID, RepositoryID: repo.Policy.RepositoryID, Repository: repo.Policy.Repository, BaseSHA: base}
 	preparer := WorkspacePreparer{Store: e.Store}
+	if e.BasePlanner != nil && e.BasePlanner.Source != nil {
+		current := storage.ProductTargetSnapshot{Value: storage.ProductTarget{Target: task.Target(), Repository: repo.Name, BaseBranch: repo.BaseBranch, WorkItem: domain.WorkItem{ID: task.Spec.WorkItemIDs[0], RepositoryID: repo.Policy.RepositoryID}}}
+		if input.Product != nil {
+			current = *input.Product
+		}
+		preparer.RefreshSource = func(read context.Context) error { return e.BasePlanner.Source(read, current) }
+	}
 	if (task.Spec.Kind == "work" || task.Spec.Kind == "fix") && e.BasePlanner != nil {
 		if e.BasePlanner.Executor.Store != e.Store {
 			return storage.ProductWorkspace{}, errors.New("base planner store owner mismatch")

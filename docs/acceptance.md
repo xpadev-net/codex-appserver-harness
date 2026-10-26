@@ -99,6 +99,8 @@ go test ./internal/kernelcli -run '^TestLiveKernelCLIFixReviewAcceptance$' -coun
 
 実modelの実装・独立検証・正式runner・read-only reviewは[実接続記録](product-local-native.md)と[証跡](../evidence/background-wave/product/native-local-quality.json)を参照する。host採用済み計画のローカル品質確認であり、正式Cloud承認・PR/merge・親最終受入は未実行。P全体と#20は未達のままとする。
 
+登録済み分割子でも同じ3 Taskと正式runnerをnativeで完了し、[local scopeの証跡](../evidence/background-wave/product/native-scoped-local-quality.json)を保存した。元のACはunverified、兄弟は未merge、Root受入は拒否のままである。Issue APIは制御されたローカルadapterを使用し、default 8/depth 3の全体実行や実GitHub公開の受入には数えない。
+
 ## P 最終 HEAD の取得 component
 
 [固定 commit の取得](product-final-fetch.md)は共有 Git lease・一度限りの送信・実停止証拠を使い、取得した SHA を正式 runner へ渡す。GitHub 観測/承認は fixture として検査した component であり、[daemon の自動最終工程と親受入直前の確認](product-final-daemon.md)にも接続した。P 全体の native 受入とは区別する。

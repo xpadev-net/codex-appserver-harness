@@ -310,6 +310,49 @@ type delayedSplitSourceBookendAPI struct {
 	afterGET func(string)
 }
 
+func TestSplitChildSourceGateRetriesOnlySupersededObservationWithFreshGETs(t *testing.T) {
+	for _, repeated := range []bool{false, true} {
+		t.Run(fmt.Sprint(repeated), func(t *testing.T) {
+			o, api, saved, _ := splitChildSourceFixture(t)
+			ctx := context.Background()
+			clock := time.Now().Add(time.Minute).UTC().Round(0)
+			o.Store.Now = func() time.Time { return clock }
+			target := saved.Value.Request.Target
+			first := saved.Value.Registrations[0].Value.Definition
+			if _, ack, err := o.Observe(ctx, target, first.ID); err != nil || !ack {
+				t.Fatal("initial source", ack, err)
+			}
+			api.calls = nil
+			conflicts := 0
+			interleaved := delayedSplitSourceBookendAPI{ResourceAPI: api, afterGET: func(path string) {
+				if path != "" || len(api.calls)%4 != 0 || conflicts > 0 && !repeated {
+					return
+				}
+				conflicts++
+				clock = clock.Add(time.Millisecond)
+				newer := o
+				newer.API = &splitSourceFixtureAPI{issues: api.issues}
+				if _, ack, err := newer.Observe(ctx, target, first.ID); err != nil || !ack {
+					t.Fatal("interleaved source", ack, err)
+				}
+			}}
+			gate := KernelSourceGate{Store: o.Store, Policies: map[int64]IssueSourcePolicy{17: o.Policy}, API: func(storage.ProductTarget) ResourceAPI { return interleaved }}
+			snapshot := storage.ProductTargetSnapshot{Value: storage.ProductTarget{Target: target, WorkItem: domain.WorkItem{ID: first.ID, RepositoryID: first.RepositoryID}, Repository: first.Repository}}
+			err := gate.Check(ctx, snapshot)
+			if repeated {
+				if !errors.Is(err, storage.ErrProductSplitSourceSuperseded) || conflicts != 2 {
+					t.Fatal("repeated conflict accepted cached winner or retried without bound", conflicts, err)
+				}
+			} else if err != nil || conflicts != 1 {
+				t.Fatal("fresh retry failed", conflicts, err)
+			}
+			if len(api.calls) != 8 {
+				t.Fatal("retry did not perform exactly two complete GET bookends", api.calls)
+			}
+		})
+	}
+}
+
 func (a delayedSplitSourceBookendAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
 	raw, err := a.ResourceAPI.ResourceGET(ctx, path)
 	a.afterGET(path)

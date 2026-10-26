@@ -46,6 +46,12 @@ func (g KernelSourceGate) Check(ctx context.Context, saved storage.ProductTarget
 		}
 		o := SplitChildSourceObserver{Store: g.Store, API: api, Policy: policy, Attempts: 1}
 		update, acknowledged, err := o.Observe(ctx, p.Target, p.WorkItem.ID)
+		// Periodic polling can finish a newer GET while this read is in flight.
+		// Retry once with entirely new bookends and the current CAS identity;
+		// never save old facts at a newer time or accept the winning cached read.
+		if errors.Is(err, storage.ErrProductSplitSourceSuperseded) && ctx.Err() == nil {
+			update, acknowledged, err = o.Observe(ctx, p.Target, p.WorkItem.ID)
+		}
 		if err != nil {
 			return err
 		}

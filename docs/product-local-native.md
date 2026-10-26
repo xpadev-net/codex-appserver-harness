@@ -25,3 +25,15 @@ go test ./internal/kernelcli -run '^TestLiveProductLocalModelVerificationReview$
 必要環境はLinuxのbubblewrapと`/usr/local/go/bin/go`。`HARNESS_LIVE_SESSION_AUTH_FILE`を省略すると現`CODEX_HOME/auth.json`（未指定時は`~/.codex/auth.json`）を使い、専用worker homeへ認証を供給する。controllerのhomeやDBをmodel/runnerへ公開しない。root/evidenceは既存のものを指定すると拒否する。認証値、daemon raw log、private DBを公開証拠へコピーしない。
 
 `TestReviewInputIncludesCurrentMachineEvidenceWithoutPrivateRunnerData`でpassed/failed/not_run/prepared/launching/停止証拠欠落/破損証拠、exact SHA/profile、private情報非公開、過去snapshot不変、verification Taskへの非公開、SQL失敗の返却を検査する。fixtureの成功を上記native実行やP全体受入へ読み替えない。
+
+## 登録済み分割子の実接続
+
+2026-10-26、同じ native Codex 0.163.0 / `gpt-6.1-sol` / 現セッション認証を使い、`TestLiveProductScopedModelVerificationReview` を未skipで1件実行した。314.90秒（package全体314.918秒）で成功し、[証跡](../evidence/background-wave/product/native-scoped-local-quality.json)に3件の独立したTask/session/thread、model admission 3件、正式unit job 1件、固定candidateのtested SHAとlocal quality/scope digest、全managed process停止を記録した。main runは0、開始前の上限は2,000,000 token、観測下限は687,184 tokenだった。
+
+元のMultiply要求を正・ゼロ部分と負数部分の2子に分割し、登録済みの正・ゼロ部分だけを実装→独立検証→正式runner→read-only reviewへ渡した。各Taskは元のACをunverifiedとして保持し、検証planとschema 4の`product_local_review`は完全なlocal criterionとscope digestに結び付く。Root品質は拒否され、coverageはmerge済み0件・未merge2件のままだった。local qualityを親受入へ流用しないことを検査している。
+
+Issue APIはprivateなローカルadapterへ置換したが、productionの管理された作成subprocess、停止証明、list/GETによる作成照合、scope登録、周期的ソース監視と起動時GET、base planner、隔離、正式runnerを使用した。制御されたIssue POSTは2件で、実GitHub操作は0件。初期計画はhostが採用した3 Phase計画であり、modelによる初期分解・計画や実GitHub公開を証明しない。default 8/depth 3の全体実行、兄弟の完了、merge、正式Cloud APPROVED、親最終受入、P全体は引き続き未受入である。
+
+実接続の先行試行で、checkout後のソース再確認が拒否されレビューを起動しなかった[未受入の証跡](../evidence/background-wave/product/native-scoped-source-revalidation-held.json)も保持する。保存済みDB・結果・予算を編集せず、新DBで再試行した。checkout前後の実GET、予約前product gate変更後の物理停止を条件とする再選択、新しい観測に追い越されたソースCASだけを対象とする一度の完全なGET再試行を追加した。観測時刻を再保存で更新せず、productionの鮮度期限も変更していない。競合の再現試験では一度の競合後の成功と、二度の競合後の保留を確認する。
+
+再現には上記の共通envを使い、`HARNESS_LIVE_PRODUCT_LOCAL=1`を`HARNESS_LIVE_PRODUCT_SCOPED=1`へ、test名を`^TestLiveProductScopedModelVerificationReview$`へ置き換える。新しいroot/evidenceを必ず指定する。通常suiteではskipし、認証・model・GitHubへ接続しない。

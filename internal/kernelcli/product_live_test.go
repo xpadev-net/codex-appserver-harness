@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -28,6 +29,18 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 	if os.Getenv("HARNESS_LIVE_PRODUCT_LOCAL") != "1" {
 		t.Skip("explicit native local product model exercise only")
 	}
+	runLiveProductRoles(t, false)
+}
+
+func TestLiveProductScopedModelVerificationReview(t *testing.T) {
+	if os.Getenv("HARNESS_LIVE_PRODUCT_SCOPED") != "1" {
+		t.Skip("explicit native scoped product exercise only")
+	}
+	runLiveProductRoles(t, true)
+}
+
+func runLiveProductRoles(t *testing.T, scoped bool) {
+	t.Helper()
 	binary, model, root, output, cli := os.Getenv("HARNESS_LIVE_CODEX_BINARY"), os.Getenv("HARNESS_LIVE_MODEL"), os.Getenv("HARNESS_LIVE_PRODUCT_ROOT"), os.Getenv("HARNESS_LIVE_PRODUCT_EVIDENCE"), os.Getenv("HARNESS_LIVE_HARNESS_BINARY")
 	if !filepath.IsAbs(binary) || model == "" || !filepath.IsAbs(root) || !filepath.IsAbs(output) || !filepath.IsAbs(cli) {
 		t.Fatal("absolute native/production harness binaries, NEW private root, model and evidence required")
@@ -103,10 +116,25 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 	if err != nil {
 		t.Fatal("admit native product fixture")
 	}
+	workID := "work"
+	var split *liveProductSplit
+	if scoped {
+		prepared := prepareLiveProductSplit(t, ctx, k, w, cli, base)
+		split = &prepared
+		workID = prepared.Binding.Value.Child.Value.WorkItemID
+	}
 	instructions := []string{
 		"Implement the original Multiply requirement in math.go, package product. Do not edit go.mod or add tests; a separate verification Task owns tests. Read the complete manifest and product_workspace reference. Publish short implementation notes as your own artifact. A claimed criterion_result must reference that owned published artifact in evidence_ids and list it in artifacts; without evidence use status=unverified and evidence_ids=[]. Complete your assignment using the provided schema_version=2 output with the exact workspace change reference; do not claim a new SHA or quality approval. Later verification/review is not remaining work in this assignment. Do not publish PRs, contact GitHub, spawn agents or create sessions.",
 		`Independently verify the original Multiply requirement against the fixed product_subject. Change only tests/ paths. Add tests/behavior_test.go in package tests importing product "example.invalid/harness-local-product" and a TestMultiply covering positive, negative and zero cases without overflow. Publish a verification_plan JSON artifact and return its ID using product_verification with subject_id=product_subject.id, subject_digest=product_subject.digest (not value.candidate_digest), and the exact product_workspace change reference in schema_version=3. Plan schema_version=1 requires work_item_id=work, current scope_revision/policy_revision, input_candidate_id equal to product_subject.value.candidate.id, plan_revision=1, criteria_tests=[{criterion_id:AC,test_ref:tests/behavior_test.go::TestMultiply,expectation_basis:original AC integer product requirement,profile_id:unit}], requested_profiles=[], unverified_criteria=[], blockers=[], on_success=publish_pr. Use actual JSON strings/keys; read all supplied policy and subject data. Your exploratory checks do not replace the formal host runner. Complete this assignment without waiting for later review. Do not publish PRs, contact GitHub, spawn agents or create sessions.`,
 		"Independently review the exact read-only product_subject candidate, implementation and added tests against original AC. Read product_machine_verification for the authenticated host unit result; it must already have passed and match this candidate. Prior verifier Task statements describe its earlier pre-run state. Keep work_item_refs=[] and verification=null. Publish your own review_report artifact and use schema_version=1 review.target_digest equal to the exact product_subject candidate_digest. Report truthful clean/findings/inconclusive; claimed original criterion evidence must reference your own report. Do not modify files, fabricate a verdict, approve GitHub, publish PRs, spawn agents or create sessions. Complete the review assignment without claiming Wave acceptance.",
+	}
+	if scoped {
+		localID := split.Binding.Value.Scope.Criteria[0].ID
+		instructions = []string{
+			"Implement Multiply in math.go for the complete local obligation in your manifest.product_split_scopes entry (positive and zero integer multiplication). Do not edit go.mod or add tests; a separate verification Task owns tests. Read the full manifest and product_workspace reference. Publish your own implementation notes Artifact, list it in artifacts, and return the exact workspace change reference in schema_version=2. The Task criterion AC names the original whole requirement; leave AC unverified with no evidence because the sibling part is separate. Your local assignment can be completed independently of later roles. Do not publish PRs, contact GitHub, spawn agents or create sessions.",
+			fmt.Sprintf("Independently verify the complete local obligation in your manifest.product_split_scopes entry against the fixed product_subject. Change only tests/ paths. Add tests/behavior_test.go in package tests importing product \"example.invalid/harness-local-product\" and TestMultiply for positive and zero cases. Publish a verification_plan JSON Artifact. Plan schema_version=1, work_item_id=%s, current scope_revision/policy_revision, input_candidate_id=product_subject.value.candidate.id, plan_revision=1, criteria_tests=[{criterion_id:%s,test_ref:tests/behavior_test.go::TestMultiply,expectation_basis:the complete positive and zero local requirement,profile_id:unit}], requested_profiles=[], unverified_criteria=[], blockers=[], on_success=publish_pr. Return schema_version=3 with product_verification subject_id=product_subject.id, subject_digest=product_subject.digest (not candidate_digest), plan_artifact_id=your actual published plan ID, and the exact product_workspace change reference. Read all supplied subject and policy data. Leave original whole Task criterion AC unverified with no evidence; local criterion %s belongs inside the plan. Do not publish PRs, contact GitHub, spawn agents or create sessions.", workID, localID, localID),
+			fmt.Sprintf("Independently review the exact read-only product_subject candidate and tests against every local criterion in your manifest.product_split_scopes entry. Read product_machine_verification and require passed formal runner evidence for this exact SHA. Publish your own review_report Artifact and list it in artifacts. Return schema_version=4, work_item_refs=[], verification=null, review.target_digest=product_subject.value.candidate_digest and a truthful clean/findings/inconclusive verdict. Populate product_local_review.scope_digest with the exact scope_digest from that manifest entry and product_local_review.criteria with %s and every other included LOCAL criterion, each with truthful claimed/unverified status, basis and evidence_ids referencing your own report. Leave the original whole Task criterion AC unverified with no evidence. Your local claim is not whole-criterion or Wave acceptance. Do not modify files, fabricate a verdict, approve GitHub, publish PRs, spawn agents or create sessions.", localID),
+		}
 	}
 	kinds, ids := []string{"work", "verification", "review"}, []string{"implement", "verify", "review"}
 	plan := contract.PlanProposal{SchemaVersion: 1, Phases: []contract.PhaseSpec{}, Templates: []contract.FixReviewTemplate{}}
@@ -115,7 +143,7 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 		if i > 0 {
 			deps = append(deps, contract.TaskDependency{TaskID: ids[i-1]})
 		}
-		spec := contract.TaskSpec{ID: ids[i], Kind: kind, Instruction: instructions[i], Criteria: []string{"AC"}, WorkItemIDs: []string{"work"}, DependsOn: deps, InputArtifactIDs: []string{}}
+		spec := contract.TaskSpec{ID: ids[i], Kind: kind, Instruction: instructions[i], Criteria: []string{"AC"}, WorkItemIDs: []string{workID}, DependsOn: deps, InputArtifactIDs: []string{}}
 		plan.Phases = append(plan.Phases, contract.PhaseSpec{ID: ids[i], Tasks: []contract.TaskSpec{spec}, Completion: contract.CompletionCondition{Kind: "all_success", RequiredTaskIDs: []string{ids[i]}}, FailurePolicy: "drain_and_block"})
 	}
 	if _, err := k.AdoptPlan(ctx, w.Target(), "native-local-plan", plan); err != nil {
@@ -130,8 +158,12 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 	if err := os.Chmod(template, 0700); err != nil {
 		t.Fatal(err)
 	}
-	runtimeFile := operatorFile(t, RuntimeConfig{SchemaVersion: 1, ProductTools: true, ProductToolProfile: "product_v2", CodexBinary: binary, WorkerCodexHome: template, SessionAuthFile: auth, Launcher: []string{launcher}, LauncherContract: "argv_passthrough_v1", IsolationVerified: true, GitDirectories: []string{filepath.Join(repo, ".git")}})
-	executorFile := operatorFile(t, ProductExecutorConfig{
+	toolProfile := "product_v2"
+	if scoped {
+		toolProfile = "product_v5"
+	}
+	runtimeFile := operatorFile(t, RuntimeConfig{SchemaVersion: 1, ProductTools: true, ProductToolProfile: toolProfile, CodexBinary: binary, WorkerCodexHome: template, SessionAuthFile: auth, Launcher: []string{launcher}, LauncherContract: "argv_passthrough_v1", IsolationVerified: true, GitDirectories: []string{filepath.Join(repo, ".git")}})
+	executorConfig := ProductExecutorConfig{
 		SchemaVersion: 1, EverySeconds: 1, IsolationVerified: true,
 		Repositories: []product.ExecutionRepository{{
 			Name: "fixture/local-product", BaseBranch: "trunk", InitialSHA: base,
@@ -143,7 +175,11 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 			},
 			Runner: storage.ProductRunnerRuntime{Root: filepath.Join(root, "runner-jobs"), LauncherContract: "argv_passthrough_v1", Launcher: []string{launcher}, ForbiddenPaths: []string{}},
 		}},
-	})
+	}
+	if scoped {
+		executorConfig.Publication = &ProductPublicationConfig{Workers: 1, ReviewRoutes: []ProductReviewRouteConfig{}, SourcePolicies: []product.IssueSourcePolicy{split.Policy}}
+	}
+	executorFile := operatorFile(t, executorConfig)
 	log, err := os.OpenFile(filepath.Join(root, "native-daemon.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal("private daemon log")
@@ -157,6 +193,14 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	evidence := map[string]any{"stage": "native local product implementation/verification/runner/review", "binary_version": version, "model": model, "executed_tests": 1, "token_limit": tokenLimit, "local_execution": "not_accepted", "full_p_acceptance": "not_accepted", "cloud_native_approval": "unknown_not_observed", "github_operations": 0, "repository": "fixture/local-product", "base_sha": base, "plan_origin": "host_authored_local_fixture", "credential_values_recorded": false, "private_paths_recorded": false}
+	if scoped {
+		evidence["stage"] = "native registered split-child implementation/verification/runner/local review"
+		evidence["source_origin"] = "controlled local GitHub adapter through production publication source observer"
+		evidence["split_children"] = len(split.Registered.Value.Children)
+		evidence["scope_digest"] = split.Binding.Value.ScopeDigest
+		evidence["split_depth"] = split.Binding.Value.Child.Value.Depth
+		evidence["parent_acceptance"] = "not_accepted_peer_unmerged"
+	}
 	exited := false
 	t.Cleanup(func() {
 		if !exited {
@@ -179,7 +223,7 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 			}
 		}
 		clean := context.Background()
-		var live, runs, mainRuns int
+		var live, runs, mainRuns, taskRuns int
 		if err := k.DB.QueryRowContext(clean, "SELECT count(*) FROM records WHERE kind='managed_process' AND json_extract(payload,'$.state')<>'stopped'").Scan(&live); err != nil {
 			t.Error("read native physical stop evidence")
 			live = -1
@@ -190,11 +234,52 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 		if err := k.DB.QueryRowContext(clean, "SELECT count(*) FROM records WHERE kind='agent_run' AND work_item_id=?", main.SessionID).Scan(&mainRuns); err != nil {
 			t.Error("read native parent run evidence")
 		}
+		if err := k.DB.QueryRowContext(clean, "SELECT count(*) FROM records r JOIN kernel_sessions s ON s.id=r.work_item_id WHERE r.kind='agent_run' AND s.kind='task'").Scan(&taskRuns); err != nil {
+			t.Error("read native Task model run evidence")
+		}
 		evidence["model_runs"], evidence["main_runs"], evidence["all_managed_processes_stopped"] = runs, mainRuns, live == 0
+		evidence["task_model_runs"] = taskRuns
+		if scoped {
+			rows, err := k.DB.QueryContext(clean, "SELECT payload FROM records WHERE kind='agent_run' AND work_item_id=?", main.SessionID)
+			if err != nil {
+				t.Error("read scoped parent wait evidence")
+			} else {
+				actions := []string{}
+				for rows.Next() {
+					var raw []byte
+					if err := rows.Scan(&raw); err != nil {
+						t.Error("read scoped parent run")
+						continue
+					}
+					var run contract.SessionRun
+					var result contract.MainResult
+					if json.Unmarshal(raw, &run) != nil || run.State != "completed" || contract.DecodeStrict([]byte(run.Final), &result) != nil {
+						t.Error("scoped parent did not finish a verifiable wait")
+						continue
+					}
+					for _, decision := range result.Decisions {
+						actions = append(actions, decision.Action)
+						if decision.Action != "wait" {
+							t.Error("scoped parent changed the host fixture plan")
+						}
+					}
+				}
+				if err := rows.Err(); err != nil {
+					t.Error("read scoped parent waits")
+				}
+				rows.Close()
+				evidence["main_decisions"] = actions
+			}
+			var management int
+			if err := k.DB.QueryRowContext(clean, "SELECT count(*) FROM kernel_tool_operations WHERE session_id=? AND name IN ('wave_create','wave_plan','product_split','product_split_nested','pr_publish','pr_review_request')", main.SessionID).Scan(&management); err != nil || management != 0 {
+				t.Error("scoped parent performed an unexpected management operation")
+			}
+		}
+
 		if live != 0 {
 			t.Error("native physical stopping not confirmed")
 		}
-		if mainRuns != 0 || runs != 3 {
+		if taskRuns != 3 || runs != taskRuns+mainRuns || !scoped && mainRuns != 0 {
 			t.Error("unexpected native role run count")
 		}
 		budget, budgetErr := k.WaveRunBudget(clean, w.ID)
@@ -238,13 +323,43 @@ func TestLiveProductLocalModelVerificationReview(t *testing.T) {
 		if !complete {
 			continue
 		}
-		quality, err := k.CheckProductQuality(ctx, w.Target(), "work")
+		quality, err := k.CheckProductQuality(ctx, w.Target(), workID)
 		if err != nil {
 			t.Fatal("native local product quality lacks authenticated proof")
+		}
+		if scoped {
+			if quality.Value.ScopeDigest != split.Binding.Value.ScopeDigest || len(quality.Value.Criteria) != len(split.Binding.Value.Scope.Included) {
+				t.Fatal("native local quality lost complete qualified scope")
+			}
+			if _, err := k.CheckProductQuality(ctx, w.Target(), "work"); err == nil {
+				t.Fatal("child quality completed delegated Root")
+			}
+			coverage, err := k.ProductCoverage(ctx, w.Target())
+			if err != nil || len(coverage.Value.Merged) != 0 || len(coverage.Value.UnmergedWorkItems) != 2 {
+				t.Fatal("native part completed parent coverage")
+			}
+			evidence["controlled_issue_posts"] = liveProductSplitPosts(t, split.Directory)
+			if evidence["controlled_issue_posts"] != 2 {
+				t.Fatal("split retried controlled Issue creation")
+			}
 		}
 		sessions, threads := map[string]bool{}, map[string]bool{}
 		account := ""
 		for _, task := range tasks {
+			if scoped {
+				var result contract.TaskResult
+				if err := k.Record(ctx, "task_result", task.ResultID, &result); err != nil {
+					t.Fatal("native scoped Task result proof missing")
+				}
+				for _, criterion := range result.CriterionResults {
+					if criterion.CriterionID != "AC" || criterion.Status != "unverified" {
+						t.Fatal("native local part claimed whole criterion")
+					}
+				}
+				if task.Spec.Kind == "review" && (result.SchemaVersion != 4 || result.ProductLocalReview == nil || result.ProductLocalReview.ScopeDigest != split.Binding.Value.ScopeDigest) {
+					t.Fatal("native local review used the wrong scope/output version")
+				}
+			}
 			b, err := k.SessionBinding(ctx, task.SessionID)
 			if err != nil || b.ThreadID == "" {
 				t.Fatal("native Task thread missing")
