@@ -28,7 +28,7 @@ go test ./internal/kernelcli -run '^TestLiveProductLocalModelVerificationReview$
 
 ## 登録済み分割子の実接続
 
-2026-10-26、同じ native Codex 0.163.0 / `gpt-6.1-sol` / 現セッション認証を使い、`TestLiveProductScopedModelVerificationReview` を未skipで1件実行した。314.90秒で成功し、[証跡](../evidence/background-wave/product/native-scoped-local-quality.json)に3件の独立したTask/session/thread、model admission 3件、正式unit job 1件、固定candidateのtested SHAとlocal quality/scope digest、全managed process停止を記録した。main runは0、開始前の上限は2,000,000 token、観測下限は687,184 tokenだった。
+2026-10-26、同じ native Codex 0.163.0 / `gpt-6.1-sol` / 現セッション認証を使い、`TestLiveProductScopedModelVerificationReview` を未skipで1件実行した。314.90秒（package全体314.918秒）で成功し、[証跡](../evidence/background-wave/product/native-scoped-local-quality.json)に3件の独立したTask/session/thread、model admission 3件、正式unit job 1件、固定candidateのtested SHAとlocal quality/scope digest、全managed process停止を記録した。main runは0、開始前の上限は2,000,000 token、観測下限は687,184 tokenだった。
 
 元のMultiply要求を正・ゼロ部分と負数部分の2子に分割し、登録済みの正・ゼロ部分だけを実装→独立検証→正式runner→read-only reviewへ渡した。各Taskは元のACをunverifiedとして保持し、検証planとschema 4の`product_local_review`は完全なlocal criterionとscope digestに結び付く。Root品質は拒否され、coverageはmerge済み0件・未merge2件のままだった。local qualityを親受入へ流用しないことを検査している。
 
