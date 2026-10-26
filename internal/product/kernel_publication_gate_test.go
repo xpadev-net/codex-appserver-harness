@@ -97,7 +97,7 @@ func checkKernelPublicationGate(t *testing.T, executor Executor, plan storage.Pr
 	if err != nil || !reflect.DeepEqual(publication, again) {
 		t.Fatal("publication body was not stable", again, err)
 	}
-	if mode != "publication" && mode != "publication_residual" {
+	if mode != "publication" && mode != "publication_residual" && mode != "publication_direct" {
 		checkBranchPublisher(t, executor, saved.Value.Product, mode)
 	}
 	if mode == "publication_residual" {
