@@ -648,6 +648,152 @@ func (k *KernelStore) ObserveAndActivateProductSplitCreateHTTP(ctx context.Conte
 	return ProductSplitCreateClaim{Creation: job, Start: true}, nil
 }
 
+// ObserveAndActivateProductSplitCreateHTTPWithSources keeps the authenticated
+// proof snapshot open across the actual child Issue GETs. Source receipts,
+// their gate, and the one-use activation are committed together so proof walks
+// do not consume the five-second freshness window after the GETs complete.
+func (k *KernelStore) ObserveAndActivateProductSplitCreateHTTPWithSources(
+	ctx context.Context,
+	id, owner, digest, specDigest string,
+	observe func(context.Context, []ProductSplitChildSourceState) ([]ProductSplitChildSourceObservation, error),
+) (ProductSplitCreateClaim, error) {
+	var claim ProductSplitCreateClaim
+	physical := process.Identify(os.Getpid())
+	if observe == nil || !validSourceDigest(specDigest) || !physical.Valid() || !process.Alive(physical) {
+		return claim, ErrProductSplitHeld
+	}
+	_, group, _, err := process.ReadStat(physical.PID)
+	if err != nil || group != physical.PID {
+		return claim, ErrProductSplitHeld
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return claim, err
+	}
+	defer tx.Rollback()
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	job, err := loadSplitCreate(read, tx, id)
+	if err != nil {
+		return claim, err
+	}
+	claim.Creation = job
+	if job.Value.OwnerID != owner || job.Digest != digest || job.Value.Ancestry == nil || job.State != "prepared" {
+		return claim, ErrProductSplitHeld
+	}
+	wave, err := loadWave(read, tx, job.Value.Request.Target.WaveID)
+	if err != nil {
+		return claim, err
+	}
+	if wave.Source != "direct" || wave.Target() != job.Value.Request.Target || wave.DispatchPaused() || wave.State == domain.WaveCompleted || wave.State == domain.WaveCanceled || wave.State == domain.WaveBlocked || !k.clock().Before(wave.Deadline) {
+		return claim, ErrProductSplitHeld
+	}
+	if err := k.splitNestedDirectCreatePreflightTx(read, tx, job, wave); err != nil {
+		return claim, err
+	}
+	// Validate any prior gate before the source GETs. It is only historical
+	// evidence here; the new gate below binds the observations returned by them.
+	var current splitCreateGateRecord
+	gateErr := taskEvidenceRecord(read, tx, "product_split_create_gate", job.ID, &current)
+	if gateErr == nil {
+		if _, err := loadSplitCreateGate(read, tx, job); err != nil {
+			return claim, err
+		}
+	} else if gateErr != sql.ErrNoRows {
+		return claim, splitEvidenceErr(gateErr)
+	} else {
+		var known bool
+		if err := tx.QueryRowContext(read, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_create_gate_history' AND work_item_id=?)", job.ID).Scan(&known); err != nil {
+			return claim, err
+		}
+		if known {
+			return claim, ErrProductSplitHeld
+		}
+	}
+	parent, err := splitCreationParentBindingTx(read, tx, job)
+	if err != nil {
+		return claim, err
+	}
+	lineage, err := splitSourceLineageTx(read, tx, parent)
+	if err != nil || len(lineage) == 0 || len(lineage) > maxProductWorkItems {
+		return claim, errors.Join(ErrProductSplitHeld, err)
+	}
+	workIDs := make([]string, 0, len(lineage))
+	for _, binding := range lineage {
+		workIDs = append(workIDs, binding.Value.Child.Value.WorkItemID)
+	}
+	states, err := productSplitChildSourceStatesTx(read, tx, job.Value.Request.Target, workIDs)
+	if err != nil {
+		return claim, err
+	}
+	observations, err := observe(ctx, states)
+	if err != nil {
+		return claim, err
+	}
+	if len(observations) != len(states) {
+		return claim, ErrProductSplitHeld
+	}
+	for i, observation := range observations {
+		if observation.Target != job.Value.Request.Target || observation.WorkItemID != workIDs[i] || !observation.Facts.Available || observation.Facts.Failure != "" || observation.Facts.PolicyDigest != job.Value.Ancestry.Value.SourcePolicyDigest {
+			return claim, ErrProductSplitHeld
+		}
+	}
+	updates, err := observeProductSplitChildSourcesAtTx(k, ctx, tx, read, observations)
+	if err != nil {
+		return claim, err
+	}
+	if len(updates) != len(lineage) {
+		return claim, ErrProductSplitHeld
+	}
+	now := k.clock()
+	if now.Before(wave.CreatedAt) || !now.Before(wave.Deadline) {
+		return claim, ErrProductSplitHeld
+	}
+	gate := ProductSplitCreateGate{Ancestry: job.Value.Ancestry, CreationID: job.ID, CreationDigest: job.Digest, Request: job.Value.Request, ParentHeadID: job.Value.ParentHeadID, ObservedAt: now}
+	expires := wave.Deadline
+	for i, update := range updates {
+		source := update.Snapshot
+		if source.Value.Status != "ready" || source.Value.Facts.PolicyDigest != job.Value.Ancestry.Value.SourcePolicyDigest || source.CheckedAt.IsZero() || now.Before(source.CheckedAt) {
+			return claim, ErrProductSplitHeld
+		}
+		until := source.CheckedAt.Add(ProductSplitActivationSourceMaxAge)
+		if until.Before(expires) {
+			expires = until
+		}
+		if i == 0 {
+			gate.ParentSourceID, gate.ParentSourceDigest = source.ID, source.Digest
+		} else {
+			gate.AncestorSources = append(gate.AncestorSources, ProductSplitAncestorSourceReference{WorkItemID: workIDs[i], SourceID: source.ID, SourceDigest: source.Digest})
+		}
+	}
+	if len(gate.AncestorSources) > 0 {
+		gate.AncestorSourcesVersion = 1
+	}
+	if !now.Before(expires) {
+		return claim, ErrProductSplitHeld
+	}
+	gateDigest, err := contentDigest(gate)
+	if err != nil {
+		return claim, err
+	}
+	if err := writeSplitCreateGateTx(ctx, tx, job, splitCreateGateRecord{Value: gate, Digest: gateDigest}); err != nil {
+		return claim, err
+	}
+	previous := job
+	job.HTTP = &ProductSplitCreateOwner{GateDigest: gateDigest, Process: physical, SpecDigest: specDigest, ActivatedAt: now}
+	job.State = "unknown"
+	job, err = saveSplitCreateActivationTx(ctx, tx, job, &previous, gateDigest)
+	if err != nil {
+		return claim, err
+	}
+	if now = k.clock(); now.Before(wave.CreatedAt) || !now.Before(expires) {
+		return claim, ErrProductSplitHeld
+	}
+	if err := tx.Commit(); err != nil {
+		return claim, err
+	}
+	return ProductSplitCreateClaim{Creation: job, Start: true}, nil
+}
+
 func releaseSplitCreateLeaseTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate) error {
 	result, err := tx.ExecContext(ctx, "UPDATE kernel_resource_leases SET state='released' WHERE resource=? AND run_id=? AND generation=? AND state='held'", job.Lease.Resource, job.ID, job.Lease.Generation)
 	if err != nil {

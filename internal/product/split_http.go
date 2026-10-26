@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -202,14 +203,42 @@ func ExecuteSplitHTTP(ctx context.Context, path string) (SplitHTTPResult, error)
 	if err != nil {
 		return empty, err
 	}
-	sourceID, sourceDigest, err := refreshSplitHTTPSource(ctx, k, job, spec.SourcePolicy, liveAPI{client})
-	if err != nil {
-		return empty, err
+	api := liveAPI{client}
+	var claim storage.ProductSplitCreateClaim
+	if job.Value.Ancestry != nil {
+		w, waveErr := k.Wave(ctx, job.Value.Request.Target.WaveID)
+		if waveErr != nil {
+			return empty, waveErr
+		}
+		if w.Source == "direct" {
+			if err := validateSplitHTTPPolicy(ctx, k, job, spec.SourcePolicy); err != nil {
+				return empty, fmt.Errorf("split source policy: %w", err)
+			}
+			observer := SplitChildSourceObserver{Store: k, API: GitHubResourceAPI(storage.ProductTarget{Repository: job.Value.Child.Value.Repository, WorkItem: domain.WorkItem{RepositoryID: job.Value.Child.Value.RepositoryID}}), Policy: *spec.SourcePolicy, Attempts: 1}
+			claim, err = k.ObserveAndActivateProductSplitCreateHTTPWithSources(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, func(read context.Context, states []storage.ProductSplitChildSourceState) ([]storage.ProductSplitChildSourceObservation, error) {
+				observations, acknowledged, err := observer.ObserveManyWithStates(read, job.Value.Request.Target, states)
+				if err != nil {
+					return nil, err
+				}
+				if !acknowledged || len(observations) != len(states) {
+					return nil, storage.ErrProductSplitHeld
+				}
+				return observations, nil
+			})
+		} else {
+			sourceID, sourceDigest, err := refreshSplitHTTPSource(ctx, k, job, spec.SourcePolicy, api)
+			if err != nil {
+				return empty, err
+			}
+			claim, err = k.ObserveAndActivateProductSplitCreateHTTP(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, sourceID, sourceDigest)
+		}
+	} else {
+		sourceID, sourceDigest, err := refreshSplitHTTPSource(ctx, k, job, spec.SourcePolicy, api)
+		if err != nil {
+			return empty, err
+		}
+		claim, err = k.ObserveAndActivateProductSplitCreateHTTP(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, sourceID, sourceDigest)
 	}
-	if err := ctx.Err(); err != nil {
-		return empty, err
-	}
-	claim, err := k.ObserveAndActivateProductSplitCreateHTTP(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, sourceID, sourceDigest)
 	if err != nil {
 		return empty, fmt.Errorf("split creation activation: %w", err)
 	}

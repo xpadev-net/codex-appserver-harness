@@ -293,6 +293,20 @@ func (k *KernelStore) ReadProductSplitChildSourceStates(ctx context.Context, tar
 	}
 	defer tx.Rollback()
 	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	states, err := productSplitChildSourceStatesTx(read, tx, target, workIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
+func productSplitChildSourceStatesTx(read context.Context, tx *sql.Tx, target contract.Target, workIDs []string) ([]ProductSplitChildSourceState, error) {
+	if !target.Valid() || len(workIDs) == 0 || len(workIDs) > 128 {
+		return nil, ErrProductSplitHeld
+	}
 	seen := make(map[string]bool, len(workIDs))
 	states := make([]ProductSplitChildSourceState, 0, len(workIDs))
 	for _, workID := range workIDs {
@@ -317,9 +331,6 @@ func (k *KernelStore) ReadProductSplitChildSourceStates(ctx context.Context, tar
 			state.Snapshot, state.PolicyPin = source, policy.Value.PolicyDigest
 		}
 		states = append(states, state)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	return states, nil
 }
@@ -375,6 +386,20 @@ func (k *KernelStore) ObserveProductSplitChildSourcesAt(ctx context.Context, obs
 	// immutable reads, then leave the memo context before the first journal
 	// write. readAt remains the actual external GET completion time.
 	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	updates, err := observeProductSplitChildSourcesAtTx(k, ctx, tx, read, observations)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return updates, nil
+}
+
+func observeProductSplitChildSourcesAtTx(k *KernelStore, ctx context.Context, tx *sql.Tx, read context.Context, observations []ProductSplitChildSourceObservation) ([]ProductSplitChildSourceUpdate, error) {
+	if len(observations) == 0 || len(observations) > 128 {
+		return nil, ErrProductSplitHeld
+	}
 	seen := map[string]bool{}
 	saves := make([]splitChildSourceSave, 0, len(observations))
 	for _, observation := range observations {
@@ -462,9 +487,6 @@ func (k *KernelStore) ObserveProductSplitChildSourcesAt(ctx context.Context, obs
 			return nil, err
 		}
 		updates = append(updates, ProductSplitChildSourceUpdate{Snapshot: save.snapshot, Changed: save.changed})
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 	return updates, nil
 }

@@ -73,12 +73,6 @@ func (o SplitChildSourceObserver) ObserveMany(parent context.Context, target con
 	if !target.Valid() || len(workIDs) == 0 || len(workIDs) > 128 {
 		return nil, false, storage.ErrProductSplitHeld
 	}
-	type result struct {
-		index       int
-		observation storage.ProductSplitChildSourceObservation
-		err         error
-		eligible    bool
-	}
 	seen := make(map[string]bool, len(workIDs))
 	for _, id := range workIDs {
 		if id == "" || seen[id] {
@@ -90,26 +84,60 @@ func (o SplitChildSourceObserver) ObserveMany(parent context.Context, target con
 	if err != nil {
 		return nil, false, err
 	}
-	jobs := make(chan int, len(workIDs))
-	for i := range workIDs {
+	observations, acknowledged, err := o.ObserveManyWithStates(parent, target, states)
+	if !acknowledged {
+		return nil, acknowledged, err
+	}
+	save, stop := context.WithTimeout(parent, time.Minute)
+	defer stop()
+	updates, saveErr := o.Store.ObserveProductSplitChildSourcesAt(save, observations)
+	return updates, saveErr == nil, errors.Join(err, saveErr)
+}
+
+// ObserveManyWithStates performs joined read-only GETs against a caller's
+// already authenticated source snapshot. The caller owns persistence so it can
+// commit those observations atomically with a bounded split activation.
+func (o SplitChildSourceObserver) ObserveManyWithStates(parent context.Context, target contract.Target, states []storage.ProductSplitChildSourceState) ([]storage.ProductSplitChildSourceObservation, bool, error) {
+	if err := o.Validate(); err != nil {
+		return nil, false, err
+	}
+	if !target.Valid() || len(states) == 0 || len(states) > 128 {
+		return nil, false, storage.ErrProductSplitHeld
+	}
+	type result struct {
+		index       int
+		observation storage.ProductSplitChildSourceObservation
+		err         error
+		eligible    bool
+	}
+	seen := make(map[string]bool, len(states))
+	for _, state := range states {
+		id := state.Binding.Value.Child.Value.WorkItemID
+		if id == "" || seen[id] || state.Binding.Value.Request.Target != target {
+			return nil, false, storage.ErrProductSplitHeld
+		}
+		seen[id] = true
+	}
+	jobs := make(chan int, len(states))
+	for i := range states {
 		jobs <- i
 	}
 	close(jobs)
-	results := make(chan result, len(workIDs))
+	results := make(chan result, len(states))
 	var joined sync.WaitGroup
-	for i := 0; i < min(4, len(workIDs)); i++ {
+	for i := 0; i < min(4, len(states)); i++ {
 		joined.Add(1)
 		go func() {
 			defer joined.Done()
 			for index := range jobs {
-				observation, err, eligible := o.readObservation(parent, target, workIDs[index], states[index])
+				observation, err, eligible := o.readObservation(parent, target, states[index].Binding.Value.Child.Value.WorkItemID, states[index])
 				results <- result{index: index, observation: observation, err: err, eligible: eligible}
 			}
 		}()
 	}
 	joined.Wait()
 	close(results)
-	observations := make([]storage.ProductSplitChildSourceObservation, len(workIDs))
+	observations := make([]storage.ProductSplitChildSourceObservation, len(states))
 	var readErr error
 	eligible := true
 	for item := range results {
@@ -121,12 +149,9 @@ func (o SplitChildSourceObserver) ObserveMany(parent context.Context, target con
 		return nil, false, errors.Join(readErr, parent.Err())
 	}
 	if !eligible {
-		return nil, false, readErr
+		return observations, false, readErr
 	}
-	save, stop := context.WithTimeout(parent, time.Minute)
-	defer stop()
-	updates, saveErr := o.Store.ObserveProductSplitChildSourcesAt(save, observations)
-	return updates, saveErr == nil, errors.Join(readErr, saveErr)
+	return observations, true, readErr
 }
 
 func (o SplitChildSourceObserver) readObservation(parent context.Context, target contract.Target, workID string, state storage.ProductSplitChildSourceState) (storage.ProductSplitChildSourceObservation, error, bool) {
