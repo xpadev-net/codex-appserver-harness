@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,14 +95,16 @@ func prepareLiveProductGitHub(t *testing.T, k *storage.KernelStore, base string,
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal("create private controlled GitHub adapter")
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate controlled API helper source")
 	}
-	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
-	script := "#!/bin/sh\nexec " + quote(executable) + " -test.run '^TestLiveScopedGitHubFixture$' -- \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(directory, "gh"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	helper := filepath.Join(directory, "gh")
+	build := exec.Command("go", "build", "-o", helper, "./internal/kernelcli/testdata/livegh")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build controlled GitHub adapter: %v (%s)", err, strings.TrimSpace(string(output)))
 	}
 	t.Setenv("HARNESS_LIVE_SCOPED_GITHUB", directory)
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))

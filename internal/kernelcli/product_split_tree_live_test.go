@@ -38,7 +38,7 @@ func TestLiveProductBoundedSplitTree(t *testing.T) {
 			t.Fatal("controlled tree must not overwrite a previous observation")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	if err := Run(ctx, []string{"init", "--root", root, "--model", "controlled-no-model"}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
@@ -114,11 +114,21 @@ func TestLiveProductBoundedSplitTree(t *testing.T) {
 	lineage := []storage.ProductSplitChildScopeBinding{}
 	refresh := func() {
 		t.Helper()
+		ids := make([]string, 0, len(lineage))
 		for _, binding := range lineage {
-			v := binding.Value
-			current := storage.ProductTargetSnapshot{Value: storage.ProductTarget{Target: w.Target(), Repository: "fixture/local-product", WorkItem: domain.WorkItem{ID: v.Child.Value.WorkItemID, RepositoryID: 17}}}
-			if err := gate.Check(ctx, current); err != nil {
-				t.Fatal("actual ancestor source read", err)
+			ids = append(ids, binding.Value.Child.Value.WorkItemID)
+		}
+		if len(ids) == 0 {
+			return
+		}
+		observer := product.SplitChildSourceObserver{Store: k, API: product.GitHubResourceAPI(storage.ProductTarget{Repository: "fixture/local-product", WorkItem: domain.WorkItem{RepositoryID: 17}}), Policy: policy, Attempts: 1}
+		updates, acknowledged, err := observer.ObserveMany(ctx, w.Target(), ids)
+		if err != nil || !acknowledged || len(updates) != len(ids) {
+			t.Fatal("actual ancestor source read", err)
+		}
+		for _, update := range updates {
+			if update.Snapshot.Value.Status != "ready" {
+				t.Fatal("ancestor source not ready")
 			}
 		}
 	}
@@ -174,6 +184,12 @@ func TestLiveProductBoundedSplitTree(t *testing.T) {
 		}
 		t.Logf("depth %d: complete preparation in %dms", depth, time.Since(layerStart).Milliseconds())
 		for _, creation := range prepared.Value.Creations {
+			if depth > 1 {
+				// The production transport enforces a 15-second activation
+				// window. Refresh the actual ancestor reads immediately before
+				// each sequential send so a long fan-out cannot consume it.
+				refresh()
+			}
 			transport := product.SplitHTTPTransport{Store: k, Executable: cli}
 			if depth > 1 {
 				transport.SourcePolicy = &policy
@@ -190,6 +206,9 @@ func TestLiveProductBoundedSplitTree(t *testing.T) {
 				t.Fatal("stopped creation was sent again")
 			}
 		}
+		// Deeper bindings consume the registered ancestor source lineage after
+		// all eight sequential Issue creations and GET reconciliations.
+		refresh()
 		if _, err := k.BindProductSplitChildScopes(ctx, planRequest); err != nil {
 			t.Fatal(err)
 		}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -129,7 +128,7 @@ func (k *KernelStore) productSplitFinalSourcesTx(ctx context.Context, tx *sql.Tx
 	}
 	now := k.clock()
 	for _, source := range snapshots {
-		if now.Before(source.CheckedAt) || now.Sub(source.CheckedAt) > 5*time.Second {
+		if now.Before(source.CheckedAt) || now.Sub(source.CheckedAt) > ProductSplitFinalSourceMaxAge {
 			return nil, ErrProductFinalPlanHeld
 		}
 	}

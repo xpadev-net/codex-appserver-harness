@@ -10,6 +10,14 @@ import (
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 )
 
+// Nested activation validates the full bounded split lineage against source
+// receipts no older than the ordinary five-second send window.
+const ProductSplitActivationSourceMaxAge = 5 * time.Second
+
+// Final source receipts cover a bounded multi-child read and one complete
+// canonical proof walk after the external GETs have finished.
+const ProductSplitFinalSourceMaxAge = 45 * time.Second
+
 func loadSplitCreationAncestry(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest) (*ProductNestedSplitAllocation, error) {
 	proposal, err := loadProductSplitProposal(ctx, tx, ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})
 	if err != nil {
@@ -99,7 +107,7 @@ func (k *KernelStore) nestedSplitCreationSourceTx(ctx context.Context, tx *sql.T
 	if err != nil {
 		return empty, nil, err
 	}
-	sources, err := k.splitSourceLineageReadyTx(ctx, tx, binding, job.Value.Ancestry.Value.SourcePolicyDigest, 5*time.Second)
+	sources, err := k.splitSourceLineageReadyTx(ctx, tx, binding, job.Value.Ancestry.Value.SourcePolicyDigest, ProductSplitActivationSourceMaxAge)
 	if err != nil {
 		return empty, nil, err
 	}

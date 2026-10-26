@@ -52,7 +52,6 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 	if err != nil {
 		return "", "", err
 	}
-	var reads []func(context.Context) error
 	if job.Value.Ancestry != nil {
 		ids := []string{job.Value.Request.ParentWorkItemID}
 		if job.Value.Child.Value.Depth > 1 {
@@ -62,36 +61,30 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 			}
 		}
 		observer := SplitChildSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
-		for _, id := range ids {
-			reads = append(reads, func(read context.Context) error {
-				update, acknowledged, err := observer.Observe(read, job.Value.Request.Target, id)
-				if err != nil {
-					return fmt.Errorf("split child source read: %w", err)
-				}
-				if !acknowledged || update.Snapshot.Value.Status != "ready" {
-					return storage.ErrProductSplitHeld
-				}
-				// Observe already joined and authenticated the source save. Avoid a
-				// second canonical walk here; the atomic activation revalidates
-				// every current binding/policy/source before allowing a send.
-				now := time.Now().UTC()
-				if k.Now != nil {
-					now = k.Now().UTC()
-				}
-				if update.Snapshot.CheckedAt.IsZero() || now.Before(update.Snapshot.CheckedAt) || now.Sub(update.Snapshot.CheckedAt) > 5*time.Second {
-					return fmt.Errorf("split child source freshness: %w", storage.ErrProductSplitHeld)
-				}
-				return nil
-			})
+		updates, acknowledged, err := observer.ObserveMany(ctx, job.Value.Request.Target, ids)
+		if err != nil {
+			return "", "", fmt.Errorf("split child source read: %w", err)
 		}
-	}
-	if err := runSplitSourceReads(ctx, reads); err != nil {
-		return "", "", err
+		if !acknowledged || len(updates) != len(ids) {
+			return "", "", storage.ErrProductSplitHeld
+		}
+		now := time.Now().UTC()
+		if k.Now != nil {
+			now = k.Now().UTC()
+		}
+		for _, update := range updates {
+			if update.Snapshot.Value.Status != "ready" {
+				return "", "", storage.ErrProductSplitHeld
+			}
+			if update.Snapshot.CheckedAt.IsZero() || now.Before(update.Snapshot.CheckedAt) || now.Sub(update.Snapshot.CheckedAt) > storage.ProductSplitActivationSourceMaxAge {
+				return "", "", fmt.Errorf("split child source freshness: %w", storage.ErrProductSplitHeld)
+			}
+		}
 	}
 	sourceID, sourceDigest := "", ""
 	if w.Source != "direct" {
 		// ReadProductSplitSourceLineage above contains only registered split
-		// child Issues. It cannot represent a Wave's original Issue source, so
+		// child Issues. It cannot represent the Wave's original Issue source, so
 		// re-fetch that root Issue after the child lineage reads and bind this
 		// exact observation into the activation transaction below. Direct Waves
 		// have no external root Issue to revalidate.

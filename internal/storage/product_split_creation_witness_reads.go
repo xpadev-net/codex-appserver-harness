@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -48,31 +47,26 @@ func splitChildScopeCreationKnown(ctx context.Context, q queryer, id string) (bo
 
 func loadSplitCreationWitnessIDs(ctx context.Context, tx *sql.Tx) (splitCreationWitnessIDs, error) {
 	value := splitCreationWitnessIDs{IDs: []string{}, Complete: true}
-	query := splitScopeWitnessSQL(`, split_creation_children AS MATERIALIZED (
- SELECT DISTINCT json_quote(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.children')) AS children
- FROM split_scope_witnesses WHERE kind IN ` + splitCreationGroupKinds + `
- ), split_creation_arrays AS MATERIALIZED (
- SELECT json_quote(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.creations')) AS creations
- FROM split_scope_witnesses WHERE kind IN ` + splitCreationLeafKinds + `
- UNION SELECT json_quote(json_extract(CASE WHEN json_valid(b.value) THEN b.value ELSE '{}' END,'$.value.creations'))
- FROM split_creation_children r,json_each(r.children) b
- UNION SELECT json_quote(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.creations'))
- FROM split_scope_witnesses WHERE kind='product_split_child_scope_source'
- UNION SELECT coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.creations'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.creations'),'null')
- FROM split_scope_witnesses WHERE kind IN ` + splitCreationRegistrationKinds + `
- ), split_creation_ids AS NOT MATERIALIZED (
+	// This projection needs only the records that can physically contain a
+	// creation array. Building the general split witness relation also scans and
+	// expands every unrelated Wave's ancestry groups on each split preparation.
+	query := `WITH split_creation_children AS MATERIALIZED (
+	 SELECT DISTINCT json_quote(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.children')) AS children
+	 FROM main.records WHERE kind IN ` + splitCreationGroupKinds + `
+	 ), split_creation_arrays AS MATERIALIZED (
+	 SELECT json_quote(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.creations')) AS creations
+	 FROM main.records WHERE kind IN ` + splitCreationLeafKinds + `
+	 UNION SELECT json_quote(json_extract(CASE WHEN json_valid(b.value) THEN b.value ELSE '{}' END,'$.value.creations'))
+	 FROM split_creation_children r,json_each(r.children) b
+	 UNION SELECT json_quote(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.creations'))
+	 FROM main.records WHERE kind='product_split_child_scope_source'
+	 UNION SELECT coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.split_scope.creations'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.split_scope.creations'),'null')
+	 FROM main.records WHERE kind IN ` + splitCreationRegistrationKinds + `
+	 ), split_creation_ids AS NOT MATERIALIZED (
  SELECT json_extract(CASE WHEN json_valid(c.value) THEN c.value ELSE '{}' END,'$.id') AS creation_id
  FROM split_creation_arrays r,json_each(r.creations) c
  ) SELECT DISTINCT CASE WHEN length(cast(creation_id AS BLOB))<=? THEN creation_id ELSE NULL END
- FROM split_creation_ids WHERE typeof(creation_id)='text' LIMIT ?`)
-	// The projection only consumes creation-bearing record families. Keep the
-	// other witness branches (including ledgers and derived ancestry) intact,
-	// while avoiding a full records scan for unrelated record kinds.
-	const allRecords = "SELECT rowid,kind,id,work_item_id,payload FROM main.records"
-	query = strings.Replace(query, allRecords, allRecords+" WHERE kind IN "+splitCreationGroupKinds+" OR kind IN "+splitCreationLeafKinds+" OR kind IN "+splitCreationRegistrationKinds+" OR kind='product_split_child_scope_source'", 1)
-	// The four projections consume the same relation. Materialize it only for
-	// this statement so ancestor expansion is performed once, not four times.
-	query = strings.Replace(query, "split_scope_witnesses AS NOT MATERIALIZED", "split_scope_witnesses AS MATERIALIZED", 1)
+	 FROM split_creation_ids WHERE typeof(creation_id)='text' LIMIT ?`
 	rows, err := tx.QueryContext(ctx, query, contract.MaxInline, maxSplitProofReadEntries+1)
 	if err != nil {
 		return value, err

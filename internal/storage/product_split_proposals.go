@@ -242,6 +242,8 @@ func (k *KernelStore) productSplitContextTx(ctx context.Context, tx *sql.Tx, r P
 		return value, ErrProductSplitHeld
 	}
 	if binding != nil {
+		// Proposal preparation still requires a fresh source lineage. Structural
+		// ancestry does not extend the source observation's authority lifetime.
 		if _, err := k.splitSourceLineageReadyTx(ctx, tx, *binding, parentPolicy, time.Minute); err != nil {
 			return value, err
 		}

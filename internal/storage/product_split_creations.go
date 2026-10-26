@@ -97,6 +97,21 @@ func splitCreateEventID(id string, seq int) string {
 }
 
 func saveSplitCreateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, previous *ProductSplitCreate) (ProductSplitCreate, error) {
+	return saveSplitCreateTxWithValidatedGate(ctx, tx, job, previous, false)
+}
+
+// The HTTP activation port has just created and validated this exact gate in
+// the same transaction. Re-reading the gate through the generic pinned-gate
+// validator repeats the complete nested source lineage walk after its freshness
+// deadline has already been measured.
+func saveSplitCreateActivationTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, previous *ProductSplitCreate, gateDigest string) (ProductSplitCreate, error) {
+	if job.HTTP == nil || job.HTTP.GateDigest != gateDigest || job.HTTP.ActivatedAt.IsZero() {
+		return job, ErrProductSplitHeld
+	}
+	return saveSplitCreateTxWithValidatedGate(ctx, tx, job, previous, true)
+}
+
+func saveSplitCreateTxWithValidatedGate(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, previous *ProductSplitCreate, gateValidated bool) (ProductSplitCreate, error) {
 	if previous != nil {
 		digest, err := contentDigest(*previous)
 		if err != nil {
@@ -108,8 +123,10 @@ func saveSplitCreateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, 
 	if err := validateSplitCreateState(job); err != nil {
 		return job, err
 	}
-	if err := validateSplitCreatePinnedGate(ctx, tx, job); err != nil {
-		return job, err
+	if !gateValidated {
+		if err := validateSplitCreatePinnedGate(ctx, tx, job); err != nil {
+			return job, err
+		}
 	}
 	digest, err := contentDigest(job)
 	if err != nil {
@@ -581,7 +598,8 @@ func (k *KernelStore) ObserveAndActivateProductSplitCreateHTTP(ctx context.Conte
 	}
 	// Preserve actual GET times through the writes below. This local deadline
 	// is never persisted as authority and is checked again immediately at commit.
-	expires, notBefore := record.Value.ObservedAt.Add(5*time.Second), record.Value.ObservedAt
+	gateMaxAge := 5 * time.Second
+	expires, notBefore := record.Value.ObservedAt.Add(gateMaxAge), record.Value.ObservedAt
 	if job.Value.Ancestry != nil {
 		ids := []string{job.Value.Request.ParentWorkItemID}
 		for _, ref := range record.Value.AncestorSources {
@@ -592,7 +610,7 @@ func (k *KernelStore) ObserveAndActivateProductSplitCreateHTTP(ctx context.Conte
 			if err := taskEvidenceRecord(read, tx, "product_split_child_source", workID, &source); err != nil {
 				return claim, splitEvidenceErr(err)
 			}
-			if until := source.CheckedAt.Add(5 * time.Second); until.Before(expires) {
+			if until := source.CheckedAt.Add(ProductSplitActivationSourceMaxAge); until.Before(expires) {
 				expires = until
 			}
 			if source.CheckedAt.After(notBefore) {
@@ -617,7 +635,7 @@ func (k *KernelStore) ObserveAndActivateProductSplitCreateHTTP(ctx context.Conte
 	previous := job
 	job.HTTP = &ProductSplitCreateOwner{GateDigest: record.Digest, Process: physical, SpecDigest: specDigest, ActivatedAt: now}
 	job.State = "unknown"
-	job, err = saveSplitCreateTx(ctx, tx, job, &previous)
+	job, err = saveSplitCreateActivationTx(ctx, tx, job, &previous, record.Digest)
 	if err != nil {
 		return claim, err
 	}
