@@ -121,12 +121,18 @@ func TestExecutionWorkerNotifiesFailedOrChangedUnstartedPreparationOnce(t *testi
 			repo := executorRepositoryFixture(request)
 			api := &finalReadFixture{repository: Repository{ID: 17, Name: repo.Name, DefaultBranch: repo.BaseBranch, CloneURL: "https://github.com/owner/repo.git"}, head: repo.InitialSHA, merge: repo.InitialSHA}
 			calls := 0
+			failed := false
 			blocked := errors.New("fixture source read failed after claim")
 			e := Executor{Store: k, Repositories: map[int64]ExecutionRepository{17: repo}, Runner: Runner{Store: k}}
 			e.BasePlanner = &BasePlanner{Executor: e, API: func(storage.ProductTarget) ResourceAPI { return api }, Source: func(context.Context, storage.ProductTargetSnapshot) error {
 				calls++
-				if mode == "known_failed" && calls == 5 {
-					return blocked
+				if mode == "known_failed" && !failed {
+					// Exercise an admitted owner failure independently of the
+					// number of fresh source reads surrounding preparation.
+					if saved, err := k.ProductWorkspace(ctx, task.ID); err == nil && saved.State == "launching" {
+						failed = true
+						return blocked
+					}
 				}
 				return nil
 			}}
