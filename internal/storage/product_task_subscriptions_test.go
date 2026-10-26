@@ -181,11 +181,38 @@ func TestTaskPRSubscriptionsBindAtomicallyAndReceiveRawAndSnapshotUpdates(t *tes
 	if _, err := k.ReconcilePRResourceNotifications(ctx, 16); err != nil {
 		t.Fatal(err)
 	}
+	var taskWake WakeReservation
+	var taskWakeRequest WakeRequest
 	for _, task := range tasks {
 		watch := assignedWatch(t, k, task)
 		var count int
 		if err := k.DB.QueryRow("SELECT count(*) FROM kernel_notifications WHERE subscription_id=? AND json_extract(payload,'$.observed_via')='resource_scan'", watch.ID).Scan(&count); err != nil || count != 1 {
 			t.Fatal(count, err)
+		}
+		var notificationID string
+		if err := k.DB.QueryRow("SELECT id FROM kernel_notifications WHERE subscription_id=? AND json_extract(payload,'$.observed_via')='resource_scan'", watch.ID).Scan(&notificationID); err != nil {
+			t.Fatal(err)
+		}
+		notice, err := notificationTx(ctx, k.DB, notificationID)
+		if err != nil || notice.TaskID != task.ID || notice.SessionID != task.SessionID || notice.Target != task.Target() || notice.SourceTarget != w.Target() {
+			t.Fatal("PR update lost its assigned Task/Wave ownership", notice, err)
+		}
+		if task.ID == tasks[0].ID {
+			taskWakeRequest = WakeRequest{SessionID: task.SessionID, Key: "task-pr-update-" + scan.ID, NotificationIDs: []string{notice.ID}}
+			pending, err := k.PendingWakeNotifications(ctx, task.SessionID, 16)
+			found := false
+			for _, item := range pending {
+				found = found || item.ID == notice.ID
+			}
+			if err != nil || !found {
+				t.Fatal("Task wake did not expose its assigned PR update", notice, pending, err)
+			}
+			taskWake, err = k.ReserveWake(ctx, taskWakeRequest)
+			if err != nil {
+				t.Fatal("assigned Task could not reserve a durable wake for its PR update", err)
+			}
+		} else if notice.State != "deferred" {
+			t.Fatal("unawaited sibling Task was woken by another Task's PR update", notice)
 		}
 	}
 	path := k.Root + "/state.db"
@@ -204,6 +231,10 @@ func TestTaskPRSubscriptionsBindAtomicallyAndReceiveRawAndSnapshotUpdates(t *tes
 	var count int
 	if err = k.DB.QueryRow("SELECT count(*) FROM kernel_notifications WHERE subscription_id=?", first.ID).Scan(&count); err != nil || count != 2 {
 		t.Fatal("restart duplicated assignment inputs", count, err)
+	}
+	replayedWake, err := k.ReserveWake(ctx, taskWakeRequest)
+	if err != nil || replayedWake.Intent.ID != taskWake.Intent.ID {
+		t.Fatal("restart changed the durable assigned Task wake", replayedWake, err)
 	}
 }
 func TestTaskPRSubscriptionsRollbackWithPlanAndPublicationBinding(t *testing.T) {
