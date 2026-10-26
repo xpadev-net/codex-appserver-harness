@@ -349,7 +349,21 @@ func (k *KernelStore) applyTaskResult(ctx context.Context, sessionID, runID stri
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return receipt, err
 			}
-			if errors.Is(err, sql.ErrNoRows) || owner != b.ID || waveID != wave.ID || scope != wave.ScopeRevision || plan != wave.PlanRevision {
+			if errors.Is(err, sql.ErrNoRows) {
+				var watch PRSubscriptionIntent
+				watchErr := completionRecord(ctx, tx, "product_pr_subscription_intent", id, &watch)
+				if errors.Is(watchErr, sql.ErrNoRows) || (watchErr == nil && (watch.ID != id || watch.SessionID != b.ID || watch.TaskID != task.ID || watch.Target != task.Target())) {
+					return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "waiting requires this Task's durable current subscriptions")
+				}
+				if watchErr != nil {
+					return receipt, watchErr
+				}
+				if _, err = prWatchWorkItemTx(ctx, tx, watch); err != nil {
+					return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "waiting requires this Task's assigned PR subscription")
+				}
+				continue
+			}
+			if owner != b.ID || waveID != wave.ID || scope != wave.ScopeRevision || plan != wave.PlanRevision {
 				return k.invalidTaskResultTx(ctx, tx, b, task, receipt, "waiting requires this Task's durable current subscriptions")
 			}
 			var subscription struct {
