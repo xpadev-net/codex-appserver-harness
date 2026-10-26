@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
 // A nested split creates a bounded sibling set in one transaction. Validate
@@ -22,9 +25,6 @@ func (k *KernelStore) prepareNestedSplitCreationsTx(ctx context.Context, tx *sql
 	}
 
 	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
-	if err := k.splitCreatePreflightTx(read, tx, r); err != nil {
-		return created, fmt.Errorf("initial source and creation preflight: %w", err)
-	}
 	ancestry, err := loadSplitCreationAncestry(read, tx, r)
 	if err != nil {
 		return created, fmt.Errorf("nested creation ancestry: %w", err)
@@ -38,8 +38,8 @@ func (k *KernelStore) prepareNestedSplitCreationsTx(ctx context.Context, tx *sql
 			return created, fmt.Errorf("sibling creation absence: %w", err)
 		}
 	}
-	if err := k.splitCreatePreflightTx(read, tx, r); err != nil {
-		return created, fmt.Errorf("final source and creation preflight: %w", err)
+	if err := k.nestedSplitCreationSourcePreflightTx(read, tx, r, plan, allocation, ancestry); err != nil {
+		return created, fmt.Errorf("final nested source preflight: %w", err)
 	}
 
 	// The proof memo ends above before any sibling writes. The transaction
@@ -68,6 +68,51 @@ func (k *KernelStore) prepareNestedSplitCreationsTx(ctx context.Context, tx *sql
 		created[child.ID] = job
 	}
 	return created, nil
+}
+
+// Proposal, plan, and allocation were constructed and authenticated by the
+// same transaction immediately before this read phase. Recheck the live Wave,
+// current canonical parent binding, pinned policy, and every ancestor GET time
+// without repeating the full immutable proposal/creation proof walk.
+func (k *KernelStore) nestedSplitCreationSourcePreflightTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, plan ProductSplitChildPlan, allocation ProductSplitAllocation, ancestry *ProductNestedSplitAllocation) error {
+	w, err := loadWave(ctx, tx, r.Target.WaveID)
+	if err != nil {
+		return fmt.Errorf("load nested source wave: %w", err)
+	}
+	if w.Target() != r.Target || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+		return fmt.Errorf("nested source wave is not live: %w", ErrProductSplitHeld)
+	}
+	if plan.Set.Value.Request != r {
+		return fmt.Errorf("nested source plan request changed: %w", ErrProductSplitHeld)
+	}
+	if allocation.Value.Request != r {
+		return fmt.Errorf("nested source allocation request changed: %w", ErrProductSplitHeld)
+	}
+	if allocation.Value.PlanID != plan.Set.ID || allocation.Value.PlanDigest != plan.Set.Digest || allocation.Value.ParentHeadID != plan.Set.Value.ParentHeadID {
+		return fmt.Errorf("nested source allocation plan changed: %w", ErrProductSplitHeld)
+	}
+	if ancestry == nil {
+		return fmt.Errorf("nested source ancestry missing: %w", ErrProductSplitHeld)
+	}
+	if ancestry.Value.ProductSplitRegistrationsValue.Request.Target != r.Target || ancestry.Value.ParentWorkItemID != r.ParentWorkItemID {
+		return fmt.Errorf("nested source ancestry scope changed: %w", ErrProductSplitHeld)
+	}
+	proposal := ancestry.Value.Proposal
+	if proposal.Value.Request.Target != r.Target || proposal.Value.Request.ParentWorkItemID != r.ParentWorkItemID || proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest {
+		return fmt.Errorf("nested source proposal changed: %w", ErrProductSplitHeld)
+	}
+	binding, err := splitChildSourceBindingTx(ctx, tx, r.Target, r.ParentWorkItemID)
+	if err != nil {
+		return fmt.Errorf("load nested source binding: %w", splitEvidenceErr(err))
+	}
+	if binding.ID != ancestry.Value.BindingID || binding.Digest != ancestry.Value.BindingDigest || binding.Value.Child.Value.WorkItemID != r.ParentWorkItemID {
+		return fmt.Errorf("nested source binding changed: %w", ErrProductSplitHeld)
+	}
+	_, err = k.splitSourceLineageReadyTx(ctx, tx, binding, ancestry.Value.SourcePolicyDigest, time.Minute)
+	if err != nil {
+		return fmt.Errorf("nested source lineage is not ready: %w", err)
+	}
+	return nil
 }
 
 func splitOwnerID(r ProductSplitChildPlanRequest, child ProductSplitChildIntent) string {

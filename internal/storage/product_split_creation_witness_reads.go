@@ -65,6 +65,11 @@ func loadSplitCreationWitnessIDs(ctx context.Context, tx *sql.Tx) (splitCreation
  FROM split_creation_arrays r,json_each(r.creations) c
  ) SELECT DISTINCT CASE WHEN length(cast(creation_id AS BLOB))<=? THEN creation_id ELSE NULL END
  FROM split_creation_ids WHERE typeof(creation_id)='text' LIMIT ?`)
+	// The projection only consumes creation-bearing record families. Keep the
+	// other witness branches (including ledgers and derived ancestry) intact,
+	// while avoiding a full records scan for unrelated record kinds.
+	const allRecords = "SELECT rowid,kind,id,work_item_id,payload FROM main.records"
+	query = strings.Replace(query, allRecords, allRecords+" WHERE kind IN "+splitCreationGroupKinds+" OR kind IN "+splitCreationLeafKinds+" OR kind IN "+splitCreationRegistrationKinds, 1)
 	// The four projections consume the same relation. Materialize it only for
 	// this statement so ancestor expansion is performed once, not four times.
 	query = strings.Replace(query, "split_scope_witnesses AS NOT MATERIALIZED", "split_scope_witnesses AS MATERIALIZED", 1)

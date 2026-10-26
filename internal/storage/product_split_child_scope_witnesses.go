@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
@@ -22,7 +23,7 @@ func splitScopeUnreadableForWave(ctx context.Context, q queryer, waveID string) 
 
 func splitScopeUnreadableForWaveUncached(ctx context.Context, q queryer, waveID string) (bool, error) {
 	var malformed bool
-	err := q.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE work_item_id=? AND kind IN
+	query := splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE work_item_id=? AND kind IN
  ('product_split_child_scope','product_split_child_scope_history','product_split_child_scope_admission','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history','product_split_child_scopes','product_split_child_scopes_history','product_split_child_scopes_admission','product_split_child_scope_source','product_split_registrations','product_split_registrations_history','product_split_registrations_admission','product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_split_parent_scope_tool','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source','product_nested_split_scope_group','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_ancestor_group','product_split_completion','product_work_item_registration','product_work_item_registration_version','wave_work_item')
  AND CASE WHEN NOT json_valid(payload) THEN 1
  WHEN kind IN ('product_work_item_registration','product_work_item_registration_version') THEN
@@ -31,7 +32,23 @@ func splitScopeUnreadableForWaveUncached(ctx context.Context, q queryer, waveID 
  coalesce(json_type(payload,'$.target')='object' AND json_extract(payload,'$.target.wave_id')=work_item_id,0)=0
  WHEN kind='product_split_child_scope_source' THEN
  coalesce(json_type(payload,'$.request')='object' AND json_extract(payload,'$.request.target.wave_id')=work_item_id AND json_type(payload,'$.request.proposal_id')='text' AND json_type(payload,'$.parent_head_id')='text',0)=0
- ELSE coalesce(json_type(payload,'$.value.request')='object' AND json_extract(payload,'$.value.request.target.wave_id')=work_item_id AND json_type(payload,'$.value.request.proposal_id')='text' AND json_type(payload,'$.value.parent_head_id')='text',0)=0 END)`), waveID).Scan(&malformed)
+	ELSE coalesce(json_type(payload,'$.value.request')='object' AND json_extract(payload,'$.value.request.target.wave_id')=work_item_id AND json_type(payload,'$.value.request.proposal_id')='text' AND json_type(payload,'$.value.parent_head_id')='text',0)=0 END)`)
+	// Direct witnesses in this guard are scoped to one Wave. Restrict the base
+	// records branch to that owner; the independent derived-ancestry branches
+	// still attribute historical split evidence to its canonical target Wave.
+	const allRecords = "SELECT rowid,kind,id,work_item_id,payload FROM main.records"
+	query = strings.Replace(query, allRecords, allRecords+" WHERE work_item_id=?", 1)
+	// The witness expansion also has bounded ledger, creation-ancestry,
+	// scope-group and compact ancestor-set branches. Restrict each by its
+	// canonical Wave owner before JSON expansion; all rows visible to this
+	// guard are still considered, including ancestry attributed by target.
+	query = strings.Replace(query, "FROM kernel_budget_ledger WHERE kind='split_children'", "FROM kernel_budget_ledger WHERE kind='split_children' AND wave_id=?", 1)
+	query = strings.Replace(query, "FROM main.records WHERE kind IN ('product_split_create','product_split_create_event','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_gate_history','product_split_create_retry_budget','product_split_created_resource')", "FROM main.records WHERE kind IN ('product_split_create','product_split_create_event','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_gate_history','product_split_create_retry_budget','product_split_created_resource') AND (work_item_id=? OR coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.value.ancestry.value.request.target.wave_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.ancestry.value.request.target.wave_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry.value.request.target.wave_id'))=?)", 1)
+	query = strings.Replace(query, ") WHERE ancestry IS NOT NULL", ") WHERE ancestry IS NOT NULL AND coalesce(json_extract(CASE WHEN json_valid(ancestry) THEN ancestry ELSE '{}' END,'$.value.request.target.wave_id'),work_item_id)=?", 1)
+	query = strings.Replace(query, "FROM kernel_budget_ledger WHERE kind='split_create_retry'", "FROM kernel_budget_ledger WHERE kind='split_create_retry' AND wave_id=?", 1)
+	query = strings.Replace(query, "FROM main.records WHERE kind IN ('product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source')", "FROM main.records WHERE work_item_id=? AND kind IN ('product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source')", 1)
+	query = strings.Replace(query, "FROM main.records WHERE kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_completion','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')", "FROM main.records WHERE work_item_id=? AND kind IN ('product_work_item_registration','product_work_item_registration_version','wave_work_item','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_completion','product_split_child_source','product_split_child_source_history','product_split_child_source_policy','product_split_child_source_policy_history')", 1)
+	err := q.QueryRowContext(ctx, query, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID, waveID).Scan(&malformed)
 	if err != nil || malformed {
 		return malformed, err
 	}

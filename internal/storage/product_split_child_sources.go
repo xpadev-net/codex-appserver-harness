@@ -288,11 +288,15 @@ func (k *KernelStore) ObserveProductSplitChildSourceAt(ctx context.Context, targ
 		return ProductSplitChildSourceUpdate{}, err
 	}
 	defer tx.Rollback()
-	binding, err := splitChildSourceBindingTx(ctx, tx, target, workID)
+	// These proofs describe one read-only transaction snapshot. Share their
+	// immutable reads, then leave the memo context before the first journal
+	// write. readAt remains the actual external GET completion time.
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	binding, err := splitChildSourceBindingTx(read, tx, target, workID)
 	if err != nil {
 		return ProductSplitChildSourceUpdate{}, err
 	}
-	prior, priorErr := loadSplitChildSource(ctx, tx, binding)
+	prior, priorErr := loadSplitChildSource(read, tx, binding)
 	if priorErr != nil && priorErr != sql.ErrNoRows {
 		return ProductSplitChildSourceUpdate{}, priorErr
 	}
@@ -306,13 +310,13 @@ func (k *KernelStore) ObserveProductSplitChildSourceAt(ctx context.Context, targ
 	if priorErr == nil && now.Before(prior.CheckedAt) {
 		return ProductSplitChildSourceUpdate{}, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
 	}
-	reference, err := splitSourceReferenceTx(ctx, tx, binding)
+	reference, err := splitSourceReferenceTx(read, tx, binding)
 	if err != nil {
 		return ProductSplitChildSourceUpdate{}, err
 	}
 	pin := facts.PolicyDigest
 	if priorErr == nil {
-		policy, err := loadSplitChildSourcePolicy(ctx, tx, binding)
+		policy, err := loadSplitChildSourcePolicy(read, tx, binding)
 		if err != nil {
 			return ProductSplitChildSourceUpdate{}, err
 		}

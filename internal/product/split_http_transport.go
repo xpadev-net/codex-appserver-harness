@@ -2,6 +2,7 @@ package product
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os/exec"
 	"path/filepath"
@@ -18,10 +19,14 @@ type SplitHTTPTransport struct {
 	SourcePolicy *IssueSourcePolicy
 }
 
-// Journal recovery may authenticate a large immutable ancestor tree after the
-// physical owner has stopped. This is independent of the five-second source
-// freshness gate and the physical StopGroup deadline.
-const splitHTTPRecoveryTimeout = 20 * time.Second
+// The bounded split proof may contain the complete depth-three creation tree.
+// Journal reads and the wrapper result wait must allow that metadata to decode;
+// these limits do not extend source freshness or physical StopGroup deadlines.
+const (
+	splitHTTPExecutionTimeout = 2 * time.Minute
+	splitHTTPResultWait       = splitHTTPExecutionTimeout + 10*time.Second
+	splitHTTPRecoveryTimeout  = 2 * time.Minute
+)
 
 func (t SplitHTTPTransport) Start(ctx context.Context, id string) (storage.ProductSplitCreate, error) {
 	var empty storage.ProductSplitCreate
@@ -35,6 +40,10 @@ func (t SplitHTTPTransport) Start(ctx context.Context, id string) (storage.Produ
 	if err != nil {
 		return empty, err
 	}
+	_, specDigest, err := ReadSplitHTTPSpec(spec.Path())
+	if err != nil {
+		return t.cleanupUnstarted(id, err)
+	}
 	cmd := exec.Command(t.Executable, "_split-http", spec.Path())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := ctx.Err(); err != nil {
@@ -47,8 +56,8 @@ func (t SplitHTTPTransport) Start(ctx context.Context, id string) (storage.Produ
 	if !identity.Valid() {
 		return empty, process.ErrUnconfirmed
 	}
-	wait, cancel := context.WithTimeout(ctx, 35*time.Second)
-	waitErr := t.waitResult(wait, id, identity)
+	wait, cancel := context.WithTimeout(ctx, splitHTTPResultWait)
+	waitErr := t.waitResult(wait, spec, specDigest, identity)
 	cancel()
 	cleanup, stop := context.WithTimeout(context.Background(), splitHTTPRecoveryTimeout)
 	defer stop()
@@ -68,23 +77,15 @@ func (t SplitHTTPTransport) cleanupUnstarted(id string, cause error) (storage.Pr
 	job, err := t.Recover(cleanup, id)
 	return job, errors.Join(cause, err)
 }
-func (t SplitHTTPTransport) waitResult(ctx context.Context, id string, identity process.Identity) error {
+func (t SplitHTTPTransport) waitResult(ctx context.Context, spec SplitHTTPSpec, specDigest string, identity process.Identity) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		job, err := t.Store.ReadProductSplitCreate(ctx, id)
-		if err != nil {
-			return err
-		}
-		if job.HTTP != nil {
-			if job.HTTP.Process != identity {
-				return storage.ErrProductSplitHeld
-			}
-			// The job above was just authenticated. This response is only a hint
-			// to stop and reconcile, so do not repeat its canonical proof walk.
-			if _, err := readSplitHTTPResultForCreation(t.Store, job); err == nil {
-				return nil
-			}
+		// The result file can only request an early stop. It is not a journal,
+		// Process, or Issue proof; Recover and the GET reconciler still perform
+		// fresh canonical reads before recording any outcome.
+		if splitHTTPResultHint(spec, specDigest, identity) {
+			return nil
 		}
 		alive, err := process.GroupAlive(identity)
 		if err != nil {
@@ -98,6 +99,25 @@ func (t SplitHTTPTransport) waitResult(ctx context.Context, id string, identity 
 			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+func splitHTTPResultHint(spec SplitHTTPSpec, specDigest string, identity process.Identity) bool {
+	raw, err := readMergeHTTPFile(filepath.Join(spec.directory(), "result.json"))
+	if err != nil {
+		return false
+	}
+	var result SplitHTTPResult
+	if json.Unmarshal(raw, &result) != nil || result.Version != 1 || result.CreationID != spec.CreationID || result.CreationDigest != spec.CreationDigest || result.SpecDigest != specDigest || result.Process != identity || result.StartedAt.IsZero() || result.FinishedAt.Before(result.StartedAt) {
+		return false
+	}
+	switch result.Disposition {
+	case "client_not_started", "outcome_unknown":
+		return result.Response == nil
+	case "response_received":
+		return result.Response != nil && result.Response.ID > 0 && result.Response.Number > 0
+	default:
+		return false
 	}
 }
 

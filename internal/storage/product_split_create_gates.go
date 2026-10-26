@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"reflect"
 	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
 type ProductSplitCreateGate struct {
@@ -94,12 +96,18 @@ func (k *KernelStore) readSplitCreateGateTx(ctx context.Context, tx *sql.Tx, id,
 	if job.Value.OwnerID != owner || job.Digest != digest || job.State != "prepared" {
 		return empty, ProductSplitCreate{}, ErrProductSplitHeld
 	}
-	if err := k.splitCreatePreflightTx(read, tx, job.Value.Request); err != nil {
-		return empty, ProductSplitCreate{}, err
-	}
 	w, err := loadWave(read, tx, job.Value.Request.Target.WaveID)
 	if err != nil {
 		return empty, ProductSplitCreate{}, err
+	}
+	var preflightErr error
+	if job.Value.Ancestry != nil && w.Source == "direct" {
+		preflightErr = k.splitNestedDirectCreatePreflightTx(read, tx, job, w)
+	} else {
+		preflightErr = k.splitCreatePreflightTx(read, tx, job.Value.Request)
+	}
+	if preflightErr != nil {
+		return empty, ProductSplitCreate{}, preflightErr
 	}
 	if w.Source == "direct" {
 		if sourceID != "" || sourceDigest != "" {
@@ -150,6 +158,27 @@ func (k *KernelStore) readSplitCreateGateTx(ctx context.Context, tx *sql.Tx, id,
 	}
 	record := splitCreateGateRecord{value, checksum}
 	return record, job, nil
+}
+
+// loadSplitCreate above authenticates the complete immutable nested proposal,
+// allocation, plan, and ancestry tree. The nested source gate below rechecks
+// the current canonical parent binding and every ancestor's live source. For a
+// direct nested Wave, repeat only the current Wave and proposal identities;
+// rebuilding the full product context here consumed the five-second GET gate
+// without adding current source authority.
+func (k *KernelStore) splitNestedDirectCreatePreflightTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, w domain.Wave) error {
+	r := job.Value.Request
+	if w.Target() != r.Target || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+		return ErrProductSplitHeld
+	}
+	proposal, err := loadProductSplitProposal(ctx, tx, ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})
+	if err != nil {
+		return splitEvidenceErr(err)
+	}
+	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest || !reflect.DeepEqual(proposal, job.Value.Ancestry.Value.Proposal) {
+		return ErrProductSplitHeld
+	}
+	return nil
 }
 
 func (k *KernelStore) splitCreateSendGateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate) (string, error) {

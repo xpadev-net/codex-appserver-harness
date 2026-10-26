@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 	"unicode/utf8"
@@ -440,15 +441,15 @@ func (k *KernelStore) readProductSplitProposalTx(ctx context.Context, tx *sql.Tx
 	var err error
 	saved, err = loadProductSplitProposal(ctx, tx, ProductSplitProposalRequest{Target: target, ParentWorkItemID: parentID})
 	if err != nil {
-		return saved, err
+		return saved, fmt.Errorf("read immutable split proposal: %w", err)
 	}
 	current, err := k.productSplitContextTx(ctx, tx, saved.Value.Request)
 	if err != nil {
-		return saved, err
+		return saved, fmt.Errorf("revalidate current split proposal context: %w", err)
 	}
 	if saved.Value.ParentScopeProof != nil {
 		if err := bindNestedParentProof(ctx, tx, &current, *saved.Value.ParentScopeProof); err != nil {
-			return saved, err
+			return saved, fmt.Errorf("revalidate nested parent proof: %w", err)
 		}
 		if saved.Value.CreatedAt.After(k.clock()) {
 			return saved, ErrProductSplitHeld

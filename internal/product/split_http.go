@@ -55,7 +55,7 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 	var reads []func(context.Context) error
 	if job.Value.Ancestry != nil {
 		ids := []string{job.Value.Request.ParentWorkItemID}
-		if job.Value.Child.Value.Depth > 2 {
+		if job.Value.Child.Value.Depth > 1 {
 			ids, err = k.ReadProductSplitSourceLineage(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID)
 			if err != nil {
 				return "", "", err
@@ -169,7 +169,7 @@ func runSplitSourceReads(ctx context.Context, reads []func(context.Context) erro
 // create a separate group. No automatic POST retry is possible.
 func ExecuteSplitHTTP(ctx context.Context, path string) (SplitHTTPResult, error) {
 	var empty SplitHTTPResult
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, splitHTTPExecutionTimeout)
 	defer cancel()
 	spec, specDigest, err := ReadSplitHTTPSpec(path)
 	if err != nil {

@@ -192,12 +192,16 @@ func (k *KernelStore) prepareProductNestedSplitProposalTx(ctx context.Context, t
 		return empty, err
 	}
 	r = request
-	prior, err := loadNestedSplitProposal(ctx, tx, r)
+	// This proposal's proof tree is immutable throughout the read phase. Share
+	// exact reads across its nested loaders, then return to the caller context
+	// before the first journal write below.
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	prior, err := loadNestedSplitProposal(read, tx, r)
 	if err == nil {
 		if !reflect.DeepEqual(prior.Value.Proposal.Value.Request, r) || prior.Value.ParentProof != parent {
 			return empty, ErrProductSplitHeld
 		}
-		current, err := k.readProductSplitProposalTx(ctx, tx, r.Target, r.ParentWorkItemID)
+		current, err := k.readProductSplitProposalTx(read, tx, r.Target, r.ParentWorkItemID)
 		if err != nil || !reflect.DeepEqual(current, prior.Value.Proposal) {
 			if err != nil {
 				return empty, err
@@ -216,25 +220,25 @@ func (k *KernelStore) prepareProductNestedSplitProposalTx(ctx context.Context, t
 	if known {
 		return empty, ErrProductSplitHeld
 	}
-	w, err := loadWave(ctx, tx, r.Target.WaveID)
+	w, err := loadWave(read, tx, r.Target.WaveID)
 	if err != nil {
 		return empty, err
 	}
 	if w.DispatchPaused() || w.State == domain.WaveBlocked || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || !k.clock().Before(w.Deadline) {
 		return empty, ErrProductSplitHeld
 	}
-	value, err := k.productSplitContextTx(ctx, tx, r)
+	value, err := k.productSplitContextTx(read, tx, r)
 	if err != nil {
 		return empty, err
 	}
-	if err := bindNestedParentProof(ctx, tx, &value, parent); err != nil {
+	if err := bindNestedParentProof(read, tx, &value, parent); err != nil {
 		return empty, err
 	}
-	binding, err := splitChildSourceBindingTx(ctx, tx, r.Target, r.ParentWorkItemID)
+	binding, err := splitChildSourceBindingTx(read, tx, r.Target, r.ParentWorkItemID)
 	if err != nil {
 		return empty, splitEvidenceErr(err)
 	}
-	proof, err := loadSplitParentScope(ctx, tx, binding)
+	proof, err := loadSplitParentScope(read, tx, binding)
 	if err != nil {
 		return empty, err
 	}
