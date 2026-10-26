@@ -36,7 +36,7 @@ The selected product pipeline tests passed in `internal/product` (61.374s),
 `internal/service` (2.159s). The race run passed in `internal/service`
 (134.545s) and `internal/workspace` (185.438s).
 The source-to-candidate integration test passed for both `direct` and
-`issue_pool` sources (3.419s normally; 6.206s with the race detector); its stopped
+`issue_pool` sources (3.652s normally; 6.538s with the race detector); its stopped
 model result is synthetic and no real model dispatch is claimed.
 The Issue-source-to-candidate executor test passed in `internal/product`
 (1.566s); its stop receipt/result fixture is synthetic while Git checkout,

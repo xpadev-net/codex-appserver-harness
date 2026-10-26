@@ -37,6 +37,8 @@ func (productWaveIssueAPI) ResourcePages(context.Context, string, string) ([]jso
 	return nil, errors.New("single Issue source must not enumerate the pool")
 }
 
+// TestProductWaveAdmissionsReachTheSameExecutorReadiness follows both source
+// types through executor readiness and stopped-result candidate adoption.
 func TestProductWaveAdmissionsReachTheSameExecutorReadiness(t *testing.T) {
 	for _, source := range []string{"direct", "issue_pool"} {
 		t.Run(source, func(t *testing.T) {
@@ -139,7 +141,6 @@ func TestProductWaveAdmissionsReachTheSameExecutorReadiness(t *testing.T) {
 				<-done
 				t.Fatal("runtime-ready Task lacks an executor workspace", workspaceState, err)
 			}
-			runID := seedStoppedProductRun(t, k, wave, admitted.CreatedTaskIDs[0], workspaceState)
 			cancel()
 			select {
 			case err := <-done:
@@ -153,6 +154,7 @@ func TestProductWaveAdmissionsReachTheSameExecutorReadiness(t *testing.T) {
 			if err != nil || len(after.Tasks) != 0 {
 				t.Fatal("stopped executor retained product readiness", after, err)
 			}
+			runID := seedStoppedProductRun(t, k, wave, admitted.CreatedTaskIDs[0], workspaceState)
 			executor := product.Executor{Store: k, Repositories: map[int64]product.ExecutionRepository{17: config.Repositories[0]}}
 			if _, err := executor.Apply(ctx, admitted.CreatedTaskIDs[0], runID); err != nil {
 				t.Fatal("runtime-ready Wave's normally stopped result could not be sealed", err)
