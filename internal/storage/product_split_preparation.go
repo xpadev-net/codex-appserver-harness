@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
 type ProductSplitCreationReference struct {
@@ -131,7 +132,7 @@ func (k *KernelStore) prepareProductSplitExecutionTx(ctx context.Context, tx *sq
 	if err != nil {
 		return empty, err
 	}
-	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, proposal, prior, exists)
+	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, proposal, prior, exists, nil)
 }
 
 func (k *KernelStore) prepareProductNestedSplitExecutionTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest, parent ProductSplitParentScopeReference) (ProductSplitPreparation, error) {
@@ -152,18 +153,30 @@ func (k *KernelStore) prepareProductNestedSplitExecutionTx(ctx context.Context, 
 	if err != nil {
 		return ProductSplitPreparation{}, fmt.Errorf("nested split proposal: %w", splitEvidenceErr(err))
 	}
-	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, nested.Value.Proposal, prior, exists)
+	var freshNested *ProductNestedSplitProposal
+	if !exists {
+		freshNested = &nested
+	}
+	return k.prepareProductSplitExecutionSetTx(ctx, tx, r, nested.Value.Proposal, prior, exists, freshNested)
 }
 
-func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest, proposal ProductSplitProposal, prior ProductSplitPreparation, exists bool) (ProductSplitPreparation, error) {
+func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx *sql.Tx, r ProductSplitProposalRequest, proposal ProductSplitProposal, prior ProductSplitPreparation, exists bool, freshNested *ProductNestedSplitProposal) (ProductSplitPreparation, error) {
 	var empty ProductSplitPreparation
 	head := splitProposalHead(r)
 	request := ProductSplitChildPlanRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID, ProposalID: proposal.ID, ProposalDigest: proposal.Digest}
 	var plan ProductSplitChildPlan
 	var allocation ProductSplitAllocation
+	var freshNestedPlan *ProductNestedSplitChildPlan
 	var err error
 	if exists {
 		plan, err = loadProductSplitChildPlan(ctx, tx, request)
+	} else if freshNested != nil {
+		var nestedPlan ProductNestedSplitChildPlan
+		nestedPlan, err = k.prepareNestedSplitChildPlanFromFreshProposalTx(ctx, tx, request, *freshNested)
+		plan = nestedPlan.Value.Plan
+		if err == nil {
+			freshNestedPlan = &nestedPlan
+		}
 	} else {
 		plan, err = k.prepareProductSplitChildPlanTx(ctx, tx, request)
 	}
@@ -172,11 +185,27 @@ func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx 
 	}
 	if exists {
 		allocation, err = loadProductSplitAllocation(ctx, tx, request)
+	} else if freshNestedPlan != nil {
+		w, waveErr := loadWave(ctx, tx, request.Target.WaveID)
+		if waveErr != nil {
+			err = waveErr
+		} else if w.Target() != request.Target || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+			err = ErrProductSplitHeld
+		} else {
+			allocation, err = k.reserveNestedSplitChildrenFromPlanTx(ctx, tx, request, *freshNestedPlan, w)
+		}
 	} else {
 		allocation, err = k.reserveProductSplitChildrenTx(ctx, tx, request)
 	}
 	if err != nil {
 		return empty, fmt.Errorf("nested split allocation: %w", splitEvidenceErr(err))
+	}
+	var freshCreations map[string]ProductSplitCreate
+	if !exists && freshNestedPlan != nil {
+		freshCreations, err = k.prepareNestedSplitCreationsTx(ctx, tx, request, plan, allocation)
+		if err != nil {
+			return empty, fmt.Errorf("nested split creation set: %w", splitEvidenceErr(err))
+		}
 	}
 	requestDigest, err := contentDigest(r)
 	if err != nil {
@@ -191,6 +220,11 @@ func (k *KernelStore) prepareProductSplitExecutionSetTx(ctx context.Context, tx 
 			// A complete-set receipt is independent proof that this journal
 			// already existed, even if every per-child index/lease was lost.
 			job, err = loadSplitCreate(ctx, tx, splitCreateID(child.ID))
+		} else if freshCreations != nil {
+			job = freshCreations[child.ID]
+			if job.ID == "" || job.Value.OwnerID != owner {
+				return empty, ErrProductSplitHeld
+			}
 		} else {
 			job, err = k.prepareProductSplitCreateTx(ctx, tx, request, child.ID, owner)
 		}

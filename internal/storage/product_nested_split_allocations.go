@@ -191,6 +191,17 @@ func (k *KernelStore) reserveNestedSplitChildrenTx(ctx context.Context, tx *sql.
 	if err != nil {
 		return empty, splitEvidenceErr(err)
 	}
+	return k.reserveNestedSplitChildrenFromPlanTx(ctx, tx, r, plan, w)
+}
+
+// The atomic preparation path passes the nested plan it just generated in
+// this transaction. This avoids rereading the same immutable ancestry before
+// allocating its complete child set.
+func (k *KernelStore) reserveNestedSplitChildrenFromPlanTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, plan ProductNestedSplitChildPlan, w domain.Wave) (ProductSplitAllocation, error) {
+	var empty ProductSplitAllocation
+	if plan.Value.Plan.Set.Value.Request != r || plan.Value.Proposal.ID != r.ProposalID || plan.Value.Proposal.Digest != r.ProposalDigest {
+		return empty, ErrProductSplitHeld
+	}
 	ids, err := productWorkItemLifetimeIDsTx(ctx, tx, w)
 	if err != nil {
 		return empty, err
