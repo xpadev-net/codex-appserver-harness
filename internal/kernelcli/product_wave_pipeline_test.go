@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -131,6 +133,13 @@ func TestProductWaveAdmissionsReachTheSameExecutorReadiness(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
+			workspaceState, err := k.ProductWorkspace(ctx, admitted.CreatedTaskIDs[0])
+			if err != nil || workspaceState.State != "ready" {
+				cancel()
+				<-done
+				t.Fatal("runtime-ready Task lacks an executor workspace", workspaceState, err)
+			}
+			runID := seedStoppedProductRun(t, k, wave, admitted.CreatedTaskIDs[0], workspaceState)
 			cancel()
 			select {
 			case err := <-done:
@@ -144,10 +153,95 @@ func TestProductWaveAdmissionsReachTheSameExecutorReadiness(t *testing.T) {
 			if err != nil || len(after.Tasks) != 0 {
 				t.Fatal("stopped executor retained product readiness", after, err)
 			}
-			workspaceState, err := k.ProductWorkspace(ctx, admitted.CreatedTaskIDs[0])
-			if err != nil || workspaceState.State != "ready" {
-				t.Fatal("source Task workspace was not prepared", workspaceState, err)
+			executor := product.Executor{Store: k, Repositories: map[int64]product.ExecutionRepository{17: config.Repositories[0]}}
+			if _, err := executor.Apply(ctx, admitted.CreatedTaskIDs[0], runID); err != nil {
+				t.Fatal("runtime-ready Wave's normally stopped result could not be sealed", err)
+			}
+			applied, err := k.Task(ctx, admitted.CreatedTaskIDs[0])
+			if err != nil || applied.State != contract.TaskCompleted {
+				t.Fatal("stopped product result was not atomically adopted", applied, err)
+			}
+			candidate, err := k.ReadProductTaskCandidate(ctx, applied.ResultID)
+			if err != nil || candidate.Value.RunID != runID || candidate.Value.Target.WaveID != wave.ID {
+				t.Fatal("runtime-ready executor did not seal the Wave candidate", candidate, err)
+			}
+			workItem, err := k.ReadProductTarget(ctx, wave.Target(), definition.ID)
+			if err != nil || workItem.Value.Candidate.SHA != candidate.Value.Candidate.SHA || workItem.Value.WorkItem.Phase != domain.Verifying {
+				t.Fatal("candidate adoption did not update its registered WorkItem", workItem, err)
 			}
 		})
 	}
+}
+
+// This fixture supplies a synthetic stopped model result while preserving the
+// real executor readiness, Git workspace, candidate seal, and SQLite adoption path.
+func seedStoppedProductRun(t *testing.T, k *storage.KernelStore, wave domain.Wave, taskID string, ready storage.ProductWorkspace) string {
+	t.Helper()
+	ctx := context.Background()
+	task, err := k.Task(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := k.SessionBinding(ctx, task.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := k.BuildSessionInput(ctx, binding.ID, []contract.Target{wave.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := contract.TaskResult{SchemaVersion: 2, Target: task.Target(), TaskID: task.ID, PhaseID: task.PhaseID, Outcome: "result", ProductChanges: []contract.ProductChangeReference{{WorkItemID: ready.Value.WorkItemID, WorkspaceID: ready.ID, WorkspaceDigest: ready.Digest}}, Artifacts: []string{}, WorkItemRefs: []contract.CandidateReference{}, Remaining: []string{}, Blockers: []string{}, SubscriptionIDs: []string{}, CriterionResults: []contract.CriterionResult{{CriterionID: "AC", Status: "unverified", EvidenceIDs: []string{}, Basis: "await independent verification"}}}
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ThreadID, binding.PreparationID = "integration-thread-"+task.ID, "integration-preparation-"+task.ID
+	runID := "integration-run-" + task.ID
+	run := contract.SessionRun{ID: runID, ThreadID: binding.ThreadID, TurnID: "integration-turn", State: "completed", BaselineKnown: true, BaselineTurnIDs: []string{}, Started: time.Now().UTC(), Final: string(raw)}
+	task.State, task.Attempts = contract.TaskRunning, 1
+	budget := storage.RunBudgetBinding{RunID: run.ID, SessionID: binding.ID, TaskID: task.ID, ThreadID: binding.ThreadID, SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, Targets: []contract.Target{wave.Target()}}
+	tx, err := k.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	bindingRaw, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskRaw, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("UPDATE kernel_sessions SET payload=?,thread_id=?,active_run_id=?,process_stopped=1,creating=0 WHERE id=?", bindingRaw, binding.ThreadID, run.ID, binding.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("UPDATE kernel_tasks SET state=?,payload=? WHERE id=?", task.State, taskRaw, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("INSERT INTO kernel_run_bindings(run_id,session_id,snapshot_id,thread_id,state,process_stopped,applied) VALUES(?,?,?,?,'completed',1,0)", run.ID, binding.ID, snapshot.ID, binding.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		kind  string
+		value any
+	}{{"agent_run", run}, {"run_budget", budget}} {
+		payload, err := json.Marshal(record.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES(?,?,?,?)", record.kind, run.ID, binding.ID, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ready.Value.CWD, "implementation.txt"), []byte("implemented behavior\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return run.ID
 }
