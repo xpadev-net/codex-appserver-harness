@@ -90,6 +90,11 @@ func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job sto
 	}
 	sourceID, sourceDigest := "", ""
 	if w.Source != "direct" {
+		// ReadProductSplitSourceLineage above contains only registered split
+		// child Issues. It cannot represent a Wave's original Issue source, so
+		// re-fetch that root Issue after the child lineage reads and bind this
+		// exact observation into the activation transaction below. Direct Waves
+		// have no external root Issue to revalidate.
 		observer := IssueSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
 		if err := observer.Validate(); err != nil {
 			return "", "", err
