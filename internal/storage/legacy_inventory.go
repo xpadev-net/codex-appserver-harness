@@ -49,6 +49,12 @@ type LegacyInventoryEvidence struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+type LegacyInventoryEvent struct {
+	ID      string       `json:"id"`
+	Event   domain.Event `json:"event"`
+	Applied string       `json:"applied_at"`
+}
+
 type LegacyInventoryWork struct {
 	WorkItem       domain.WorkItem          `json:"work_item"`
 	RootWorkItemID string                   `json:"root_work_item_id"`
@@ -61,6 +67,7 @@ type LegacyInventoryWork struct {
 	FinalAcceptance json.RawMessage           `json:"final_acceptance,omitempty"`
 	CompletionProof json.RawMessage           `json:"completion_proof,omitempty"`
 	FinalHistory    []LegacyInventoryEvidence `json:"final_history"`
+	Events          []LegacyInventoryEvent    `json:"events"`
 	Operations      []domain.Operation        `json:"operations"`
 	Threads         []LegacyInventoryThread   `json:"threads"`
 	Issues          []LegacyInventoryIssue    `json:"issues"`
@@ -166,7 +173,7 @@ func ReadLegacyMigrationInventory(ctx context.Context, root, after string, limit
 		found = found[:limit]
 	}
 	for _, row := range found {
-		entry := LegacyInventoryWork{FinalHistory: []LegacyInventoryEvidence{}, Operations: []domain.Operation{}, Threads: []LegacyInventoryThread{}, Issues: []LegacyInventoryIssue{}}
+		entry := LegacyInventoryWork{FinalHistory: []LegacyInventoryEvidence{}, Events: []LegacyInventoryEvent{}, Operations: []domain.Operation{}, Threads: []LegacyInventoryThread{}, Issues: []LegacyInventoryIssue{}}
 		if err := json.Unmarshal(row.data, &entry.WorkItem); err != nil || entry.WorkItem.ID != row.id || entry.WorkItem.RepositoryID != row.repository || entry.WorkItem.Issue != row.issue || row.id == "" || row.repository < 1 || row.issue < 1 {
 			entry.WorkItem = domain.WorkItem{ID: row.id, RepositoryID: row.repository, Issue: row.issue}
 			entry.Issues = append(entry.Issues, LegacyInventoryIssue{row.id, "work_item_identity_invalid"})
@@ -344,6 +351,32 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 		return err
 	}
 	historyRows.Close()
+	eventRows, err := db.QueryContext(ctx, "SELECT id,payload,processed_at FROM event_inbox WHERE work_item_id=? ORDER BY rowid LIMIT 257", id)
+	if err != nil {
+		return err
+	}
+	for count := 0; eventRows.Next(); count++ {
+		if count >= 256 {
+			issue("event_history_limit")
+			break
+		}
+		var event LegacyInventoryEvent
+		var raw []byte
+		if err := eventRows.Scan(&event.ID, &raw, &event.Applied); err != nil {
+			eventRows.Close()
+			return err
+		}
+		if json.Unmarshal(raw, &event.Event) != nil || event.Event.ID != event.ID || event.Event.WorkItemID != id || event.ID == "" {
+			issue("event_identity_invalid")
+			continue
+		}
+		entry.Events = append(entry.Events, event)
+	}
+	if err := eventRows.Err(); err != nil {
+		eventRows.Close()
+		return err
+	}
+	eventRows.Close()
 	if err := legacyInventoryRecord(ctx, db, "scope", id, id, &scope); err != nil || scope.Validate() != nil || scope.Revision != entry.WorkItem.ScopeRevision {
 		issue("scope_unavailable")
 	} else {
