@@ -10,7 +10,7 @@ admission to a published, subscribed, reviewed, and merged candidate.
 | Task_11 area | Existing component evidence; missing integrated acceptance |
 | --- | --- |
 | Direct product and Issue pool admission | Both paths call `CreateProductWave`; direct CLI coverage is in `internal/kernelcli/product_create_test.go`, while Issue admission/repository/dependency checks are in `internal/product/issue_admission_test.go`. New `TestProductWaveAdmissionsReachTheSameExecutorReadiness` proves both source kinds reach the same running executor and Task readiness. Missing: continuing that integrated flow through publication/subscription/merge. |
-| Product Task workspace, readiness, and stopped candidate | `TestProductWaveAdmissionsReachTheSameExecutorReadiness` joins source admission, plan adoption, real local Git workspace preparation, executor runtime binding, and readiness/revocation for direct and Issue pool sources. `internal/kernelcli/product_model_runtime_test.go` covers additional runtime ownership failures. Missing: a Wave-level path from a normally stopped model run through candidate sealing and publication readiness. |
+| Product Task workspace, readiness, and stopped candidate | `TestProductWaveAdmissionsReachTheSameExecutorReadiness` joins direct/Issue pool admission to real local Git workspace preparation and runtime readiness/revocation. `TestIssueAdmittedProductWavePreparesAndSealsStoppedCandidate` joins Issue admission to executor workspace preparation, a normally stopped result, candidate sealing, and registered WorkItem update. `internal/kernelcli/product_model_runtime_test.go` covers additional runtime ownership failures. Missing: one flow joining runtime readiness and candidate sealing, then continuing to publication readiness. |
 | Base refresh and conflict repair | `internal/product/base_planner.go`, `TestExecutionWorkerSelectsActualBaseRefreshesThenNotifiesChangedHead`, and `TestConflictFixUsesFreshCheckoutThenHostSealsOrRetainsFailure` cover those components. Missing: integrated same-Wave tests for predecessor merge followed by successor candidate, and concurrent same-repository Waves where one candidate changes the other's base. |
 | Publication, review, subscription, and merge | `internal/service/product_gates_test.go`, `internal/product/publisher_test.go`, and `internal/product/dispatcher_test.go` verify separate gate/dispatch boundaries and unknown-send reconciliation. Missing: one Wave-level flow joining publication, automatic subscription, review update, canonical merge gate, and resulting WorkItem/Wave state. |
 | Partial work, split lineage, budgets, and versioned continuation | `internal/storage/product_continuations_test.go`, `internal/storage/product_merge_dependencies_test.go`, PR #281, and `docs/product-splitting.md` cover component contracts. Missing: integrated multi-WorkItem/multi-Wave acceptance proving invalidation and cumulative budgets remain connected through publication and continuation. |
@@ -25,6 +25,7 @@ The following commands completed successfully on the Task_11 review branch:
 go test -race ./internal/service ./internal/workspace
 go test -race ./internal/kernelcli -run '^TestProductWaveAdmissionsReachTheSameExecutorReadiness$' -count=1 -timeout=5m
 go test ./internal/kernelcli -run '^TestProductWaveAdmissionsReachTheSameExecutorReadiness$' -count=1 -v -timeout=2m
+go test ./internal/product -run '^TestIssueAdmittedProductWavePreparesAndSealsStoppedCandidate$' -count=1 -v -timeout=2m
 go test ./internal/product ./internal/storage ./internal/kernelcli ./internal/service \
   -run '^(TestIssueAdmissionUsesNumericRepositoryAndCommonProductPort|TestIssueAdmissionRejectsUnavailableHeldChangedAndUnsupportedLineage|TestExecutionWorkerSelectsActualBaseRefreshesThenNotifiesChangedHead|TestProductBasePlanKeepsSemanticHistoryAndRequiresFreshCurrentSource|TestProductSuccessorWaitsForAuthenticatedMergeBeforePreparation|TestConflictFixUsesFreshCheckoutThenHostSealsOrRetainsFailure|TestProductExecutionWorkerPreparesAndResumesOnlyUnclaimedGitIntent|TestProductExecutionWorkerAppliesSavedStoppedRunWithoutModelDispatch|TestProductModelRuntimeRequiresCompletePrivateCurrentConfiguration|TestProductExecutorBindsReadinessOnlyWhileSameStoreWorkerRuns|TestProductCanonicalPublicationGateUsesActualValidatedJournalWithoutSideEffects|TestProductCanonicalReviewGateReloadsRequestProofWithoutInventingApproval|TestPreparedPublicationRetryKeepsExactPayloadAndDoesNotSpendAnotherSeat|TestLostPublicationResponseReconcilesOnlyItsOwnMarkerWithoutResend|TestPRDispatcherPreparedRestartRetriesThroughSameOneUseSendFence|TestPRDispatcherLostResponseNeverRequeuesUnknownAcrossRestart)$' \
   -count=1 -timeout=15m
@@ -36,6 +37,9 @@ The selected product pipeline tests passed in `internal/product` (61.374s),
 (134.545s) and `internal/workspace` (185.438s).
 The new source-to-executor integration test passed for both `direct` and
 `issue_pool` sources (1.899s normally; 3.895s with the race detector).
+The Issue-source-to-candidate executor test passed in `internal/product`
+(1.566s); its stop receipt/result fixture is synthetic while Git checkout,
+sealing, and SQLite adoption use the real local implementations.
 
 The #44/#45, shared repository, source hold/recovery, split freshness,
 base-refresh and conflict-repair regression selection also passed with this
