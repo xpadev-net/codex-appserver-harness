@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -50,9 +51,13 @@ type LegacyInventoryWork struct {
 	ScopeDigest    string                   `json:"scope_digest"`
 	PolicyDigest   string                   `json:"policy_digest"`
 	Baseline       *LegacyInventoryBaseline `json:"baseline,omitempty"`
-	Operations     []domain.Operation       `json:"operations"`
-	Threads        []LegacyInventoryThread  `json:"threads"`
-	Issues         []LegacyInventoryIssue   `json:"issues"`
+	// FinalAcceptance and CompletionProof are preserved verbatim as historical
+	// evidence. They are not trusted as authorization by the Wave runtime.
+	FinalAcceptance json.RawMessage         `json:"final_acceptance,omitempty"`
+	CompletionProof json.RawMessage         `json:"completion_proof,omitempty"`
+	Operations      []domain.Operation      `json:"operations"`
+	Threads         []LegacyInventoryThread `json:"threads"`
+	Issues          []LegacyInventoryIssue  `json:"issues"`
 }
 
 type LegacyInventoryValue struct {
@@ -276,6 +281,26 @@ func fillLegacyInventoryWork(ctx context.Context, db *sql.DB, entry *LegacyInven
 	id := entry.WorkItem.ID
 	issue := func(reason string) { entry.Issues = append(entry.Issues, LegacyInventoryIssue{id, reason}) }
 	var scope verification.Scope
+	finalKey := fmt.Sprintf("r%d-i%d", entry.WorkItem.RepositoryID, entry.WorkItem.Issue)
+	for _, record := range []struct {
+		kind string
+		out  *json.RawMessage
+	}{{"parent_final_state", &entry.FinalAcceptance}, {"parent_completion", &entry.CompletionProof}} {
+		var owner string
+		var payload []byte
+		err := db.QueryRowContext(ctx, "SELECT work_item_id,payload FROM records WHERE kind=? AND id=?", record.kind, finalKey).Scan(&owner, &payload)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if owner != id || !json.Valid(payload) {
+			issue(record.kind + "_identity_invalid")
+			continue
+		}
+		*record.out = append(json.RawMessage(nil), payload...)
+	}
 	if err := legacyInventoryRecord(ctx, db, "scope", id, id, &scope); err != nil || scope.Validate() != nil || scope.Revision != entry.WorkItem.ScopeRevision {
 		issue("scope_unavailable")
 	} else {

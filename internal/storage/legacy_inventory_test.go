@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -83,6 +84,10 @@ func legacyInventoryFixture(t *testing.T) (*Store, string, string) {
 	finalKey := "r1-i1"
 	failed := map[string]string{"state": "failed"}
 	if err := s.Put(ctx, "parent_final_state", finalKey, root.ID, failed); err != nil {
+		t.Fatal(err)
+	}
+	completion := map[string]any{"scope_revision": 1, "candidate": map[string]any{"id": "historical-candidate", "sha": strings.Repeat("b", 40)}, "results": []any{}, "closed_at": "2026-01-02T03:04:05Z"}
+	if err := s.Put(ctx, "parent_completion", finalKey, root.ID, completion); err != nil {
 		t.Fatal(err)
 	}
 	repair := work()
@@ -175,6 +180,14 @@ func TestLegacyInventoryGroupsActualSplitContinuationRepairWithoutReusingEndedTh
 	}
 	if got := all["child"].Threads; len(got) != 1 || got[0].ThreadID != "ended-thread" || got[0].Disposition != "historical" {
 		t.Fatal("ended thread promoted", got)
+	}
+	var finalState map[string]string
+	if err := json.Unmarshal(all["root-final-repair"].FinalAcceptance, &finalState); err != nil || finalState["state"] != "recovering" {
+		t.Fatal("transferred parent final acceptance state omitted", string(all["root-final-repair"].FinalAcceptance), err)
+	}
+	var preservedCompletion map[string]any
+	if err := json.Unmarshal(all["wi"].CompletionProof, &preservedCompletion); err != nil || preservedCompletion["closed_at"] != "2026-01-02T03:04:05Z" {
+		t.Fatal("parent completion proof omitted", string(all["wi"].CompletionProof), err)
 	}
 	if got := all["child-remaining"].Threads; len(got) != 1 || got[0].Disposition != "requires_reconciliation" {
 		t.Fatal("unknown run became a binding", got)
