@@ -160,6 +160,9 @@ func TestLiveProductBoundedSplitTree(t *testing.T) {
 			if err != nil {
 				t.Fatal("parent scope", err)
 			}
+			// Parent-scope preparation is a separate adoption and may consume
+			// a substantial part of a source observation's bounded lifetime.
+			refresh()
 			prepared, err = k.PrepareProductNestedSplitExecution(ctx, request, storage.ProductSplitParentScopeReference{ID: proof.ID, Digest: proof.Digest})
 			if err != nil {
 				t.Fatal("nested proposal", err)
@@ -190,6 +193,9 @@ func TestLiveProductBoundedSplitTree(t *testing.T) {
 		if _, err := k.BindProductSplitChildScopes(ctx, planRequest); err != nil {
 			t.Fatal(err)
 		}
+		// As in the production registration worker, a new adoption gets its
+		// own actual source read after the previous SQL stage has completed.
+		refresh()
 		registered, err := k.RegisterProductSplitChildren(ctx, planRequest)
 		if err != nil || len(registered.Value.Children) != 8 {
 			t.Fatal("complete registration", depth, err)

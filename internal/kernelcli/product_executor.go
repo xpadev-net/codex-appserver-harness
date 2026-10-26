@@ -179,6 +179,15 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 		if store != k {
 			return errors.New("product executor store owner mismatch")
 		}
+		operatorReport := report
+		report = func(err error) {
+			if ctx.Err() != nil {
+				err = withoutCancellation(err)
+			}
+			if err != nil && operatorReport != nil {
+				operatorReport(err)
+			}
+		}
 		if modelRuntime != nil {
 			revoke, err := k.BindProductModelRuntime(*modelRuntime)
 			if err != nil {
@@ -198,6 +207,16 @@ func loadProductExecutorPipeline(path string, k *storage.KernelStore, runtime co
 		completion := product.CloudCompletionWorker{Reader: product.CloudCompletionReader{Store: k, API: product.GitHubResourceAPI, Routes: routes}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 		reconciliation := product.MergeReconciliationWorker{Reconciler: product.MergeReconciler{Store: k, API: product.GitHubResourceAPI}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
 		splitReconciliation := product.SplitCreationReconciliationWorker{Reconciler: product.SplitCreationReconciler{Store: k, API: product.GitHubSplitResourceAPI, MaxPages: 32}, Workers: c.Publication.Workers, Every: every, OnMutation: wake, Report: report}
+		splitReconciliation.RefreshSource = func(ctx context.Context, request storage.ProductSplitChildPlanRequest) error {
+			registration, err := k.ReadProductWorkItemRegistration(ctx, request.ParentWorkItemID)
+			if err != nil {
+				return err
+			}
+			definition := registration.Value.Definition
+			current := storage.ProductTargetSnapshot{Value: storage.ProductTarget{Target: request.Target, Repository: definition.Repository}}
+			current.Value.WorkItem.ID, current.Value.WorkItem.RepositoryID = definition.ID, definition.RepositoryID
+			return executor.BasePlanner.Source(ctx, current)
+		}
 		workers := []func(context.Context) error{w.Run, dispatcher.Run, completion.Run, reconciliation.Run, splitReconciliation.Run}
 		if len(splitRepositories) > 0 {
 			splitDispatch := product.SplitCreationDispatchWorker{Store: k, Executable: exe, Repositories: splitRepositories, SourcePolicies: sources, Workers: c.Publication.Split.Workers, Every: every, OnMutation: wake, Report: report}

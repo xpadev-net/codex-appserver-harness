@@ -43,6 +43,55 @@ func splitRegistrationWorker(k *storage.KernelStore, apis map[string]*splitGETFi
 	return SplitCreationReconciliationWorker{Reconciler: SplitCreationReconciler{Store: k, MaxPages: 2, API: func(job storage.ProductSplitCreate) ResourceAPI { return apis[job.ID] }}, Workers: 2, Every: time.Second}
 }
 
+func TestSplitWorkerRefreshesEachNewAdoptionButNeverHistoricalReplay(t *testing.T) {
+	ctx := context.Background()
+	k, jobs, apis, _ := splitWorkerRegistrationFixture(t)
+	worker := splitRegistrationWorker(k, apis)
+	for _, job := range jobs {
+		observed, _, err := worker.Reconciler.Reconcile(ctx, job.ID)
+		if err != nil || observed.State != "observed" {
+			t.Fatal(observed.State, err)
+		}
+	}
+	request := jobs[0].Value.Request
+	reads := 0
+	held := errors.New("controlled source recheck unavailable")
+	worker.RefreshSource = func(read context.Context, got storage.ProductSplitChildPlanRequest) error {
+		reads++
+		if got != request {
+			t.Fatal("source reader received another scope")
+		}
+		_, err := k.ReadProductSplitChildScopes(read, request)
+		if reads == 1 && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal("first read did not precede binding", err)
+		}
+		if reads == 2 {
+			if err != nil {
+				t.Fatal("second read preceded durable scope binding", err)
+			}
+			return held
+		}
+		return nil
+	}
+	changed, err := worker.finishRegistrations(ctx, request)
+	if !changed || !errors.Is(err, held) || reads != 2 {
+		t.Fatal("source failure was not retained between stages", changed, reads, err)
+	}
+	if _, err := k.ReadProductSplitRegistrations(ctx, request); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("failed recheck registered children", err)
+	}
+	if changed, err := worker.finishRegistrations(ctx, request); err != nil || !changed || reads != 3 {
+		t.Fatal("fresh retry failed", changed, reads, err)
+	}
+	worker.RefreshSource = func(context.Context, storage.ProductSplitChildPlanRequest) error {
+		t.Fatal("historical replay performed a new source read")
+		return held
+	}
+	if changed, err := worker.finishRegistrations(ctx, request); err != nil || changed {
+		t.Fatal("replay rewrote registration", changed, err)
+	}
+}
+
 func TestSplitWorkerRegistersAllChildrenAfterGETAndReplaysWithoutIO(t *testing.T) {
 	ctx := context.Background()
 	k, jobs, apis, bin := splitWorkerRegistrationFixture(t)
