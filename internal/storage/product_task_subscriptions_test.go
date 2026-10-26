@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -94,21 +96,71 @@ func bindAssignedPRFixture(t *testing.T, k *KernelStore, w domain.Wave, p Produc
 	o := PRResourceObservation{ProofID: "observed", RepositoryID: 17, HeadRepositoryID: 17, BaseRepositoryID: 17, Number: 42, MarkerWorkItemID: p.Value.WorkItem.ID, HeadSHA: p.Value.Candidate.SHA, HeadBranch: p.Value.WorkItem.Branch, BaseBranch: p.Value.BaseBranch, State: "open", ObservedAt: k.clock()}
 	return reply.OperationID, claim, o
 }
-func recordAssignedWaitFixture(t *testing.T, k *KernelStore, watch PRSubscriptionIntent) {
+func applyAssignedTaskWaitResult(t *testing.T, k *KernelStore, task domain.Task, watch PRSubscriptionIntent) (ResultApplication, error) {
 	t.Helper()
 	ctx := context.Background()
-	tx, err := k.kernelTx(ctx)
+	binding, err := k.SessionBinding(ctx, task.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := k.BuildSessionInput(ctx, binding.ID, []contract.Target{task.Target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ThreadID, binding.PreparationID = "fixture-thread-"+task.ID, "fixture-preparation-"+task.ID
+	run := contract.SessionRun{ID: "assigned-wait-" + task.ID, ThreadID: binding.ThreadID, State: "starting", Started: time.Now().UTC(), BaselineKnown: true, BaselineTurnIDs: []string{}}
+	result := contract.TaskResult{SchemaVersion: 1, Target: task.Target(), PhaseID: task.PhaseID, TaskID: task.ID, Outcome: "waiting", Artifacts: []string{}, CriterionResults: []contract.CriterionResult{}, WorkItemRefs: []contract.CandidateReference{}, Remaining: []string{}, Blockers: []string{}, SubscriptionIDs: []string{watch.ID}}
+	raw, err := marshalTaskResultFixture(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.State, run.TurnID, run.Final = "completed", "turn-"+task.ID, string(raw)
+	task.State, task.Attempts = contract.TaskRunning, task.Attempts+1
+	budget := RunBudgetBinding{RunID: run.ID, SessionID: binding.ID, TaskID: task.ID, ThreadID: binding.ThreadID, SnapshotID: snapshot.ID, SnapshotDigest: snapshot.Digest, Targets: []contract.Target{task.Target()}}
+	tx, err := k.DB.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	// Exercise the storage portion of an already-authorized wait. Product turn
-	// readiness remains held until Task_11; this is not native dispatch evidence.
-	if err = k.awaitPRSubscriptionsTx(ctx, tx, watch.SessionID, "validated-wait-fixture", watch.Target, []string{watch.ID}); err != nil {
+	bindingRaw, err := json.Marshal(binding)
+	if err != nil {
 		t.Fatal(err)
+	}
+	taskRaw, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec("UPDATE kernel_sessions SET payload=?,thread_id=?,active_run_id=?,process_stopped=1,creating=0 WHERE id=?", bindingRaw, binding.ThreadID, run.ID, binding.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec("UPDATE kernel_tasks SET state=?,payload=? WHERE id=?", task.State, taskRaw, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec("INSERT INTO kernel_run_bindings(run_id,session_id,snapshot_id,thread_id,state,process_stopped,applied) VALUES(?,?,?,?,'completed',1,0)", run.ID, binding.ID, snapshot.ID, binding.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		kind  string
+		value any
+	}{{"agent_run", run}, {"run_budget", budget}} {
+		payload, err := json.Marshal(record.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec("INSERT INTO records(kind,id,work_item_id,payload) VALUES(?,?,?,?)", record.kind, run.ID, binding.ID, payload); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
+	}
+	return k.ApplyTaskResult(ctx, task.SessionID, run.ID)
+}
+func TestTaskResultRejectsSiblingTaskPRSubscription(t *testing.T) {
+	k, _, tasks, _ := assignedPRFixture(t, true)
+	application, err := applyAssignedTaskWaitResult(t, k, tasks[1], assignedWatch(t, k, tasks[0]))
+	if err != nil || application.State != contract.TaskFailed || !strings.Contains(application.Reason, "durable current subscriptions") {
+		t.Fatal(application, err)
 	}
 }
 func TestTaskPRSubscriptionsPersistWithPlanAndRegistrationWithoutFabricatedOperations(t *testing.T) {
@@ -149,7 +201,9 @@ func TestTaskPRSubscriptionsBindAtomicallyAndReceiveRawAndSnapshotUpdates(t *tes
 	k, w, tasks, p := assignedPRFixture(t, true)
 	ctx := context.Background()
 	first := assignedWatch(t, k, tasks[0])
-	recordAssignedWaitFixture(t, k, first)
+	if application, err := applyAssignedTaskWaitResult(t, k, tasks[0], first); err != nil || application.State != contract.TaskWaiting {
+		t.Fatal(application, err)
+	}
 	receivePRComment(t, k, "before-publication", 42, "created")
 	id, claim, o := bindAssignedPRFixture(t, k, w, p)
 	if _, err := k.BindObservedPRPublication(ctx, id, PRTransportProof{ID: "publication", OwnerID: claim.OwnerID, Disposition: "not_started"}, o); err != nil {
