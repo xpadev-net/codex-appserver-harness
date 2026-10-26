@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
@@ -82,6 +83,15 @@ SELECT rowid,kind,id,work_item_id,
  WHEN coalesce(json_type(ancestor_set)='object' AND json_type(ancestor_set,'$.value.groups')='array' AND json_array_length(ancestor_set,'$.value.groups') BETWEEN 1 AND 128,0)=0 THEN 1
  ELSE 0 END
  ) ` + query
+}
+
+// Some admission guards need several correlated predicates over the complete
+// witness relation. Materialize that derived read once so SQLite does not
+// inline and rebuild the ancestor expansion for each OR branch.
+func splitScopeWitnessMaterializedSQL(query string) string {
+	const notMaterialized = "), split_scope_witnesses AS NOT MATERIALIZED ("
+	const materialized = "), split_scope_witnesses AS MATERIALIZED ("
+	return strings.Replace(splitScopeWitnessSQL(query), notMaterialized, materialized, 1)
 }
 
 func deriveNestedSplitAllocation(r ProductSplitChildPlanRequest, plan ProductSplitChildPlan, created time.Time) (ProductSplitAllocation, error) {
@@ -180,6 +190,17 @@ func (k *KernelStore) reserveNestedSplitChildrenTx(ctx context.Context, tx *sql.
 	plan, err := loadNestedSplitChildPlan(ctx, tx, r)
 	if err != nil {
 		return empty, splitEvidenceErr(err)
+	}
+	return k.reserveNestedSplitChildrenFromPlanTx(ctx, tx, r, plan, w)
+}
+
+// The atomic preparation path passes the nested plan it just generated in
+// this transaction. This avoids rereading the same immutable ancestry before
+// allocating its complete child set.
+func (k *KernelStore) reserveNestedSplitChildrenFromPlanTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, plan ProductNestedSplitChildPlan, w domain.Wave) (ProductSplitAllocation, error) {
+	var empty ProductSplitAllocation
+	if plan.Value.Plan.Set.Value.Request != r || plan.Value.Proposal.ID != r.ProposalID || plan.Value.Proposal.Digest != r.ProposalDigest {
+		return empty, ErrProductSplitHeld
 	}
 	ids, err := productWorkItemLifetimeIDsTx(ctx, tx, w)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/contract"
@@ -55,38 +56,123 @@ func (o SplitChildSourceObserver) Validate() error {
 // The source-only transaction follows joined repository/Issue bookends. A
 // failure records a prohibition for this child, never a global Wave hold.
 func (o SplitChildSourceObserver) Observe(parent context.Context, target contract.Target, workID string) (storage.ProductSplitChildSourceUpdate, bool, error) {
-	if err := o.Validate(); err != nil {
-		return storage.ProductSplitChildSourceUpdate{}, false, err
+	updates, acknowledged, err := o.ObserveMany(parent, target, []string{workID})
+	if len(updates) != 1 {
+		return storage.ProductSplitChildSourceUpdate{}, acknowledged, err
 	}
-	read := github.WithResourceReadBudget(parent, 16<<20)
-	return o.observe(parent, read, &budgetResourceAPI{ResourceAPI: o.API}, target, workID, 5*time.Second)
+	return updates[0], acknowledged, err
 }
 
-func (o SplitChildSourceObserver) observe(parent, readParent context.Context, api ResourceAPI, target contract.Target, workID string, timeout time.Duration) (storage.ProductSplitChildSourceUpdate, bool, error) {
+// ObserveMany joins the independent GitHub reads before saving their source
+// receipts in one transaction. This keeps each CheckedAt tied to its GET while
+// sharing the exact Wave proof walk across an ancestor lineage.
+func (o SplitChildSourceObserver) ObserveMany(parent context.Context, target contract.Target, workIDs []string) ([]storage.ProductSplitChildSourceUpdate, bool, error) {
+	if err := o.Validate(); err != nil {
+		return nil, false, err
+	}
+	if !target.Valid() || len(workIDs) == 0 || len(workIDs) > 128 {
+		return nil, false, storage.ErrProductSplitHeld
+	}
+	seen := make(map[string]bool, len(workIDs))
+	for _, id := range workIDs {
+		if id == "" || seen[id] {
+			return nil, false, storage.ErrProductSplitHeld
+		}
+		seen[id] = true
+	}
+	states, err := o.Store.ReadProductSplitChildSourceStates(parent, target, workIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	observations, acknowledged, err := o.ObserveManyWithStates(parent, target, states)
+	if !acknowledged {
+		return nil, acknowledged, err
+	}
+	save, stop := context.WithTimeout(parent, time.Minute)
+	defer stop()
+	updates, saveErr := o.Store.ObserveProductSplitChildSourcesAt(save, observations)
+	return updates, saveErr == nil, errors.Join(err, saveErr)
+}
+
+// ObserveManyWithStates performs joined read-only GETs against a caller's
+// already authenticated source snapshot. The caller owns persistence so it can
+// commit those observations atomically with a bounded split activation.
+func (o SplitChildSourceObserver) ObserveManyWithStates(parent context.Context, target contract.Target, states []storage.ProductSplitChildSourceState) ([]storage.ProductSplitChildSourceObservation, bool, error) {
+	if err := o.Validate(); err != nil {
+		return nil, false, err
+	}
+	if !target.Valid() || len(states) == 0 || len(states) > 128 {
+		return nil, false, storage.ErrProductSplitHeld
+	}
+	type result struct {
+		index       int
+		observation storage.ProductSplitChildSourceObservation
+		err         error
+		eligible    bool
+	}
+	seen := make(map[string]bool, len(states))
+	for _, state := range states {
+		id := state.Binding.Value.Child.Value.WorkItemID
+		if id == "" || seen[id] || state.Binding.Value.Request.Target != target {
+			return nil, false, storage.ErrProductSplitHeld
+		}
+		seen[id] = true
+	}
+	jobs := make(chan int, len(states))
+	for i := range states {
+		jobs <- i
+	}
+	close(jobs)
+	results := make(chan result, len(states))
+	var joined sync.WaitGroup
+	for i := 0; i < min(4, len(states)); i++ {
+		joined.Add(1)
+		go func() {
+			defer joined.Done()
+			for index := range jobs {
+				observation, err, eligible := o.readObservation(parent, target, states[index].Binding.Value.Child.Value.WorkItemID, states[index])
+				results <- result{index: index, observation: observation, err: err, eligible: eligible}
+			}
+		}()
+	}
+	joined.Wait()
+	close(results)
+	observations := make([]storage.ProductSplitChildSourceObservation, len(states))
+	var readErr error
+	eligible := true
+	for item := range results {
+		observations[item.index] = item.observation
+		readErr = errors.Join(readErr, item.err)
+		eligible = eligible && item.eligible
+	}
+	if parent.Err() != nil {
+		return nil, false, errors.Join(readErr, parent.Err())
+	}
+	if !eligible {
+		return observations, false, readErr
+	}
+	return observations, true, readErr
+}
+
+func (o SplitChildSourceObserver) readObservation(parent context.Context, target contract.Target, workID string, state storage.ProductSplitChildSourceState) (storage.ProductSplitChildSourceObservation, error, bool) {
+	if err := o.Validate(); err != nil {
+		return storage.ProductSplitChildSourceObservation{}, err, false
+	}
+	read := github.WithResourceReadBudget(parent, 16<<20)
+	api := &budgetResourceAPI{ResourceAPI: o.API}
 	clock := time.Now
 	if o.Store.Now != nil {
 		clock = o.Store.Now
 	}
 	readAt := clock()
-	binding, err := o.Store.ReadProductSplitChildScope(readParent, target, workID)
-	if err != nil {
-		return storage.ProductSplitChildSourceUpdate{}, false, err
-	}
+	binding, prior, pin := state.Binding, state.Snapshot, state.PolicyPin
 	v := binding.Value
 	if o.Policy.RepositoryID != v.Issue.RepositoryID || o.Policy.Repository != v.Child.Value.Repository {
-		return storage.ProductSplitChildSourceUpdate{}, false, storage.ErrProductSplitHeld
+		return storage.ProductSplitChildSourceObservation{}, storage.ErrProductSplitHeld, false
 	}
-	prior, priorErr := o.Store.ReadProductSplitChildSource(readParent, target, workID)
-	if priorErr != nil && priorErr != sql.ErrNoRows {
-		return storage.ProductSplitChildSourceUpdate{}, false, priorErr
-	}
-	expected, pin := "", ""
-	if priorErr == nil {
+	expected := ""
+	if prior.ID != "" {
 		expected = prior.ID
-		pin, err = o.Store.ReadProductSplitChildSourcePolicy(readParent, target, workID)
-		if err != nil {
-			return storage.ProductSplitChildSourceUpdate{}, false, err
-		}
 	}
 	facts := storage.ProductSplitChildSourceFacts{RepositoryID: v.Issue.RepositoryID, IssueID: v.Issue.ID, IssueNumber: v.Issue.Number, PolicyDigest: o.Policy.Digest(), Failure: "read_failed"}
 	var readErr error
@@ -94,7 +180,7 @@ func (o SplitChildSourceObserver) observe(parent, readParent context.Context, ap
 		facts.Failure = "invalid_source"
 		readErr = ErrIssueSourcePolicyConflict
 	} else {
-		readCtx, cancel := context.WithTimeout(readParent, timeout)
+		readCtx, cancel := context.WithTimeout(read, 5*time.Second)
 		readErr = sourceRepository(readCtx, api, o.Policy)
 		if readErr != nil {
 			facts.Failure = "repository_mismatch"
@@ -129,16 +215,13 @@ func (o SplitChildSourceObserver) observe(parent, readParent context.Context, ap
 		}
 		cancel()
 	}
+	if parent.Err() != nil {
+		return storage.ProductSplitChildSourceObservation{}, parent.Err(), false
+	}
 	if readErr != nil && facts.Available {
 		facts = storage.ProductSplitChildSourceFacts{RepositoryID: v.Issue.RepositoryID, IssueID: v.Issue.ID, IssueNumber: v.Issue.Number, PolicyDigest: o.Policy.Digest(), Failure: "read_failed"}
 	}
-	if parent.Err() != nil {
-		return storage.ProductSplitChildSourceUpdate{}, false, parent.Err()
-	}
-	save, stop := context.WithTimeout(parent, time.Minute)
-	defer stop()
-	update, saveErr := o.Store.ObserveProductSplitChildSourceAt(save, target, workID, expected, facts, readAt)
-	return update, saveErr == nil, errors.Join(readErr, saveErr)
+	return storage.ProductSplitChildSourceObservation{Target: target, WorkItemID: workID, ExpectedSnapshotID: expected, Facts: facts, ReadAt: readAt}, readErr, true
 }
 
 // Scan advances opaque rows after failures so independent children progress.
@@ -148,7 +231,7 @@ func (o SplitChildSourceObserver) Scan(parent context.Context) (IssueSourceScan,
 	if err := o.Validate(); err != nil {
 		return result, err
 	}
-	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 	ctx = github.WithResourceReadBudget(ctx, 16<<20)
 	api := &budgetResourceAPI{ResourceAPI: o.API}
@@ -175,41 +258,93 @@ func (o SplitChildSourceObserver) Scan(parent context.Context) (IssueSourceScan,
 		if err != nil {
 			return result, err
 		}
+		pending := []storage.ProductSplitChildSourceTarget{}
+		flush := func() error {
+			if len(pending) == 0 {
+				return nil
+			}
+			ids := make([]string, 0, len(pending))
+			for _, target := range pending {
+				ids = append(ids, target.WorkItemID)
+			}
+			scanObserver := o
+			scanObserver.API = api
+			updates, acknowledged, readErr := scanObserver.ObserveMany(ctx, pending[0].Target, ids)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !acknowledged || len(updates) != len(pending) {
+				for _, target := range pending {
+					result.Failed = append(result.Failed, target.WorkItemID)
+					if o.Report != nil {
+						o.Report(fmt.Errorf("split source %s: %w", target.WorkItemID, errors.Join(readErr, storage.ErrTaskEvidence)))
+					}
+				}
+			} else {
+				for i, update := range updates {
+					target := pending[i]
+					if update.Changed {
+						result.Changed = append(result.Changed, target.WorkItemID)
+						if o.OnMutation != nil {
+							o.OnMutation()
+						}
+					}
+					status := update.Snapshot.Value.Status
+					if status == "unavailable" || status == "policy_changed" {
+						result.Failed = append(result.Failed, target.WorkItemID)
+						if o.Report != nil {
+							o.Report(fmt.Errorf("split source %s: %w", target.WorkItemID, errors.Join(readErr, storage.ErrTaskEvidence)))
+						}
+					}
+				}
+			}
+			after := pending[len(pending)-1].Cursor
+			pending = pending[:0]
+			return checkpoint(after)
+		}
 		for _, target := range page.Targets {
 			if ctx.Err() != nil {
 				return result, ctx.Err()
 			}
 			if target.Unavailable {
+				if err := flush(); err != nil {
+					return result, err
+				}
 				result.Failed = append(result.Failed, target.Cursor)
 				if o.Report != nil {
 					o.Report(fmt.Errorf("split source %s: %w", target.Cursor, storage.ErrTaskEvidence))
 				}
-			} else if !seen[target.WorkItemID] {
-				if result.Attempted >= o.Attempts || !api.available(ctx) {
-					return result, ErrIssueSourceScanBudget
+				if err := checkpoint(target.Cursor); err != nil {
+					return result, err
 				}
-				seen[target.WorkItemID] = true
-				result.Attempted++
-				update, _, err := o.observe(parent, ctx, api, target.Target, target.WorkItemID, 5*time.Second)
-				if parent.Err() != nil {
-					return result, parent.Err()
+				continue
+			}
+			if seen[target.WorkItemID] {
+				if err := flush(); err != nil {
+					return result, err
 				}
-				if update.Changed {
-					result.Changed = append(result.Changed, target.WorkItemID)
-					if o.OnMutation != nil {
-						o.OnMutation()
-					}
+				if err := checkpoint(target.Cursor); err != nil {
+					return result, err
 				}
-				if err != nil {
-					result.Failed = append(result.Failed, target.WorkItemID)
-					if o.Report != nil {
-						o.Report(fmt.Errorf("split source %s: %w", target.WorkItemID, err))
-					}
+				continue
+			}
+			if result.Attempted >= o.Attempts || !api.available(ctx) {
+				if err := flush(); err != nil {
+					return result, err
+				}
+				return result, ErrIssueSourceScanBudget
+			}
+			seen[target.WorkItemID] = true
+			result.Attempted++
+			pending = append(pending, target)
+			if len(pending) == 4 {
+				if err := flush(); err != nil {
+					return result, err
 				}
 			}
-			if err := checkpoint(target.Cursor); err != nil {
-				return result, err
-			}
+		}
+		if err := flush(); err != nil {
+			return result, err
 		}
 		if page.NextAfter == "" {
 			return result, checkpoint("")

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,25 +34,7 @@ type liveProductSplit struct {
 // transports. This private local adapter substitutes only the remote API.
 func prepareLiveProductSplit(t *testing.T, ctx context.Context, k *storage.KernelStore, w domain.Wave, cli, base string) liveProductSplit {
 	t.Helper()
-	directory := filepath.Join(k.Root, "native-github")
-	if err := os.Mkdir(directory, 0700); err != nil {
-		t.Fatal("create private controlled GitHub adapter")
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
-	script := "#!/bin/sh\nexec " + quote(executable) + " -test.run '^TestLiveScopedGitHubFixture$' -- \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(directory, "gh"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HARNESS_LIVE_SCOPED_GITHUB", directory)
-	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
-	head, err := json.Marshal(map[string]any{"ref": "refs/heads/trunk", "object": map[string]string{"sha": base, "type": "commit"}})
-	if err != nil || os.WriteFile(filepath.Join(directory, "head.json"), head, 0600) != nil {
-		t.Fatal("save controlled repository HEAD")
-	}
+	directory := prepareLiveProductGitHub(t, k, base, 2)
 	registration, err := k.ReadProductWorkItemRegistration(ctx, "work")
 	if err != nil {
 		t.Fatal(err)
@@ -102,6 +86,38 @@ func prepareLiveProductSplit(t *testing.T, ctx context.Context, k *storage.Kerne
 	return out
 }
 
+func prepareLiveProductGitHub(t *testing.T, k *storage.KernelStore, base string, limit int) string {
+	t.Helper()
+	if limit < 2 || limit > 32 {
+		t.Fatal("bounded controlled Issue count required")
+	}
+	directory := filepath.Join(k.Root, "native-github")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal("create private controlled GitHub adapter")
+	}
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate controlled API helper source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	helper := filepath.Join(directory, "gh")
+	build := exec.Command("go", "build", "-o", helper, "./internal/kernelcli/testdata/livegh")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build controlled GitHub adapter: %v (%s)", err, strings.TrimSpace(string(output)))
+	}
+	t.Setenv("HARNESS_LIVE_SCOPED_GITHUB", directory)
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	head, err := json.Marshal(map[string]any{"ref": "refs/heads/trunk", "object": map[string]string{"sha": base, "type": "commit"}})
+	if err != nil || os.WriteFile(filepath.Join(directory, "head.json"), head, 0600) != nil {
+		t.Fatal("save controlled repository HEAD")
+	}
+	if err := os.WriteFile(filepath.Join(directory, "posts-limit"), []byte(strconv.Itoa(limit)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
 func liveProductSplitPosts(t *testing.T, directory string) int {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(directory, "posts"))
@@ -124,6 +140,11 @@ func TestLiveScopedGitHubFixture(t *testing.T) {
 	}
 	fail := func() { os.Exit(89) }
 	if !filepath.IsAbs(directory) {
+		fail()
+	}
+	limitRaw, err := os.ReadFile(filepath.Join(directory, "posts-limit"))
+	limit, parseErr := strconv.Atoi(string(limitRaw))
+	if err != nil || parseErr != nil || limit < 2 || limit > 32 {
 		fail()
 	}
 	args := []string{}
@@ -158,7 +179,7 @@ func TestLiveScopedGitHubFixture(t *testing.T) {
 	}
 	if method == "GET" && endpoint == repository+"/issues?state=all&per_page=100&page=1" {
 		issues := []json.RawMessage{}
-		for _, number := range []int{101, 102} {
+		for number := 101; number <= 100+limit; number++ {
 			raw, err := os.ReadFile(filepath.Join(directory, fmt.Sprintf("issue-%d.json", number)))
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -177,7 +198,7 @@ func TestLiveScopedGitHubFixture(t *testing.T) {
 	}
 	if method == "GET" && strings.HasPrefix(endpoint, repository+"/issues/") {
 		number, err := strconv.Atoi(strings.TrimPrefix(endpoint, repository+"/issues/"))
-		if err != nil || number < 101 || number > 102 {
+		if err != nil || number < 101 || number > 100+limit {
 			fail()
 		}
 		raw, err := os.ReadFile(filepath.Join(directory, fmt.Sprintf("issue-%d.json", number)))
@@ -215,7 +236,7 @@ func TestLiveScopedGitHubFixture(t *testing.T) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		fail()
 	}
-	if count < 0 || count >= 2 {
+	if count < 0 || count >= limit {
 		fail()
 	}
 	number := 101 + count

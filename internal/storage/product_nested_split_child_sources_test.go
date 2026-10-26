@@ -220,6 +220,43 @@ func TestProductNestedSplitChildSourceRetainsEveryAncestorWithoutExecution(t *te
 	}
 }
 
+func TestProductSplitChildSourceBatchSharesProofsAndRollsBackOnCASConflict(t *testing.T) {
+	ctx := context.Background()
+	k, r, proof := nestedRegistrationScopeFixture(t)
+	if _, err := k.RegisterProductSplitChildren(ctx, r); err != nil {
+		t.Fatal("complete nested registration", err)
+	}
+	if len(proof.Value.Scopes.Value.Children) < 2 {
+		t.Fatal("fixture requires two independently observed children")
+	}
+	observations := make([]ProductSplitChildSourceObservation, 2)
+	for i, binding := range proof.Value.Scopes.Value.Children[:2] {
+		observations[i] = ProductSplitChildSourceObservation{Target: r.Target, WorkItemID: binding.Value.Child.Value.WorkItemID, Facts: splitSourceFacts(binding), ReadAt: k.clock()}
+	}
+	updates, err := k.ObserveProductSplitChildSourcesAt(ctx, observations)
+	if err != nil || len(updates) != len(observations) {
+		t.Fatal("joined source observations were not saved", len(updates), err)
+	}
+	for _, update := range updates {
+		if !update.Changed || update.Snapshot.Value.Status != "ready" {
+			t.Fatal("joined source observation lost its receipt", update)
+		}
+	}
+	before := updates[0].Snapshot
+	changed := observations[0]
+	changed.ExpectedSnapshotID = updates[0].Snapshot.ID
+	changed.Facts.RequestDigest = ProductSourceRequestDigest("changed after observation")
+	stale := observations[1]
+	stale.ExpectedSnapshotID = "stale-source-version"
+	if _, err := k.ObserveProductSplitChildSourcesAt(ctx, []ProductSplitChildSourceObservation{changed, stale}); !errors.Is(err, ErrProductSplitSourceSuperseded) {
+		t.Fatal("batch accepted a stale source CAS", err)
+	}
+	after, err := k.ReadProductSplitChildSource(ctx, r.Target, changed.WorkItemID)
+	if err != nil || after.ID != before.ID || !after.CheckedAt.Equal(before.CheckedAt) {
+		t.Fatal("failed batch partially renewed a source", err)
+	}
+}
+
 func TestProductSplitChildSourceAtKeepsExternalReadTime(t *testing.T) {
 	ctx := context.Background()
 	k, r, scopes := splitRegistrationsFixture(t)

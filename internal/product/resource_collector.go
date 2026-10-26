@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
@@ -24,36 +25,51 @@ type ResourceCollector struct {
 
 type budgetResourceAPI struct {
 	ResourceAPI
+	mu           sync.Mutex
 	calls, bytes int
 }
 
 func (a *budgetResourceAPI) available(ctx context.Context) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.calls < 128 && a.bytes < 16<<20 && github.ResourceReadBudgetAvailable(ctx)
 }
 
 func (a *budgetResourceAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
-	if !a.available(ctx) {
+	a.mu.Lock()
+	if a.calls >= 128 || a.bytes >= 16<<20 || !github.ResourceReadBudgetAvailable(ctx) {
+		a.mu.Unlock()
 		return nil, errors.New("resource scan request budget exhausted")
 	}
 	a.calls++
+	a.mu.Unlock()
 	raw, err := a.ResourceAPI.ResourceGET(ctx, path)
+	a.mu.Lock()
 	a.bytes += len(raw)
-	if a.bytes > 16<<20 {
+	over := a.bytes > 16<<20
+	a.mu.Unlock()
+	if over {
 		return nil, errors.New("resource scan byte budget exhausted")
 	}
 	return raw, err
 }
 func (a *budgetResourceAPI) ResourcePages(ctx context.Context, path, field string) ([]json.RawMessage, error) {
 	// Reserve the last read for the final PR header consistency check.
-	if a.calls >= 127 || !a.available(ctx) {
+	a.mu.Lock()
+	if a.calls >= 127 || a.bytes >= 16<<20 || !github.ResourceReadBudgetAvailable(ctx) {
+		a.mu.Unlock()
 		return nil, errors.New("resource scan request budget exhausted")
 	}
 	a.calls++
+	a.mu.Unlock()
 	items, err := a.ResourceAPI.ResourcePages(ctx, path, field)
+	a.mu.Lock()
 	for _, raw := range items {
 		a.bytes += len(raw)
 	}
-	if a.bytes > 16<<20 {
+	over := a.bytes > 16<<20
+	a.mu.Unlock()
+	if over {
 		return nil, errors.New("resource scan byte budget exhausted")
 	}
 	return items, err

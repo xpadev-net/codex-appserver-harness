@@ -64,11 +64,11 @@ func TestProductSplitFinalSourcesReadEveryChildAndPinSemanticVersions(t *testing
 	if err != nil || !reflect.DeepEqual(refreshed, proof) {
 		t.Fatal("same GET invalidated semantic pin", refreshed, err)
 	}
-	now = now.Add(6 * time.Second)
+	now = now.Add(ProductSplitFinalSourceMaxAge + time.Second)
 	if _, err := k.ReadProductSplitFinalSources(ctx, w.Target()); !errors.Is(err, ErrProductFinalPlanHeld) {
 		t.Fatal("stale tree accepted", err)
 	}
-	now = now.Add(-5 * time.Second) // No source write occurred during the stale read.
+	now = now.Add(-ProductSplitFinalSourceMaxAge) // No source write occurred during the stale read.
 	binding := group.Value.Children[0]
 	id := binding.Value.Child.Value.WorkItemID
 	prior, err := k.ReadProductSplitChildSource(ctx, w.Target(), id)

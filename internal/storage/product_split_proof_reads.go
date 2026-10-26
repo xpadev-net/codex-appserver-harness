@@ -20,11 +20,16 @@ type splitProofReadMemo struct {
 	bytes  int
 }
 
+func newSplitProofReadMemo(tx *sql.Tx) *splitProofReadMemo {
+	return &splitProofReadMemo{tx: tx, active: map[splitProofReadKey]bool{}, saved: map[splitProofReadKey][]byte{}}
+}
+
 // A memo belongs only to one synchronous, read-only loader call tree. Its
 // private child context never escapes to the calling port. A subsequent load
 // after a write, even in the same transaction, starts a new proof walk. Only
 // nested loaders share results, and every hit decodes an independent copy.
-// Only persisted proof value types that round-trip through JSON belong here.
+// Only persisted proofs and derived metadata checks that round-trip through
+// JSON belong here. Current source freshness and live admission never do.
 func readSplitProof[T any](ctx context.Context, tx *sql.Tx, kind string, input any, load func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
@@ -33,7 +38,7 @@ func readSplitProof[T any](ctx context.Context, tx *sql.Tx, kind string, input a
 	memo, _ := ctx.Value(splitProofReadContextKey{}).(*splitProofReadMemo)
 	owner := memo == nil || memo.tx != tx
 	if owner {
-		memo = &splitProofReadMemo{tx: tx, active: map[splitProofReadKey]bool{}, saved: map[splitProofReadKey][]byte{}}
+		memo = newSplitProofReadMemo(tx)
 		ctx = context.WithValue(ctx, splitProofReadContextKey{}, memo)
 	}
 	digest, err := contentDigest(input)

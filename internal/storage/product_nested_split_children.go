@@ -123,6 +123,37 @@ func (k *KernelStore) prepareNestedSplitChildPlanTx(ctx context.Context, tx *sql
 	if err != nil {
 		return empty, err
 	}
+	saved, err := k.saveNestedSplitChildPlanTx(ctx, tx, r, proposal, envelope, registration)
+	return saved.Value.Plan, err
+}
+
+// The atomic nested execution path has just constructed and authenticated this
+// complete proposal in the same transaction. Reuse that local receipt for the
+// immediately following plan write; no external caller can supply this value.
+func (k *KernelStore) prepareNestedSplitChildPlanFromFreshProposalTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, envelope ProductNestedSplitProposal) (ProductNestedSplitChildPlan, error) {
+	proposal := envelope.Value.Proposal
+	if proposal.Value.Request.Target != r.Target || proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest || proposal.Value.Request.ParentWorkItemID != r.ParentWorkItemID {
+		return ProductNestedSplitChildPlan{}, ErrProductSplitHeld
+	}
+	var registration ProductWorkItemRegistrationSnapshot
+	found := false
+	for _, candidate := range envelope.Value.Registrations {
+		if candidate.Value.Definition.ID != r.ParentWorkItemID {
+			continue
+		}
+		if found || candidate.Digest != proposal.Value.Request.RegistrationDigest {
+			return ProductNestedSplitChildPlan{}, ErrProductSplitHeld
+		}
+		registration, found = candidate, true
+	}
+	if !found {
+		return ProductNestedSplitChildPlan{}, ErrProductSplitHeld
+	}
+	return k.saveNestedSplitChildPlanTx(ctx, tx, r, proposal, envelope, registration)
+}
+
+func (k *KernelStore) saveNestedSplitChildPlanTx(ctx context.Context, tx *sql.Tx, r ProductSplitChildPlanRequest, proposal ProductSplitProposal, envelope ProductNestedSplitProposal, registration ProductWorkItemRegistrationSnapshot) (ProductNestedSplitChildPlan, error) {
+	var empty ProductNestedSplitChildPlan
 	plan, err := deriveNestedSplitPlan(proposal, registration, r, ProductSplitChildSetValue{CreatedAt: k.clock()})
 	if err != nil {
 		return empty, err
@@ -151,5 +182,5 @@ func (k *KernelStore) prepareNestedSplitChildPlanTx(ctx context.Context, tx *sql
 			return empty, err
 		}
 	}
-	return plan, nil
+	return saved, nil
 }

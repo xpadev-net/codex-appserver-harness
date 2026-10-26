@@ -71,9 +71,22 @@ type ProductSplitChildSource struct {
 	Value      ProductSplitChildSourceValue `json:"value"`
 	Digest     string                       `json:"digest"`
 }
+
+type ProductSplitChildSourceState struct {
+	Binding   ProductSplitChildScopeBinding
+	Snapshot  ProductSplitChildSource
+	PolicyPin string
+}
 type ProductSplitChildSourceUpdate struct {
 	Snapshot ProductSplitChildSource `json:"snapshot"`
 	Changed  bool                    `json:"changed"`
+}
+type ProductSplitChildSourceObservation struct {
+	Target             contract.Target              `json:"target"`
+	WorkItemID         string                       `json:"work_item_id"`
+	ExpectedSnapshotID string                       `json:"expected_snapshot_id"`
+	Facts              ProductSplitChildSourceFacts `json:"facts"`
+	ReadAt             time.Time                    `json:"read_at"`
 }
 type splitChildSourcePolicyValue struct {
 	splitChildSourceReference
@@ -200,7 +213,9 @@ func loadSplitChildSource(ctx context.Context, tx *sql.Tx, binding ProductSplitC
 	err := taskEvidenceRecord(ctx, tx, "product_split_child_source", id, &saved)
 	if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, splitScopeWitnessSQL(`SELECT EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_split_child_source_policy','product_split_child_source_policy_history') AND id=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind='product_split_child_source_history' AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.child.value.work_item_id')=?) OR EXISTS(SELECT 1 FROM split_scope_witnesses WHERE kind IN ('product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_split_parent_scope_tool','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source','product_nested_split_scope_group','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_ancestor_group') AND json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.parent_work_item_id')=?)`), id, id, id).Scan(&known); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_child_source_policy','product_split_child_source_policy_history') AND id=?)
+ OR EXISTS(SELECT 1 FROM records WHERE kind='product_split_child_source_history' AND (NOT json_valid(payload) OR json_extract(payload,'$.value.child.value.work_item_id')=?))
+ OR EXISTS(SELECT 1 FROM records WHERE kind IN ('product_split_parent_scope','product_split_parent_scope_history','product_split_parent_scope_admission','product_split_parent_scope_tool','product_nested_split_proposal','product_nested_split_proposal_history','product_nested_split_proposal_admission','product_nested_split_proposal_request','product_nested_split_children','product_nested_split_children_history','product_nested_split_children_admission','product_nested_split_child_intent','product_nested_split_child_intent_history','product_nested_split_child_intent_admission','product_nested_split_allocation','product_nested_split_allocation_history','product_nested_split_allocation_admission','product_nested_split_work_item_seat','product_nested_split_allocation_ledger','product_nested_split_creation_ancestor','product_nested_split_retry_ancestor','product_nested_split_child_scopes','product_nested_split_child_scopes_history','product_nested_split_child_scopes_admission','product_nested_split_child_scope','product_nested_split_child_scope_history','product_nested_split_child_scope_admission','product_nested_split_child_scope_source','product_nested_split_scope_group','product_nested_split_registrations','product_nested_split_registrations_history','product_nested_split_registrations_admission','product_split_ancestor_group') AND (NOT json_valid(payload) OR json_extract(payload,'$.value.parent_work_item_id')=?))`, id, id, id).Scan(&known); err != nil {
 			return saved, err
 		}
 		if known {
@@ -264,6 +279,71 @@ func (k *KernelStore) ReadProductSplitChildSourcePolicy(ctx context.Context, tar
 	return pin.Value.PolicyDigest, nil
 }
 
+// ReadProductSplitChildSourceStates authenticates a set of bindings, source
+// snapshots, and policy pins in one read-only transaction. The proof memo is
+// shared across the set, so a lineage refresh does not repeat Wave-wide proof
+// walks for every child.
+func (k *KernelStore) ReadProductSplitChildSourceStates(ctx context.Context, target contract.Target, workIDs []string) ([]ProductSplitChildSourceState, error) {
+	if !target.Valid() || len(workIDs) == 0 || len(workIDs) > 128 {
+		return nil, ErrProductSplitHeld
+	}
+	tx, err := k.kernelTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	states, err := productSplitChildSourceStatesTx(read, tx, target, workIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
+func productSplitChildSourceStatesTx(read context.Context, tx *sql.Tx, target contract.Target, workIDs []string) ([]ProductSplitChildSourceState, error) {
+	if !target.Valid() || len(workIDs) == 0 || len(workIDs) > 128 {
+		return nil, ErrProductSplitHeld
+	}
+	seen := make(map[string]bool, len(workIDs))
+	states := make([]ProductSplitChildSourceState, 0, len(workIDs))
+	for _, workID := range workIDs {
+		if workID == "" || seen[workID] {
+			return nil, ErrProductSplitHeld
+		}
+		seen[workID] = true
+		binding, err := splitChildSourceBindingTx(read, tx, target, workID)
+		if err != nil {
+			return nil, err
+		}
+		state := ProductSplitChildSourceState{Binding: binding}
+		source, sourceErr := loadSplitChildSource(read, tx, binding)
+		if sourceErr != nil && sourceErr != sql.ErrNoRows {
+			return nil, sourceErr
+		}
+		if sourceErr == nil {
+			policy, err := loadSplitChildSourcePolicy(read, tx, binding)
+			if err != nil {
+				return nil, err
+			}
+			state.Snapshot, state.PolicyPin = source, policy.Value.PolicyDigest
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+func (k *KernelStore) ReadProductSplitChildSourceState(ctx context.Context, target contract.Target, workID string) (ProductSplitChildScopeBinding, ProductSplitChildSource, string, error) {
+	states, err := k.ReadProductSplitChildSourceStates(ctx, target, []string{workID})
+	if err != nil {
+		return ProductSplitChildScopeBinding{}, ProductSplitChildSource{}, "", err
+	}
+	state := states[0]
+	return state.Binding, state.Snapshot, state.PolicyPin, nil
+}
+
 // ObserveProductSplitChildSource accepts host-verified facts only. The CAS is
 // the prior snapshot ID (including its version), not its semantic digest.
 // It changes no Wave hold, budgets, Tasks or execution authority.
@@ -275,86 +355,140 @@ func (k *KernelStore) ObserveProductSplitChildSource(ctx context.Context, target
 // time across potentially expensive canonical proof validation. Saving a receipt
 // cannot renew the age of an earlier external observation.
 func (k *KernelStore) ObserveProductSplitChildSourceAt(ctx context.Context, target contract.Target, workID, expectedSnapshotID string, facts ProductSplitChildSourceFacts, readAt time.Time) (ProductSplitChildSourceUpdate, error) {
-	readAt = readAt.UTC().Round(0)
-	if readAt.IsZero() || readAt.After(k.clock()) {
-		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
-	}
-	if err := facts.validate(); err != nil {
+	updates, err := k.ObserveProductSplitChildSourcesAt(ctx, []ProductSplitChildSourceObservation{{Target: target, WorkItemID: workID, ExpectedSnapshotID: expectedSnapshotID, Facts: facts, ReadAt: readAt}})
+	if err != nil {
 		return ProductSplitChildSourceUpdate{}, err
 	}
-	facts.UpdatedAt = facts.UpdatedAt.UTC().Round(0)
+	return updates[0], nil
+}
+
+type splitChildSourceSave struct {
+	observation ProductSplitChildSourceObservation
+	binding     ProductSplitChildScopeBinding
+	policy      *splitChildSourcePolicy
+	snapshot    ProductSplitChildSource
+	changed     bool
+}
+
+// ObserveProductSplitChildSourcesAt saves a joined set of source GETs in one
+// transaction. The read-only proof memo is shared across the batch and expires
+// before the first write; each original GET completion time remains unchanged.
+func (k *KernelStore) ObserveProductSplitChildSourcesAt(ctx context.Context, observations []ProductSplitChildSourceObservation) ([]ProductSplitChildSourceUpdate, error) {
+	if len(observations) == 0 || len(observations) > 128 {
+		return nil, ErrProductSplitHeld
+	}
 	tx, err := k.kernelTx(ctx)
 	if err != nil {
-		return ProductSplitChildSourceUpdate{}, err
+		return nil, err
 	}
 	defer tx.Rollback()
-	binding, err := splitChildSourceBindingTx(ctx, tx, target, workID)
+	// These proofs describe one read-only transaction snapshot. Share their
+	// immutable reads, then leave the memo context before the first journal
+	// write. readAt remains the actual external GET completion time.
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	updates, err := observeProductSplitChildSourcesAtTx(k, ctx, tx, read, observations)
 	if err != nil {
-		return ProductSplitChildSourceUpdate{}, err
-	}
-	prior, priorErr := loadSplitChildSource(ctx, tx, binding)
-	if priorErr != nil && priorErr != sql.ErrNoRows {
-		return ProductSplitChildSourceUpdate{}, priorErr
-	}
-	if priorErr == nil && expectedSnapshotID != prior.ID || priorErr != nil && expectedSnapshotID != "" {
-		return ProductSplitChildSourceUpdate{}, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
-	}
-	now := readAt
-	if now.Before(binding.Value.CreatedAt) {
-		return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
-	}
-	if priorErr == nil && now.Before(prior.CheckedAt) {
-		return ProductSplitChildSourceUpdate{}, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
-	}
-	reference, err := splitSourceReferenceTx(ctx, tx, binding)
-	if err != nil {
-		return ProductSplitChildSourceUpdate{}, err
-	}
-	pin := facts.PolicyDigest
-	if priorErr == nil {
-		policy, err := loadSplitChildSourcePolicy(ctx, tx, binding)
-		if err != nil {
-			return ProductSplitChildSourceUpdate{}, err
-		}
-		pin = policy.Value.PolicyDigest
-	} else {
-		value := splitChildSourcePolicyValue{splitChildSourceReference: reference, PolicyDigest: pin}
-		digest, err := contentDigest(value)
-		if err != nil {
-			return ProductSplitChildSourceUpdate{}, err
-		}
-		for _, kind := range []string{"product_split_child_source_policy", "product_split_child_source_policy_history"} {
-			if err := kernelRecordTx(ctx, tx, kind, workID, target.WaveID, splitChildSourcePolicy{Value: value, Digest: digest}); err != nil {
-				return ProductSplitChildSourceUpdate{}, err
-			}
-		}
-	}
-	value := ProductSplitChildSourceValue{splitChildSourceReference: reference, Facts: facts, Status: splitChildSourceStatus(binding, facts, pin)}
-	digest, err := contentDigest(value)
-	if err != nil {
-		return ProductSplitChildSourceUpdate{}, err
-	}
-	saved := prior
-	changed := priorErr != nil || digest != prior.Digest
-	if changed {
-		if prior.Version >= maxSplitSourceVersions {
-			return ProductSplitChildSourceUpdate{}, ErrProductSplitHeld
-		}
-		saved = ProductSplitChildSource{Version: prior.Version + 1, ObservedAt: now, CheckedAt: now, Value: value, Digest: digest}
-		saved.ID = structureID("split-child-source-", workID, strconv.Itoa(saved.Version)+":"+digest)
-		if err := kernelRecordTx(ctx, tx, "product_split_child_source_history", saved.ID, target.WaveID, saved); err != nil {
-			return ProductSplitChildSourceUpdate{}, err
-		}
-	} else {
-		saved.CheckedAt = now
-	}
-	if err := kernelRecordTx(ctx, tx, "product_split_child_source", workID, target.WaveID, saved); err != nil {
-		return ProductSplitChildSourceUpdate{}, err
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return ProductSplitChildSourceUpdate{}, err
+		return nil, err
 	}
-	return ProductSplitChildSourceUpdate{Snapshot: saved, Changed: changed}, nil
+	return updates, nil
+}
+
+func observeProductSplitChildSourcesAtTx(k *KernelStore, ctx context.Context, tx *sql.Tx, read context.Context, observations []ProductSplitChildSourceObservation) ([]ProductSplitChildSourceUpdate, error) {
+	if len(observations) == 0 || len(observations) > 128 {
+		return nil, ErrProductSplitHeld
+	}
+	seen := map[string]bool{}
+	saves := make([]splitChildSourceSave, 0, len(observations))
+	for _, observation := range observations {
+		observation.ReadAt = observation.ReadAt.UTC().Round(0)
+		if !observation.Target.Valid() || observation.WorkItemID == "" || seen[observation.Target.WaveID+"\x00"+observation.WorkItemID] || observation.ReadAt.IsZero() || observation.ReadAt.After(k.clock()) {
+			return nil, ErrProductSplitHeld
+		}
+		seen[observation.Target.WaveID+"\x00"+observation.WorkItemID] = true
+		if err := observation.Facts.validate(); err != nil {
+			return nil, err
+		}
+		observation.Facts.UpdatedAt = observation.Facts.UpdatedAt.UTC().Round(0)
+		binding, err := splitChildSourceBindingTx(read, tx, observation.Target, observation.WorkItemID)
+		if err != nil {
+			return nil, err
+		}
+		prior, priorErr := loadSplitChildSource(read, tx, binding)
+		if priorErr != nil && priorErr != sql.ErrNoRows {
+			return nil, priorErr
+		}
+		if priorErr == nil && observation.ExpectedSnapshotID != prior.ID || priorErr != nil && observation.ExpectedSnapshotID != "" {
+			return nil, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
+		}
+		now := observation.ReadAt
+		if now.Before(binding.Value.CreatedAt) {
+			return nil, ErrProductSplitHeld
+		}
+		if priorErr == nil && now.Before(prior.CheckedAt) {
+			return nil, errors.Join(ErrProductSplitHeld, ErrProductSplitSourceSuperseded)
+		}
+		reference, err := splitSourceReferenceTx(read, tx, binding)
+		if err != nil {
+			return nil, err
+		}
+		pin := observation.Facts.PolicyDigest
+		var policyToSave *splitChildSourcePolicy
+		if priorErr == nil {
+			policy, err := loadSplitChildSourcePolicy(read, tx, binding)
+			if err != nil {
+				return nil, err
+			}
+			pin = policy.Value.PolicyDigest
+		} else {
+			value := splitChildSourcePolicyValue{splitChildSourceReference: reference, PolicyDigest: pin}
+			digest, err := contentDigest(value)
+			if err != nil {
+				return nil, err
+			}
+			policyToSave = &splitChildSourcePolicy{Value: value, Digest: digest}
+		}
+		value := ProductSplitChildSourceValue{splitChildSourceReference: reference, Facts: observation.Facts, Status: splitChildSourceStatus(binding, observation.Facts, pin)}
+		digest, err := contentDigest(value)
+		if err != nil {
+			return nil, err
+		}
+		saved := prior
+		changed := priorErr != nil || digest != prior.Digest
+		if changed {
+			if prior.Version >= maxSplitSourceVersions {
+				return nil, ErrProductSplitHeld
+			}
+			saved = ProductSplitChildSource{Version: prior.Version + 1, ObservedAt: now, CheckedAt: now, Value: value, Digest: digest}
+			saved.ID = structureID("split-child-source-", observation.WorkItemID, strconv.Itoa(saved.Version)+":"+digest)
+		} else {
+			saved.CheckedAt = now
+		}
+		saves = append(saves, splitChildSourceSave{observation: observation, binding: binding, policy: policyToSave, snapshot: saved, changed: changed})
+	}
+	updates := make([]ProductSplitChildSourceUpdate, 0, len(saves))
+	for _, save := range saves {
+		observation := save.observation
+		if save.policy != nil {
+			for _, kind := range []string{"product_split_child_source_policy", "product_split_child_source_policy_history"} {
+				if err := kernelRecordTx(ctx, tx, kind, observation.WorkItemID, observation.Target.WaveID, save.policy); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if save.changed {
+			if err := kernelRecordTx(ctx, tx, "product_split_child_source_history", save.snapshot.ID, observation.Target.WaveID, save.snapshot); err != nil {
+				return nil, err
+			}
+		}
+		if err := kernelRecordTx(ctx, tx, "product_split_child_source", observation.WorkItemID, observation.Target.WaveID, save.snapshot); err != nil {
+			return nil, err
+		}
+		updates = append(updates, ProductSplitChildSourceUpdate{Snapshot: save.snapshot, Changed: save.changed})
+	}
+	return updates, nil
 }
 
 // This is a source-only check. It never grants execution, quality or a send.

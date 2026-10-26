@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 )
 
 type splitSourceFixtureAPI struct {
+	mu       sync.Mutex
 	issues   map[string]splitChildSourceIssue
 	calls    []string
 	mode     string
@@ -28,15 +30,18 @@ func (a *splitSourceFixtureAPI) ResourcePages(context.Context, string, string) (
 }
 
 func (a *splitSourceFixtureAPI) ResourceGET(ctx context.Context, path string) (json.RawMessage, error) {
+	a.mu.Lock()
 	a.calls = append(a.calls, path)
-	if a.hook != nil {
-		hook := a.hook
-		a.hook = nil
+	callCount, mode, affected := len(a.calls), a.mode, a.affected
+	hook := a.hook
+	a.hook = nil
+	a.mu.Unlock()
+	if hook != nil {
 		hook()
 	}
 	if path == "" {
 		id := int64(17)
-		if a.mode == "repo_changed" && len(a.calls) > 1 {
+		if mode == "repo_changed" && callCount > 1 {
 			id++
 		}
 		return json.Marshal(Repository{ID: id, Name: "owner/repo"})
@@ -45,8 +50,8 @@ func (a *splitSourceFixtureAPI) ResourceGET(ctx context.Context, path string) (j
 	if !ok {
 		return nil, fmt.Errorf("unexpected GET %q", path)
 	}
-	if path == a.affected {
-		switch a.mode {
+	if path == affected {
+		switch mode {
 		case "read_failed":
 			return nil, errors.New("fixture read failed")
 		case "cancel":
@@ -71,6 +76,31 @@ func (a *splitSourceFixtureAPI) ResourceGET(ctx context.Context, path string) (j
 		}
 	}
 	return json.Marshal(issue)
+}
+
+func TestSplitChildSourceObserveManyJoinsGETsIntoOneStorageBatch(t *testing.T) {
+	o, api, saved, _ := splitChildSourceFixture(t)
+	ctx := context.Background()
+	ids := []string{saved.Value.Children[0].Value.Child.Value.WorkItemID, saved.Value.Children[1].Value.Child.Value.WorkItemID}
+	updates, acknowledged, err := o.ObserveMany(ctx, saved.Value.Request.Target, ids)
+	if err != nil || !acknowledged || len(updates) != len(ids) {
+		t.Fatal("joined source read/save failed", len(updates), acknowledged, err)
+	}
+	for i, id := range ids {
+		if !updates[i].Changed || updates[i].Snapshot.Value.Status != "ready" || updates[i].Snapshot.Value.Child.Value.WorkItemID != id {
+			t.Fatal("joined child receipt changed identity or readiness", i, updates[i])
+		}
+		current, err := o.Store.ReadProductSplitChildSource(ctx, saved.Value.Request.Target, id)
+		if err != nil || current.ID != updates[i].Snapshot.ID || !current.CheckedAt.Equal(updates[i].Snapshot.CheckedAt) {
+			t.Fatal("batch did not commit canonical source head", i, err)
+		}
+	}
+	api.mu.Lock()
+	calls := len(api.calls)
+	api.mu.Unlock()
+	if calls != 8 {
+		t.Fatal("joined source reads did not complete both repository/Issue bookends", calls)
+	}
 }
 func splitChildSourceFixture(t *testing.T) (SplitChildSourceObserver, *splitSourceFixtureAPI, storage.ProductSplitRegistrations, string) {
 	t.Helper()

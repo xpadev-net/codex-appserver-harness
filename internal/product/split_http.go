@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 	"github.com/xpadev-net/codex-appserver-harness/internal/github"
 	"github.com/xpadev-net/codex-appserver-harness/internal/process"
 	"github.com/xpadev-net/codex-appserver-harness/internal/storage"
@@ -46,41 +47,48 @@ func (b *splitHTTPOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 func refreshSplitHTTPSource(ctx context.Context, k *storage.KernelStore, job storage.ProductSplitCreate, policy *IssueSourcePolicy, api ResourceAPI) (string, string, error) {
 	if err := validateSplitHTTPPolicy(ctx, k, job, policy); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("split source policy: %w", err)
 	}
 	w, err := k.Wave(ctx, job.Value.Request.Target.WaveID)
 	if err != nil {
 		return "", "", err
 	}
-	var reads []func(context.Context) error
 	if job.Value.Ancestry != nil {
 		ids := []string{job.Value.Request.ParentWorkItemID}
-		if job.Value.Child.Value.Depth > 2 {
+		if job.Value.Child.Value.Depth > 1 {
 			ids, err = k.ReadProductSplitSourceLineage(ctx, job.Value.Request.Target, job.Value.Request.ParentWorkItemID)
 			if err != nil {
 				return "", "", err
 			}
 		}
 		observer := SplitChildSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
-		for _, id := range ids {
-			reads = append(reads, func(read context.Context) error {
-				update, acknowledged, err := observer.Observe(read, job.Value.Request.Target, id)
-				if err != nil {
-					return err
-				}
-				if !acknowledged || update.Snapshot.Value.Status != "ready" {
-					return storage.ErrProductSplitHeld
-				}
-				_, err = k.RequireProductSplitChildSource(read, job.Value.Request.Target, id, policy.Digest(), 5*time.Second)
-				return err
-			})
+		updates, acknowledged, err := observer.ObserveMany(ctx, job.Value.Request.Target, ids)
+		if err != nil {
+			return "", "", fmt.Errorf("split child source read: %w", err)
 		}
-	}
-	if err := runSplitSourceReads(ctx, reads); err != nil {
-		return "", "", err
+		if !acknowledged || len(updates) != len(ids) {
+			return "", "", storage.ErrProductSplitHeld
+		}
+		now := time.Now().UTC()
+		if k.Now != nil {
+			now = k.Now().UTC()
+		}
+		for _, update := range updates {
+			if update.Snapshot.Value.Status != "ready" {
+				return "", "", storage.ErrProductSplitHeld
+			}
+			if update.Snapshot.CheckedAt.IsZero() || now.Before(update.Snapshot.CheckedAt) || now.Sub(update.Snapshot.CheckedAt) > storage.ProductSplitActivationSourceMaxAge {
+				return "", "", fmt.Errorf("split child source freshness: %w", storage.ErrProductSplitHeld)
+			}
+		}
 	}
 	sourceID, sourceDigest := "", ""
 	if w.Source != "direct" {
+		// ReadProductSplitSourceLineage above contains only registered split
+		// child Issues. It cannot represent the Wave's original Issue source, so
+		// re-fetch that root Issue after the child lineage reads and bind this
+		// exact observation into the activation transaction below. Direct Waves
+		// have no external root Issue to revalidate.
 		observer := IssueSourceObserver{Store: k, API: api, Policy: *policy, Attempts: 1}
 		if err := observer.Validate(); err != nil {
 			return "", "", err
@@ -160,7 +168,7 @@ func runSplitSourceReads(ctx context.Context, reads []func(context.Context) erro
 // create a separate group. No automatic POST retry is possible.
 func ExecuteSplitHTTP(ctx context.Context, path string) (SplitHTTPResult, error) {
 	var empty SplitHTTPResult
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, splitHTTPExecutionTimeout)
 	defer cancel()
 	spec, specDigest, err := ReadSplitHTTPSpec(path)
 	if err != nil {
@@ -195,19 +203,44 @@ func ExecuteSplitHTTP(ctx context.Context, path string) (SplitHTTPResult, error)
 	if err != nil {
 		return empty, err
 	}
-	sourceID, sourceDigest, err := refreshSplitHTTPSource(ctx, k, job, spec.SourcePolicy, liveAPI{client})
+	api := liveAPI{client}
+	var claim storage.ProductSplitCreateClaim
+	if job.Value.Ancestry != nil {
+		w, waveErr := k.Wave(ctx, job.Value.Request.Target.WaveID)
+		if waveErr != nil {
+			return empty, waveErr
+		}
+		if w.Source == "direct" {
+			if err := validateSplitHTTPPolicy(ctx, k, job, spec.SourcePolicy); err != nil {
+				return empty, fmt.Errorf("split source policy: %w", err)
+			}
+			observer := SplitChildSourceObserver{Store: k, API: GitHubResourceAPI(storage.ProductTarget{Repository: job.Value.Child.Value.Repository, WorkItem: domain.WorkItem{RepositoryID: job.Value.Child.Value.RepositoryID}}), Policy: *spec.SourcePolicy, Attempts: 1}
+			claim, err = k.ObserveAndActivateProductSplitCreateHTTPWithSources(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, func(read context.Context, states []storage.ProductSplitChildSourceState) ([]storage.ProductSplitChildSourceObservation, error) {
+				observations, acknowledged, err := observer.ObserveManyWithStates(read, job.Value.Request.Target, states)
+				if err != nil {
+					return nil, err
+				}
+				if !acknowledged || len(observations) != len(states) {
+					return nil, storage.ErrProductSplitHeld
+				}
+				return observations, nil
+			})
+		} else {
+			sourceID, sourceDigest, err := refreshSplitHTTPSource(ctx, k, job, spec.SourcePolicy, api)
+			if err != nil {
+				return empty, err
+			}
+			claim, err = k.ObserveAndActivateProductSplitCreateHTTP(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, sourceID, sourceDigest)
+		}
+	} else {
+		sourceID, sourceDigest, err := refreshSplitHTTPSource(ctx, k, job, spec.SourcePolicy, api)
+		if err != nil {
+			return empty, err
+		}
+		claim, err = k.ObserveAndActivateProductSplitCreateHTTP(ctx, job.ID, spec.OwnerID, job.Digest, specDigest, sourceID, sourceDigest)
+	}
 	if err != nil {
-		return empty, err
-	}
-	if _, err := k.ObserveProductSplitCreateGate(ctx, job.ID, spec.OwnerID, job.Digest, sourceID, sourceDigest); err != nil {
-		return empty, err
-	}
-	if err := ctx.Err(); err != nil {
-		return empty, err
-	}
-	claim, err := k.ActivateProductSplitCreateHTTP(ctx, job.ID, spec.OwnerID, job.Digest, specDigest)
-	if err != nil {
-		return empty, err
+		return empty, fmt.Errorf("split creation activation: %w", err)
 	}
 	if !claim.Start {
 		return empty, storage.ErrProductSplitHeld
@@ -253,6 +286,14 @@ func ReadSplitHTTPResult(ctx context.Context, k *storage.KernelStore, id string)
 	if err != nil {
 		return result, err
 	}
+	return readSplitHTTPResultForCreation(k, job)
+}
+
+// The supplied job must come from the current canonical journal read. A result
+// remains a hint; physical stopping and GET reconciliation use fresh authority.
+func readSplitHTTPResultForCreation(k *storage.KernelStore, job storage.ProductSplitCreate) (SplitHTTPResult, error) {
+	var result SplitHTTPResult
+	id := job.ID
 	if job.HTTP == nil {
 		return result, storage.ErrProductSplitHeld
 	}

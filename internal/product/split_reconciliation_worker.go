@@ -13,10 +13,13 @@ import (
 // or mutation transport. Run joins every read and leaves active senders alone.
 type SplitCreationReconciliationWorker struct {
 	Reconciler SplitCreationReconciler
-	Workers    int
-	Every      time.Duration
-	OnMutation func()
-	Report     func(error)
+	// Trusted source reader for a new adoption, outside its SQL transaction.
+	// Historical reads and exact replays never refresh source authority.
+	RefreshSource func(context.Context, storage.ProductSplitChildPlanRequest) error
+	Workers       int
+	Every         time.Duration
+	OnMutation    func()
+	Report        func(error)
 }
 
 func (d SplitCreationReconciliationWorker) Run(ctx context.Context) error {
@@ -160,6 +163,11 @@ func (d SplitCreationReconciliationWorker) finishRegistrations(ctx context.Conte
 	_, err := d.Reconciler.Store.ReadProductSplitChildScopes(ctx, request)
 	changed := false
 	if errors.Is(err, sql.ErrNoRows) && !errors.Is(err, storage.ErrProductSplitHeld) {
+		if d.RefreshSource != nil {
+			if err := d.RefreshSource(ctx, request); err != nil {
+				return changed, err
+			}
+		}
 		if _, err = d.Reconciler.Store.BindProductSplitChildScopes(ctx, request); err == nil {
 			changed = true
 		}
@@ -173,6 +181,11 @@ func (d SplitCreationReconciliationWorker) finishRegistrations(ctx context.Conte
 	}
 	if !errors.Is(err, sql.ErrNoRows) || errors.Is(err, storage.ErrProductSplitHeld) {
 		return changed, err
+	}
+	if d.RefreshSource != nil {
+		if err := d.RefreshSource(ctx, request); err != nil {
+			return changed, err
+		}
 	}
 	_, err = d.Reconciler.Store.RegisterProductSplitChildren(ctx, request)
 	return changed || err == nil, err

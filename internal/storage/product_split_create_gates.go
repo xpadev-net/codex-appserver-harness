@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"reflect"
 	"time"
+
+	"github.com/xpadev-net/codex-appserver-harness/internal/domain"
 )
 
 type ProductSplitCreateGate struct {
@@ -64,56 +66,85 @@ func (k *KernelStore) ObserveProductSplitCreateGate(ctx context.Context, id, own
 		return empty, err
 	}
 	defer tx.Rollback()
-	job, err := loadSplitCreate(ctx, tx, id)
+	read := context.WithValue(ctx, splitProofReadContextKey{}, newSplitProofReadMemo(tx))
+	record, job, err := k.readSplitCreateGateTx(read, tx, id, owner, digest, sourceID, sourceDigest)
 	if err != nil {
 		return empty, err
+	}
+	if err := writeSplitCreateGateTx(ctx, tx, job, record); err != nil {
+		return empty, err
+	}
+	return record.Value, tx.Commit()
+}
+
+func writeSplitCreateGateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, record splitCreateGateRecord) error {
+	if err := kernelRecordTx(ctx, tx, "product_split_create_gate", job.ID, job.Value.Request.Target.WaveID, record); err != nil {
+		return err
+	}
+	return kernelRecordTx(ctx, tx, "product_split_create_gate_history", record.Digest, job.ID, record)
+}
+
+func (k *KernelStore) readSplitCreateGateTx(ctx context.Context, tx *sql.Tx, id, owner, digest, sourceID, sourceDigest string) (splitCreateGateRecord, ProductSplitCreate, error) {
+	var empty splitCreateGateRecord
+	// Share immutable proofs only until the first write below. Live source
+	// checks still read current timestamps after the complete metadata walk.
+	read := ctx
+	job, err := loadSplitCreate(read, tx, id)
+	if err != nil {
+		return empty, ProductSplitCreate{}, err
 	}
 	if job.Value.OwnerID != owner || job.Digest != digest || job.State != "prepared" {
-		return empty, ErrProductSplitHeld
+		return empty, ProductSplitCreate{}, ErrProductSplitHeld
 	}
-	if err := k.splitCreatePreflightTx(ctx, tx, job.Value.Request); err != nil {
-		return empty, err
-	}
-	w, err := loadWave(ctx, tx, job.Value.Request.Target.WaveID)
+	w, err := loadWave(read, tx, job.Value.Request.Target.WaveID)
 	if err != nil {
-		return empty, err
+		return empty, ProductSplitCreate{}, err
+	}
+	var preflightErr error
+	if job.Value.Ancestry != nil && w.Source == "direct" {
+		preflightErr = k.splitNestedDirectCreatePreflightTx(read, tx, job, w)
+	} else {
+		preflightErr = k.splitCreatePreflightTx(read, tx, job.Value.Request)
+	}
+	if preflightErr != nil {
+		return empty, ProductSplitCreate{}, preflightErr
 	}
 	if w.Source == "direct" {
 		if sourceID != "" || sourceDigest != "" {
-			return empty, ErrProductSplitHeld
+			return empty, ProductSplitCreate{}, ErrProductSplitHeld
 		}
 	} else {
-		snapshot, err := loadProductSourceSnapshot(ctx, tx, w.ID)
+		snapshot, err := loadProductSourceSnapshot(read, tx, w.ID)
 		if err != nil {
-			return empty, splitEvidenceErr(err)
+			return empty, ProductSplitCreate{}, splitEvidenceErr(err)
 		}
 		if sourceID != snapshot.ID || sourceDigest != snapshot.Digest {
-			return empty, ErrProductSplitHeld
+			return empty, ProductSplitCreate{}, ErrProductSplitHeld
 		}
 	}
 	// A lost authoritative head must be restored from trusted evidence offline.
 	var current splitCreateGateRecord
-	err = taskEvidenceRecord(ctx, tx, "product_split_create_gate", job.ID, &current)
+	err = taskEvidenceRecord(read, tx, "product_split_create_gate", job.ID, &current)
 	if err == nil {
-		if _, err := loadSplitCreateGate(ctx, tx, job); err != nil {
-			return empty, err
+		if _, err := loadSplitCreateGate(read, tx, job); err != nil {
+			return empty, ProductSplitCreate{}, err
 		}
 	} else if err == sql.ErrNoRows {
 		var known bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_create_gate_history' AND work_item_id=?)", job.ID).Scan(&known); err != nil {
-			return empty, err
+		if err := tx.QueryRowContext(read, "SELECT EXISTS(SELECT 1 FROM records WHERE kind='product_split_create_gate_history' AND work_item_id=?)", job.ID).Scan(&known); err != nil {
+			return empty, ProductSplitCreate{}, err
 		}
 		if known {
-			return empty, ErrProductSplitHeld
+			return empty, ProductSplitCreate{}, ErrProductSplitHeld
 		}
 	} else {
-		return empty, splitEvidenceErr(err)
+		return empty, ProductSplitCreate{}, splitEvidenceErr(err)
 	}
 	value := ProductSplitCreateGate{Ancestry: job.Value.Ancestry, CreationID: job.ID, CreationDigest: job.Digest, Request: job.Value.Request, ParentHeadID: job.Value.ParentHeadID, SourceID: sourceID, SourceDigest: sourceDigest, ObservedAt: k.clock()}
 	if job.Value.Ancestry != nil {
-		source, ancestors, err := k.nestedSplitCreationSourceTx(ctx, tx, job)
+		source, ancestors, err := k.nestedSplitCreationSourceTx(read, tx, job)
 		if err != nil {
-			return empty, err
+			return empty, ProductSplitCreate{}, err
 		}
 		value.ParentSourceID, value.ParentSourceDigest = source.ID, source.Digest
 		value.AncestorSources = ancestors
@@ -123,17 +154,33 @@ func (k *KernelStore) ObserveProductSplitCreateGate(ctx context.Context, id, own
 	}
 	checksum, err := contentDigest(value)
 	if err != nil {
-		return empty, err
+		return empty, ProductSplitCreate{}, err
 	}
 	record := splitCreateGateRecord{value, checksum}
-	if err := kernelRecordTx(ctx, tx, "product_split_create_gate", job.ID, w.ID, record); err != nil {
-		return empty, err
-	}
-	if err := kernelRecordTx(ctx, tx, "product_split_create_gate_history", checksum, job.ID, record); err != nil {
-		return empty, err
-	}
-	return value, tx.Commit()
+	return record, job, nil
 }
+
+// loadSplitCreate above authenticates the complete immutable nested proposal,
+// allocation, plan, and ancestry tree. The nested source gate below rechecks
+// the current canonical parent binding and every ancestor's live source. For a
+// direct nested Wave, repeat only the current Wave and proposal identities;
+// rebuilding the full product context here consumed the five-second GET gate
+// without adding current source authority.
+func (k *KernelStore) splitNestedDirectCreatePreflightTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate, w domain.Wave) error {
+	r := job.Value.Request
+	if w.Target() != r.Target || w.DispatchPaused() || w.State == domain.WaveCompleted || w.State == domain.WaveCanceled || w.State == domain.WaveBlocked || !k.clock().Before(w.Deadline) {
+		return ErrProductSplitHeld
+	}
+	proposal, err := loadProductSplitProposal(ctx, tx, ProductSplitProposalRequest{Target: r.Target, ParentWorkItemID: r.ParentWorkItemID})
+	if err != nil {
+		return splitEvidenceErr(err)
+	}
+	if proposal.ID != r.ProposalID || proposal.Digest != r.ProposalDigest || !reflect.DeepEqual(proposal, job.Value.Ancestry.Value.Proposal) {
+		return ErrProductSplitHeld
+	}
+	return nil
+}
+
 func (k *KernelStore) splitCreateSendGateTx(ctx context.Context, tx *sql.Tx, job ProductSplitCreate) (string, error) {
 	gate, err := loadSplitCreateGate(ctx, tx, job)
 	if err != nil {

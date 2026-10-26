@@ -128,7 +128,7 @@ func TestLegacyRuntimeRejectsUnknownSchemaBeforeDDL(t *testing.T) {
 }
 
 func TestKernelRejectsDamagedOtherwiseValidSchemas(t *testing.T) {
-	for _, ddl := range []string{"DROP TABLE kernel_snapshots", "ALTER TABLE records DROP COLUMN payload", "DROP TABLE records; CREATE TABLE records(kind TEXT NOT NULL,id TEXT NOT NULL,work_item_id TEXT NOT NULL,payloadBLOB NOT NULL,PRIMARY KEY(kind,id))", "CREATE TRIGGER unexpected AFTER INSERT ON kernel_waves BEGIN DELETE FROM kernel_tasks; END"} {
+	for _, ddl := range []string{"DROP TABLE kernel_snapshots", "DROP INDEX records_split_create_wave; ALTER TABLE records DROP COLUMN payload", "DROP TABLE records; CREATE TABLE records(kind TEXT NOT NULL,id TEXT NOT NULL,work_item_id TEXT NOT NULL,payloadBLOB NOT NULL,PRIMARY KEY(kind,id))", "CREATE TRIGGER unexpected AFTER INSERT ON kernel_waves BEGIN DELETE FROM kernel_tasks; END"} {
 		t.Run(ddl, func(t *testing.T) {
 			path := kernelPath(t)
 			store, err := OpenKernel(path)

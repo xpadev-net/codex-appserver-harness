@@ -132,6 +132,9 @@ func openKernel(path string, create bool) (*KernelStore, error) {
 		if err = validateKernelSchema(db); err != nil {
 			return nil, err
 		}
+		if err = ensureKernelRecordsIndexes(db); err != nil {
+			return nil, err
+		}
 		if err = validateKernelRunBudgetFormat(db); err != nil {
 			return nil, err
 		}
@@ -220,7 +223,12 @@ func validateKernelSchema(db *sql.DB) error {
 		seen[key] = true
 	}
 	if len(seen) != len(expected) {
-		return errors.New("incomplete kernel schema; restore/reconcile before dispatch")
+		for key, want := range expected {
+			if seen[key] || want.kind == "index" && (want.name == "records_work_item_kind" || want.name == "records_kind_work_item" || want.name == "records_split_create_wave") {
+				continue
+			}
+			return errors.New("incomplete kernel schema; restore/reconcile before dispatch")
+		}
 	}
 	return nil
 }
@@ -283,7 +291,17 @@ CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);
 INSERT INTO schema_migrations VALUES(2);
 PRAGMA user_version=2;
 CREATE TABLE records(kind TEXT NOT NULL,id TEXT NOT NULL,work_item_id TEXT NOT NULL,payload BLOB NOT NULL,PRIMARY KEY(kind,id));
+CREATE INDEX records_work_item_kind ON records(work_item_id,kind);
+CREATE INDEX records_kind_work_item ON records(kind,work_item_id);
+CREATE INDEX records_split_create_wave ON records(coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.value.ancestry.value.request.target.wave_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.ancestry.value.request.target.wave_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry.value.request.target.wave_id'))) WHERE kind IN ('product_split_create','product_split_create_event','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_gate_history','product_split_create_retry_budget','product_split_created_resource');
 ` + kernelCoreSchema
+
+// These indexes accelerate scoped negative-witness projections without
+// changing records, authorization or the v2 logical schema.
+func ensureKernelRecordsIndexes(db *sql.DB) error {
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS records_work_item_kind ON records(work_item_id,kind); CREATE INDEX IF NOT EXISTS records_kind_work_item ON records(kind,work_item_id); CREATE INDEX IF NOT EXISTS records_split_create_wave ON records(coalesce(json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.value.ancestry.value.request.target.wave_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.value.ancestry.value.request.target.wave_id'),json_extract(CASE WHEN json_valid(payload) THEN payload ELSE '{}' END,'$.ancestry.value.request.target.wave_id'))) WHERE kind IN ('product_split_create','product_split_create_event','product_split_create_history','product_split_create_admission','product_split_create_gate','product_split_create_gate_history','product_split_create_retry_budget','product_split_created_resource');")
+	return err
+}
 
 // Shared by fresh initialization and the explicit, offline v1 import step.
 // The import retains the original records/schema history and legacy tables.

@@ -442,6 +442,10 @@ func TestSplitHTTPRestartRecoversRegisteredOwnerWithLostResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, specDigest, err := ReadSplitHTTPSpec(spec.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(transport.Executable, "_split-http", spec.Path())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -455,7 +459,7 @@ func TestSplitHTTPRestartRecoversRegisteredOwnerWithLostResult(t *testing.T) {
 		_ = cmd.Wait()
 	}()
 	wait, cancel := context.WithTimeout(ctx, 8*time.Second)
-	err = transport.waitResult(wait, job.ID, identity)
+	err = transport.waitResult(wait, spec, specDigest, identity)
 	cancel()
 	if err != nil {
 		t.Fatal(err)
