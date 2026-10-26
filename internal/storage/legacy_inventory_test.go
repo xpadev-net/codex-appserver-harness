@@ -90,6 +90,9 @@ func legacyInventoryFixture(t *testing.T) (*Store, string, string) {
 	if err := s.Put(ctx, "parent_completion", finalKey, root.ID, completion); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Put(ctx, "parent_final_history", finalKey+":s1:a1", root.ID, map[string]any{"state": "superseded", "scope_revision": 1}); err != nil {
+		t.Fatal(err)
+	}
 	repair := work()
 	repair.ID = "root-final-repair"
 	repair.RepairRounds = 2
@@ -188,6 +191,14 @@ func TestLegacyInventoryGroupsActualSplitContinuationRepairWithoutReusingEndedTh
 	var preservedCompletion map[string]any
 	if err := json.Unmarshal(all["wi"].CompletionProof, &preservedCompletion); err != nil || preservedCompletion["closed_at"] != "2026-01-02T03:04:05Z" {
 		t.Fatal("parent completion proof omitted", string(all["wi"].CompletionProof), err)
+	}
+	if len(all["wi"].FinalHistory) != 1 || all["wi"].FinalHistory[0].ID != "r1-i1:s1:a1" {
+		t.Fatal("prior parent final acceptance history omitted", all["wi"].FinalHistory)
+	}
+	for _, issue := range all["wi"].Issues {
+		if issue.Reason == "parent_final_state_identity_invalid" {
+			t.Fatal("valid state transfer marked predecessor as corrupt")
+		}
 	}
 	if got := all["child-remaining"].Threads; len(got) != 1 || got[0].Disposition != "requires_reconciliation" {
 		t.Fatal("unknown run became a binding", got)
