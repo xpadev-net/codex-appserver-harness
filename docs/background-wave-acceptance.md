@@ -7,7 +7,7 @@
 | S | 合格 | [native dynamic toolと同一未完了thread再開](../evidence/background-wave/spike/session-observation.json)。後続Kより先に実施したAT-050 |
 | K | 合格 | 下表のK適用AT、実モデルによる独立Task並行・findings→新fix/review→report→検証済み完了、CLI操作、障害注入、通知参照負荷 |
 | P | 未完了 | [Task_8 component](task8-github-acceptance.md)はfixture合格。AT-009の新fix Task/session経路はKで実装・検証済み。Task_11の各ローカルcomponent fixtureは存在するが、同一Waveの製品工程としての統合受入は未完了（[不足と証拠](task11-product-wave-acceptance.md)）。実repositoryのPR・Cloud/CI/rules・正式承認と製品最終受入もTask_13および [#20](https://github.com/xpadev-net/codex-appserver-harness/issues/20) に残し、unknownを合格へ読み替えない |
-| M | 未完了 | Task_12のv1 DB/config fixture移行が必要。依頼者確認で運用DBは存在せず、導入先の実DB切替だけがnot_applicable |
+| M | 未完了 | v1 archive/import inventory と trusted config upgrade の fixture はある。Wave/Task family adoption、process/provider照合、旧CLIと新runtimeの切替が未完了。運用DBなしのため実DB切替だけnot_applicable |
 
 ## 実行した経路
 

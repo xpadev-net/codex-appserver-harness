@@ -33,6 +33,15 @@ JSON
 
 `kernel.json`は設定version 2、`state.db`はkernel schema 2です。同じinit/request IDは同じ内容で再実行でき、設定や依頼を上書きしません。同じrootへの初期化はprocess間で排他し、初期化済みDBの欠損時は再作成しません。既存の未設定DB・v1 DBは明示移行/復旧が必要です。既存のPR用rootと混ぜずに使用してください。
 
+オフライン移行で作成したschema-prepared rootの旧WorkItem状態は、読み取り専用でページ確認できます。
+
+```sh
+./harness wave legacy-inventory --root /absolute/private/prepared-root --limit 64
+./harness wave legacy-inventory --root /absolute/private/prepared-root --after CURSOR --limit 64
+```
+
+結果には認証済みv1 archiveのfamily/lineage、scope・policy digest、予算baseline、outbox、thread/runの履歴と未解決項目が含まれます。このコマンドはモデルや旧controllerを起動せず、Wave/Task/sessionを作成せず、runtime admissionも許可しません。全familyの移行・process/provider照合が完了するまでprepared rootは実行できません。
+
 これらの保存・閲覧コマンドはmodel・GitHubを起動しません。`create`は保存後にdaemonへbest-effort hintを送り、daemonが動いていなくても依頼を保持します。一覧は元要求本文をコピーせず、byte数と版・状態・予算の概要を返します。`next_after`で一覧、`next_task_after`/`next_phase_after`で詳細の続きを読み取れます。次ページにはそれぞれ`--after`/`--after-phase`を渡します。run本文はID・byte数・使用量への参照で表示します。
 
 request JSONは12 MiBまで、元要求は8 MiBまで、criterionは256件までです。モデル用入力64 KiB/参照manifest、既定の累積Phase 16/Task 64/main turn 16/replan 8/fix round 3/Task Attempt 2などは保存したpolicyに従います。閲覧は通知ACKや判断適用を行いません。mainの監査付き復旧は下記コマンドで操作できます。K単独受入の証拠は[受入表](docs/background-wave-acceptance.md)を参照してください。

@@ -28,11 +28,11 @@ type DirectRequest struct {
 // model factory. Mutations commit their facts before sending a best-effort hint.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("wave commands: init, create, create-product, continue-product, adopt-product-source, product-source, product-coverage, import-issue, prepare-product-task, product-workspace, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message, runs, output")
+		return errors.New("wave commands: init, create, create-product, continue-product, adopt-product-source, product-source, product-coverage, import-issue, prepare-product-task, product-workspace, legacy-inventory, list, inspect, pause, resume, cancel, steer, interrupt, watch, run, session, history, reject-main, associate-turn, recovery-input, retry-task, recover-thread, retire-thread, artifact, mailbox, message, runs, output")
 	}
 	command := args[0]
 	switch command {
-	case "init", "create", "create-product", "continue-product", "adopt-product-source", "product-source", "product-coverage", "import-issue", "prepare-product-task", "product-workspace", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message", "runs", "output":
+	case "init", "create", "create-product", "continue-product", "adopt-product-source", "product-source", "product-coverage", "import-issue", "prepare-product-task", "product-workspace", "legacy-inventory", "list", "inspect", "pause", "resume", "cancel", "steer", "interrupt", "watch", "run", "session", "history", "reject-main", "associate-turn", "recovery-input", "retry-task", "recover-thread", "retire-thread", "artifact", "mailbox", "message", "runs", "output":
 	default:
 		return errors.New("unknown wave command")
 	}
@@ -94,6 +94,8 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		allowed["session"], allowed["after"], allowed["limit"] = true, true, true
 	case "history":
 		allowed["id"], allowed["after"], allowed["limit"] = true, true, true
+	case "legacy-inventory":
+		allowed["after"], allowed["limit"] = true, true
 	case "list":
 		allowed["after"], allowed["limit"] = true, true
 	case "inspect":
@@ -122,6 +124,13 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return flagErr
 	}
 	encode := func(value any) error { return json.NewEncoder(out).Encode(value) }
+	if command == "legacy-inventory" {
+		page, err := storage.ReadLegacyMigrationInventory(ctx, *root, *after, *limit)
+		if err != nil {
+			return err
+		}
+		return encode(page)
+	}
 	if command == "init" {
 		c, err := initialize(ctx, *root, *session, *model)
 		if err != nil {
